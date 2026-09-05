@@ -416,7 +416,7 @@ void sn_radio80211_get_stats(sn_80211_stats_t *out)
     *out = s_stats;
 }
 
-esp_err_t sn_radio80211_scan(uint16_t *out_ap_count)
+esp_err_t sn_radio80211_scan(uint16_t *out_ap_count, bool active)
 {
     if (out_ap_count == NULL) {
         return ESP_ERR_INVALID_ARG;
@@ -454,11 +454,25 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count)
      * air is -- a broken instrument that looks like a broken radio. */
     wifi_scan_config_t cfg = {0};
     cfg.show_hidden = true;
-    cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
-    cfg.scan_time.active.min = 120;
-    cfg.scan_time.active.max = 400;
+    if (active) {
+        /* Transmits probe requests. Faster, and it finds access points that
+         * are not beaconing at that moment -- but it makes the sniffer visible
+         * on the air, which is the opposite of what this instrument is for.
+         * Opt-in only, never the default. */
+        cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+        cfg.scan_time.active.min = 120;
+        cfg.scan_time.active.max = 400;
+    } else {
+        /* Listens for beacons and transmits nothing. The dwell has to exceed a
+         * beacon interval, which is about 100 ms, or a passive scan misses the
+         * very networks it is looking for. */
+        cfg.scan_type = WIFI_SCAN_TYPE_PASSIVE;
+        cfg.scan_time.passive = 150;
+    }
     err = esp_wifi_scan_start(&cfg, true); /* blocking */
-    ESP_LOGI(TAG, "scan: scan_start -> %s", esp_err_to_name(err));
+    ESP_LOGI(TAG, "scan: scan_start (%s) -> %s",
+             active ? "active, transmitting probes" : "passive",
+             esp_err_to_name(err));
     if (err != ESP_OK) {
         return err;
     }

@@ -7,6 +7,10 @@ identify, which is the other half of the same question in a shared band.
     python tools/wifi_survey.py --port COM3
     python tools/wifi_survey.py --port COM3 --repeat 3
 
+Passive by default: it listens for beacons and transmits nothing. `--active`
+sends probe requests, which is faster and finds access points that are not
+beaconing at that moment, at the cost of announcing the sniffer's presence.
+
 Useful before a capture, because a Wi-Fi capture is single-channel: this says
 which channel is worth sitting on. The 802.15.4 overlap is printed alongside,
 since one Wi-Fi network covers roughly four 802.15.4 channels and is the usual
@@ -54,7 +58,7 @@ def bar(rssi: int, width: int = 30) -> str:
 
 
 def scan_once(ser: serial.Serial, parser: StreamParser,
-              timeout: float = 20.0) -> list:
+              timeout: float = 20.0, active: bool = False) -> list:
     ser.write(encode_command(Command.SET_RADIO, int(Radio.WIFI),
                              radio=Radio.WIFI))
     ser.flush()
@@ -62,7 +66,8 @@ def scan_once(ser: serial.Serial, parser: StreamParser,
     while time.monotonic() < deadline:
         parser.feed(ser.read(4096))
 
-    ser.write(encode_command(Command.WIFI_SCAN, 0, radio=Radio.WIFI))
+    ser.write(encode_command(Command.WIFI_SCAN, 1 if active else 0,
+                             radio=Radio.WIFI))
     ser.flush()
 
     found = []
@@ -127,6 +132,11 @@ def main() -> int:
     ap.add_argument("--repeat", type=int, default=1,
                     help="scan this many times and merge, keeping the "
                          "strongest sighting of each access point")
+    ap.add_argument("--active", action="store_true",
+                    help="transmit probe requests. Faster and finds access "
+                         "points that are not beaconing right now, but it "
+                         "makes the sniffer visible on the air. Off by "
+                         "default: this instrument listens")
     ap.add_argument("--recover", action="store_true",
                     help="if nothing is found, power-cycle the radio domain "
                          "and scan once more. Resets the board, so do not use "
@@ -147,7 +157,7 @@ def main() -> int:
         for attempt in range(1, args.repeat + 1):
             if args.repeat > 1:
                 print(f"scan {attempt} of {args.repeat}...")
-            found = scan_once(ser, parser)
+            found = scan_once(ser, parser, active=args.active)
             if not found:
                 empty_scans += 1
             for ap_record in found:

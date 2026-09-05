@@ -103,7 +103,7 @@ void sn_radio80211_get_stats(sn_80211_stats_t *out);
  * radio found. Scanning uses the same receiver as promiscuous capture but a
  * different driver path, so it discriminates between "the radio cannot hear
  * anything" and "promiscuous mode specifically is not delivering". */
-esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
+esp_err_t sn_radio80211_scan(uint16_t *out_ap_count, bool active);
 
 /* Sets the snapshot length for subsequent frames, 1..SN_80211_MAX_SNAPLEN.
  * Takes effect immediately; frames already queued keep the old length. */

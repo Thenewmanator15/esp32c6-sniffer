@@ -172,7 +172,10 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         /* One 2.4 GHz front end, shared. A scan issued without a preceding
          * SET_RADIO would otherwise run while 802.15.4 still owns the radio. */
         sn_radio154_stop();
-        if (sn_radio80211_scan(&aps) != ESP_OK) {
+        /* value 0 = passive, 1 = active. Passive is the default because an
+         * active scan transmits probe requests, and this instrument is
+         * supposed to be silent unless explicitly told otherwise. */
+        if (sn_radio80211_scan(&aps, value == 1u) != ESP_OK) {
             return SN_STATUS_FAILED;
         }
         *out_value = aps;
