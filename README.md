@@ -12,13 +12,40 @@ networks and devices you own or are authorised to test.
 
 ## Status
 
-Design stage. Nothing is implemented yet.
+**802.15.4 capture works.** The board appears in Wireshark's interface list and
+captures live Zigbee and Thread traffic. Wi-Fi and BLE are not built yet, and
+are deliberately absent from Wireshark rather than present and failing.
+
+| Milestone | State |
+|---|---|
+| 1. USB transport and throughput benchmark | Done, measured at ~810 kB/s |
+| 2. IEEE 802.15.4 into Wireshark | Done |
+| 3. Wi-Fi | Not started |
+| 4. BLE advertisements | Not started |
 
 Read the design first: [docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md](docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md)
 
-It records the verified hardware constraints, the transport budget, and a table of
-traps — plausible-sounding claims that turned out to be false, including two that
-would silently corrupt or cripple captures.
+It records the verified hardware constraints, the measured transport budget, and
+a table of traps: plausible-sounding claims that turned out to be false,
+including several that would have silently corrupted or crippled captures.
+
+## Capturing
+
+```powershell
+cd firmware
+. .\idf-env.ps1
+idf.py -DSN_MODE=2 build     # 2 = capture; 0 = conformance tests, 1 = benchmark
+.\flash.ps1 -Port COM3
+cd ..
+.\extcap\install.ps1
+```
+
+Restart Wireshark. The interface appears on the welcome screen, with channel and
+antenna selectable in its options. Zigbee commonly uses channels 11, 15, 20 and
+25; Thread uses anything from 11 to 26.
+
+The sniffer is passive, so it only shows traffic that already exists. If a
+channel looks empty, it probably is.
 
 ## Honest capability ceilings
 
