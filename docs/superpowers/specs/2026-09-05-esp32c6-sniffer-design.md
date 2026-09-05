@@ -396,7 +396,18 @@ your own bench.
    Undocumented; the anchoring design depends on it.
 4. 802.15.4 ISR latency and jitter, before and after IRAM placement and priority raise.
    Determines whether those timestamps are usable at all.
-5. Real-world antenna delta on this board (community figures disagree: 5 dB vs 10 dB).
+5. ~~Real-world antenna delta on this board (community figures disagree: 5 dB
+   vs 10 dB).~~ **ANSWERED 2026-09-05: +6.0 dB median in favour of the external
+   U.FL antenna**, measured by `host/tools/antenna_compare.py` on channel 11
+   over four interleaved 15 s blocks per antenna (39 frames internal at a
+   -101.0 dBm median, 49 external at -95.0 dBm). Antennas are alternated rather
+   than measured one after the other, because ambient traffic drifts and a
+   single A-then-B comparison would confound the antenna with whatever else
+   changed. Compared by median, not mean, since signal distributions have long
+   tails from occasional close transmitters. The external antenna also heard
+   25% more transmitters, which is a second, independent signal pointing the
+   same way. Sits between the two community figures, neither of which was a
+   vendor specification.
 
 ---
 
