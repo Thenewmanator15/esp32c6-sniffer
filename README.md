@@ -32,7 +32,35 @@ The three radios share one RF front end and **cannot** capture simultaneously.
 
 ## Prerequisites
 
-- ESP-IDF **v6.1** (pinned tag). Install via the ESP-IDF Installation Manager:
-  `winget install Espressif.EIM` then `eim install -i v6.1`
-- Wireshark. Npcap is *not* required; frames arrive over USB, not from a local adapter.
 - A Seeed Studio XIAO ESP32-C6.
+- **ESP-IDF v6.1**, installed at `H:\dev\tools\.espressif\v6.1\esp-idf` with tools
+  under `H:\dev\tools\.espressif`, matching the `IDF_TOOLS_PATH` that
+  `H:\dev\setup-caches.ps1` sets.
+- Wireshark, for milestone 2 onwards. Npcap is **not** required, because frames
+  arrive over USB rather than from a local network adapter.
+
+## Building
+
+```powershell
+cd firmware
+. .\idf-env.ps1      # dot-sourced, not run
+idf.py build
+idf.py -p COM3 flash
+```
+
+`idf-env.ps1` pins `IDF_TOOLS_PATH` and `IDF_PATH` so a build never depends on
+whatever ESP-IDF version happens to be active in the shell.
+
+If flashing fails, hold BOOT, tap RESET, release BOOT, and retry.
+
+## Testing
+
+```powershell
+cd host
+.\.venv\Scripts\python.exe -m pytest tests\ -q -m "not hardware"   # no board needed
+.\.venv\Scripts\python.exe -m pytest tests\ -q -m hardware --port COM3
+```
+
+The hardware tests hold the firmware's C frame encoder to byte-identical output
+with the Python one, using shared vectors in `host/tests/vectors/golden.json`.
+The Python implementation is authoritative; if they disagree, fix the C.
