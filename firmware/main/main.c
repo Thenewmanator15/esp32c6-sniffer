@@ -81,10 +81,29 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_STOP:
         sn_radio154_stop();
         return SN_STATUS_OK;
+
+    case SN_CMD_ENERGY_DETECT: {
+        /* value packs the channel in the low byte and the measurement window,
+         * in 16 us symbols, in the upper three. */
+        const uint8_t ed_channel = (uint8_t)(value & 0xFFu);
+        const uint32_t ed_symbols = value >> 8;
+        if (ed_channel < SN_154_CHANNEL_MIN ||
+            ed_channel > SN_154_CHANNEL_MAX || ed_symbols == 0u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        int8_t dbm = 0;
+        if (sn_radio154_energy_detect(ed_channel, ed_symbols, &dbm) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        /* Signed, so widen through uint8_t and let the host reinterpret. */
+        *out_value = (uint32_t)(uint8_t)dbm;
+        return SN_STATUS_OK;
+    }
 #else
     case SN_CMD_SET_CHANNEL:
     case SN_CMD_START:
     case SN_CMD_STOP:
+    case SN_CMD_ENERGY_DETECT:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;

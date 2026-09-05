@@ -50,6 +50,17 @@ void sn_radio154_stop(void);
 uint8_t sn_radio154_channel(void);
 void sn_radio154_get_stats(sn_154_stats_t *out);
 
+/* Measures raw RF energy on `channel`, in dBm, and blocks until the radio
+ * reports it. `duration_symbols` is in 16 us symbol periods.
+ *
+ * This sees energy rather than frames, which is the point: it detects the Wi-Fi
+ * that overlaps most of the 2.4 GHz 802.15.4 channels, and works on a channel
+ * carrying no decodable traffic at all. A capture can only tell you what was
+ * transmitted while you happened to be listening; this tells you whether a
+ * channel is usable. */
+esp_err_t sn_radio154_energy_detect(uint8_t channel, uint32_t duration_symbols,
+                                    int8_t *out_dbm);
+
 #ifdef __cplusplus
 }
 #endif

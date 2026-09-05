@@ -41,6 +41,7 @@ class Command(IntEnum):
     START = 3
     STOP = 4
     GET_INFO = 5
+    ENERGY_DETECT = 6
 
 
 class Antenna(IntEnum):

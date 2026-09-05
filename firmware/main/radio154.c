@@ -198,3 +198,85 @@ void sn_radio154_get_stats(sn_154_stats_t *out)
 {
     *out = s_stats;
 }
+
+/* --- Energy detection ---------------------------------------------------- */
+
+static SemaphoreHandle_t s_ed_done;
+static volatile int8_t s_ed_power;
+
+/* Overrides a weak symbol in the driver. Runs in the radio interrupt. */
+void esp_ieee802154_energy_detect_done(int8_t power)
+{
+    s_ed_power = power;
+    if (s_ed_done != NULL) {
+        BaseType_t woken = pdFALSE;
+        xSemaphoreGiveFromISR(s_ed_done, &woken);
+        if (woken == pdTRUE) {
+            portYIELD_FROM_ISR();
+        }
+    }
+}
+
+esp_err_t sn_radio154_energy_detect(uint8_t channel, uint32_t duration_symbols,
+                                    int8_t *out_dbm)
+{
+    if (channel < SN_154_CHANNEL_MIN || channel > SN_154_CHANNEL_MAX) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (out_dbm == NULL || duration_symbols == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (s_ed_done == NULL) {
+        s_ed_done = xSemaphoreCreateBinary();
+        if (s_ed_done == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    const bool was_running = s_running;
+    const uint8_t previous_channel = s_channel;
+
+    if (!was_running) {
+        esp_err_t err = esp_ieee802154_enable();
+        if (err != ESP_OK) {
+            return err;
+        }
+        /* Promiscuous keeps the receiver from acknowledging anything while we
+         * are only measuring. */
+        esp_ieee802154_set_promiscuous(true);
+    }
+
+    esp_err_t err = esp_ieee802154_set_channel(channel);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* Drain any stale completion before arming, or a previous measurement's
+     * result would satisfy this wait. */
+    xSemaphoreTake(s_ed_done, 0);
+
+    err = esp_ieee802154_energy_detect(duration_symbols);
+    if (err != ESP_OK) {
+        goto restore;
+    }
+
+    /* Generous margin over the requested window: 16 us per symbol plus 100 ms. */
+    const TickType_t wait =
+        pdMS_TO_TICKS((duration_symbols * 16u) / 1000u + 100u);
+    if (xSemaphoreTake(s_ed_done, wait) != pdTRUE) {
+        err = ESP_ERR_TIMEOUT;
+        goto restore;
+    }
+    *out_dbm = s_ed_power;
+
+restore:
+    if (was_running) {
+        /* Put the capture back exactly as it was. */
+        esp_ieee802154_set_channel(previous_channel);
+        esp_ieee802154_receive();
+    } else {
+        esp_ieee802154_disable();
+    }
+    return err;
+}
