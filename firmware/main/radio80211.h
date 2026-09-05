@@ -109,6 +109,9 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
  * ESP32-C6. Worth reporting upstream given it reproduces with Espressif's own
  * example.
  *
+ * A reproducer written up for upstream is in
+ * docs/upstream/2026-09-05-esp32c6-wifi-rx-deaf.md (not submitted).
+ *
  * Two traps that wasted time and are worth knowing. Building with
  * SDKCONFIG_DEFAULTS overwrites the project's root sdkconfig, which silently
  * disabled 802.15.4 in what was supposed to be the full build. And a zeroed
