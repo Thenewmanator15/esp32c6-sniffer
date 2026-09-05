@@ -30,6 +30,7 @@ typedef enum {
     SN_FRAME_STATS = 3,
     SN_FRAME_HEARTBEAT = 4,
     SN_FRAME_CONTROL_REPLY = 5,
+    SN_FRAME_CONTROL_CMD = 6,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

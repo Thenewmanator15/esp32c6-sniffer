@@ -43,6 +43,7 @@ class FrameType(IntEnum):
     STATS = 3
     HEARTBEAT = 4
     CONTROL_REPLY = 5
+    CONTROL_CMD = 6
 
 
 @dataclass(frozen=True)
