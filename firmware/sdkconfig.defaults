@@ -1,0 +1,15 @@
+CONFIG_IDF_TARGET="esp32c6"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Console on UART0 (GPIO16, header pin D6). The SECONDARY setting is critical:
+# the ESP-IDF default also mirrors console output onto USB-Serial-JTAG, which
+# would inject log text into the framed data stream.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Light sleep gates the USB PHY clock and kills the link.
+CONFIG_PM_ENABLE=n
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
