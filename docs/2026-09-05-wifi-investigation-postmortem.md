@@ -79,6 +79,22 @@ which is explicitly powered and logged, and which 802.15.4 shares. It is not
 NVS calibration: a full `erase-flash` does not clear it, and both a
 freshly-calibrated and a stored-calibration boot appear in both states.
 
+**The stretches got longer.** Early on it alternated within minutes, which is
+where the "minutes at a time" description came from. Later the same day it went
+deaf and stayed deaf for over an hour: nine surveys across five minutes found
+nothing while the host saw seven 2.4 GHz access points, and that was at the end
+of a long unbroken deaf period, not the start of one. So the honest range is
+minutes to hours, and the earlier wording understated it.
+
+**One thing has never been tried: removing power.** Every reset in this
+investigation has been a soft one -- esptool's `--after hard-reset` toggles the
+chip's reset line over USB, and a reflash does the same. Neither drops the
+supply to the RF analog domain. The board has also been powered continuously
+for many hours, so a thermal or analog-domain latch is consistent with what has
+been seen and would not be cleared by anything tried so far. Physically
+unplugging the USB-C for a few seconds is the obvious next experiment and costs
+nothing.
+
 Two more things it is not, established by the recovery code added afterwards:
 a **full driver teardown and rebuild does not clear it** (three consecutive
 rebuilds left the callback count at exactly 0), and neither does a full

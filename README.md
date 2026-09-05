@@ -21,12 +21,17 @@ its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
 731 frames in 15 s, management and data, RSSI -50 to -96 dBm, no drops,
 decoding as radiotap.
 
-**Caveat, and it is not a small one: this board's Wi-Fi receiver goes deaf for
-minutes at a time.** Espressif's own unmodified scan binary shows it too --
-9, 8, 8 access points, then zero on five consecutive boots -- while 802.15.4
-on the same antenna never fails. A capture that returns nothing is worth
-retrying before it means anything. Not yet characterised, so nothing has been
-reported upstream.
+**Caveat, and it is not a small one: this board's Wi-Fi receiver goes deaf, for
+anything from minutes to hours.** Espressif's own unmodified scan binary shows
+it too -- 9, 8, 8 access points, then zero on five consecutive boots -- while
+802.15.4 on the same antenna never fails. A capture that returns nothing is
+worth retrying before it means anything.
+
+Nothing in software clears it: not a driver rebuild, not a reflash, not a full
+`erase-flash`. Note that every reset tried so far has been a soft one, which
+does not remove power from the RF section, so **unplugging the board for a few
+seconds is the first thing to try** and has not yet been tested. Not
+characterised, so nothing has been reported upstream.
 
 Getting here took several confident wrong conclusions, including "the radio is
 faulty, claim warranty". Written up in
