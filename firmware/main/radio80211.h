@@ -82,29 +82,35 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
 }
 #endif
 
-/* STATUS: the Wi-Fi receiver hears nothing on this board. Not our bug.
+/* STATUS: the Wi-Fi receiver on this board hears nothing. Not our code.
  *
- * Isolated as far as it can be from here:
- *   - 802.15.4 captures thousands of frames losslessly through the SAME
- *     antenna and front end, so the RF path and the antenna switch are fine.
- *   - A Wi-Fi scan finds 0 access points while the host sees 11 on 2.4 GHz.
- *     Verified with explicit 120-400 ms dwell times, since a zeroed
- *     wifi_scan_config_t means zero dwell and would find nothing regardless.
- *   - Promiscuous capture delivers 0 frames on channels 1, 6 and 11, all
- *     confirmed occupied. A counter at the very top of the callback, before
- *     any filtering, stays at exactly 0.
- *   - ESP-IDF's own simple_sniffer example, unmodified, captures 0 packets on
- *     the same board. That rules out this code.
- *   - Every driver call returns ESP_OK. The failure is silent.
+ * Controlled comparison, one firmware, one session, same antenna:
+ *   802.15.4 channel 25, internal antenna  -> 78 frames in 12 s
+ *   Wi-Fi scan, internal antenna           -> 0 access points
+ *   Wi-Fi scan, external antenna           -> 0 access points
+ * against 11 networks the host can see on 2.4 GHz, two of them on channel 6.
  *
- * Eliminated by measurement: missing event loop (a real bug, fixed, but not
- * the cause), calling esp_wifi_start, not calling it, coexistence with
- * 802.15.4 (built with CONFIG_IEEE802154_ENABLED=n and still zero), missing
- * esp_netif_init, and an explicit filter mask instead of all-ones.
+ * So the RF path, the antenna switch and the front end are all good; only the
+ * Wi-Fi receiver is deaf. Every driver call returns ESP_OK, so it fails
+ * silently. A full chip erase forced fresh RF calibration ("falling back to
+ * full calibration", mode 2) and changed nothing.
  *
- * Remaining candidates, untested: a Wi-Fi PHY or calibration fault specific to
- * this chip revision, or an ESP-IDF v6.1 regression on the C6. Worth reporting
- * upstream, since it reproduces with Espressif's own example.
+ * Eliminated by measurement, not argument: missing esp_event_loop_create_default
+ * (a genuine bug, fixed, but not the cause); calling esp_wifi_start; not
+ * calling it; coexistence with 802.15.4 (built with the component excluded);
+ * missing esp_netif_init; an explicit filter mask instead of all-ones; stale
+ * PHY calibration; and both antennas.
  *
- * sn_radio80211_scan() exists as the discriminator that established this and
- * is worth keeping. */
+ * Decisive control: ESP-IDF's own simple_sniffer example, unmodified, captures
+ * 0 packets on this board too.
+ *
+ * Remaining candidates, both beyond what can be settled here: a Wi-Fi PHY
+ * fault specific to this chip revision, or an ESP-IDF v6.1 regression on the
+ * ESP32-C6. Worth reporting upstream given it reproduces with Espressif's own
+ * example.
+ *
+ * Two traps that wasted time and are worth knowing. Building with
+ * SDKCONFIG_DEFAULTS overwrites the project's root sdkconfig, which silently
+ * disabled 802.15.4 in what was supposed to be the full build. And a zeroed
+ * wifi_scan_config_t means zero dwell per channel, so it finds nothing however
+ * loud the air is -- a broken instrument that looks like a broken radio. */
