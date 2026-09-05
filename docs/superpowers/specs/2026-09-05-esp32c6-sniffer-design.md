@@ -338,6 +338,12 @@ Reference only, not dependencies.
 
 ## 12. Verification
 
-Every factual claim above was checked against a primary source: Espressif datasheets
-and documentation, ESP-IDF source at exact tags, the board schematic PDF, the issue
+Claims here were checked against primary sources: Espressif datasheets and
+documentation, ESP-IDF source at exact tags, the board schematic PDF, the issue
 tracker, or the chip itself. Where no data exists, §10 says so rather than estimating.
+
+Three figures are **community-sourced, not vendor-specified**, and are labelled as such
+where they appear: the ~30 dB leakage across the unpowered RF switch, the 5–10 dB
+external antenna advantage (two sources disagree), and the ~770 kB/s USB throughput
+figure (measured on an ESP32-S3, not a C6). Treat all three as indicative and confirm
+them on hardware before depending on them.
