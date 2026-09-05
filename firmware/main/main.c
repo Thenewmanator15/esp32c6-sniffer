@@ -96,6 +96,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
             if (value < SN_80211_CHANNEL_MIN || value > SN_80211_CHANNEL_MAX) {
                 return SN_STATUS_BAD_VALUE;
             }
+            sn_radio154_stop(); /* shared front end */
             if (sn_radio80211_start((uint8_t)value, SN_WIFI_SNAPLEN,
                                     SN_80211_FILTER_ALL) != ESP_OK) {
                 return SN_STATUS_FAILED;
@@ -119,6 +120,9 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
 
     case SN_CMD_WIFI_SCAN: {
         uint16_t aps = 0;
+        /* One 2.4 GHz front end, shared. A scan issued without a preceding
+         * SET_RADIO would otherwise run while 802.15.4 still owns the radio. */
+        sn_radio154_stop();
         if (sn_radio80211_scan(&aps) != ESP_OK) {
             return SN_STATUS_FAILED;
         }

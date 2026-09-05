@@ -116,6 +116,61 @@ static void rx_task(void *arg)
     }
 }
 
+/* Brings the Wi-Fi driver up, once. Mode and start are deliberately NOT done
+ * here: promiscuous capture wants NULL mode and scanning wants STA, so each
+ * caller sets its own and then starts.
+ *
+ * This lived inside sn_radio80211_start() and nothing else could reach it,
+ * so sn_radio80211_scan() -- which never calls start() -- ran against an
+ * uninitialised driver and returned ESP_ERR_WIFI_NOT_INIT from its very first
+ * call. The scan reported zero access points, and zero was read as "the radio
+ * heard nothing" rather than "the radio was never switched on". That mistake
+ * cost a long detour into imagined hardware faults. */
+static esp_err_t wifi_init_once(void)
+{
+    if (s_wifi_inited) {
+        return ESP_OK;
+    }
+
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
+        err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* The driver posts events during start-up and needs somewhere to post
+     * them. Without this it logs "failed to post WiFi event ... ret=259"
+     * (invalid state) and never delivers frames. Already-created is fine,
+     * since another component may have made one. */
+    err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
+    /* The example reaches this via initialize_eth(); we have no Ethernet, so
+     * call it directly. */
+    err = esp_netif_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        return err;
+    }
+
+    /* WIFI_INIT_CONFIG_DEFAULT rather than a hand-rolled initialiser: v6 added
+     * two fields to wifi_init_config_t, and anything filling the struct by hand
+     * breaks silently. */
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    s_wifi_inited = true;
+    return ESP_OK;
+}
+
 esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
                               uint32_t filter_mask)
 {
@@ -145,50 +200,17 @@ esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
         }
     }
 
-    if (!s_wifi_inited) {
-        esp_err_t err = nvs_flash_init();
-        if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
-            err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-            ESP_ERROR_CHECK(nvs_flash_erase());
-            err = nvs_flash_init();
-        }
-        if (err != ESP_OK) {
-            return err;
-        }
-
-        /* The driver posts events during start-up and needs somewhere to
-         * post them. Without this it logs "failed to post WiFi event ...
-         * ret=259" (invalid state) and never delivers frames. Already-created
-         * is fine, since another component may have made one. */
-        err = esp_event_loop_create_default();
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            return err;
-        }
-        /* The example reaches this via initialize_eth(); we have no Ethernet,
-         * so call it directly. */
-        err = esp_netif_init();
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            return err;
-        }
-
-        /* WIFI_INIT_CONFIG_DEFAULT rather than a hand-rolled initialiser:
-         * v6 added two fields to wifi_init_config_t, and anything filling the
-         * struct by hand breaks silently. */
-        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-        err = esp_wifi_init(&cfg);
-        if (err != ESP_OK) {
-            return err;
-        }
-        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
-        /* NULL mode: we never associate, only listen. */
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
-        /* start() powers up the PHY. ESP-IDF's simple_sniffer example omits
-         * it, which misled me into removing it; without it the driver accepts
-         * a channel, reports ic_enable_sniffer, and never invokes the
-         * callback once. Measured: callback count stayed at exactly 0. */
-        ESP_ERROR_CHECK(esp_wifi_start());
-        s_wifi_inited = true;
+    esp_err_t init_err = wifi_init_once();
+    if (init_err != ESP_OK) {
+        return init_err;
     }
+    /* NULL mode: we never associate, only listen. */
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_NULL));
+    /* start() powers up the PHY. ESP-IDF's simple_sniffer example omits it,
+     * which misled me into removing it; without it the driver accepts a
+     * channel, reports ic_enable_sniffer, and never invokes the callback
+     * once. Measured: callback count stayed at exactly 0. */
+    ESP_ERROR_CHECK(esp_wifi_start());
 
     /* An explicit union rather than all-ones. ALL is documented as
      * 0xFFFFFFFF, but naming the types we want removes any doubt about
@@ -254,10 +276,18 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count)
     }
     *out_ap_count = 0;
 
+    /* Bring the driver up if capture has not already done it. Skipping this
+     * was the defect described on wifi_init_once(). */
+    esp_err_t err = wifi_init_once();
+    ESP_LOGI(TAG, "scan: wifi_init_once -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+
     /* Scanning needs station mode; promiscuous capture uses NULL mode.
      * Every step is logged with its error code: a bare failure return told us
      * nothing about which call was refusing. */
-    esp_err_t err = esp_wifi_set_promiscuous(false);
+    err = esp_wifi_set_promiscuous(false);
     ESP_LOGI(TAG, "scan: set_promiscuous(false) -> %s", esp_err_to_name(err));
 
     err = esp_wifi_set_mode(WIFI_MODE_STA);

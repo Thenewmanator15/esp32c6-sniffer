@@ -82,46 +82,30 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
 }
 #endif
 
-/* STATUS: the Wi-Fi radio on this board is dead in BOTH directions. Not our
- * code, and on the evidence below, not ESP-IDF either.
+/* STATUS: Wi-Fi capture works. Measured on channel 6: 731 frames in 15 s,
+ * 632 management and 99 data, RSSI -50 to -96 dBm, qfull=0 rej=0, decoding
+ * correctly in Wireshark as radiotap.
  *
- * Controlled comparison, one firmware, one session, same antenna:
- *   802.15.4 channel 25, internal antenna  -> 78 frames in 12 s
- *   Wi-Fi scan, internal antenna           -> 0 access points
- *   Wi-Fi scan, external antenna           -> 0 access points
- *   Wi-Fi promiscuous, channels 1/6/11     -> callback fired exactly 0 times
+ * This comment previously said the radio was dead in both directions and
+ * advised a warranty claim. That was wrong, and so were two conclusions before
+ * it. Nothing was faulty; two defects were, and both were ours to fix:
  *
- * Receive, on Espressif's own examples/wifi/scan with only the XIAO RF-switch
- * lines added: "Total APs scanned = 0" on ESP-IDF v6.1 AND on v6.0.2, whose
- * libphy.a, libnet80211.a and libpp.a are all different binaries.
+ *   1. Espressif's examples never drive GPIO3, which is pulled UP at reset and
+ *      leaves the XIAO's FM8625H switch unpowered, so every stock example was
+ *      deaf by construction. "Their own example fails too" was no evidence.
+ *   2. sn_radio80211_scan() ran before anything initialised the driver and got
+ *      ESP_ERR_WIFI_NOT_INIT from its first call. It reported zero access
+ *      points, and the zero was read as "heard nothing" instead of "never
+ *      switched on". See wifi_init_once() in radio80211.c.
  *
- * Transmit, on their softAP example: the board beacons as myssid on channel 1,
- * confirmed from its own banner, and a host adapter 10 cm away never lists it
- * across repeated scans that do show eight neighbouring 2.4 GHz BSSIDs, two of
- * them at 18-20 % signal.
+ * A claimed v6.0.2-vs-v6.1 PHY regression did not survive an A/B/A either:
+ * v6.0.2 -> 9 APs, v6.1 -> 8, v6.0.2 -> 8. One reading is not a result.
  *
- * Eliminated by measurement, not argument: the ESP-IDF version (two majors);
- * missing esp_event_loop_create_default (a genuine bug, fixed, not the cause);
- * calling esp_wifi_start; not calling it; coexistence with 802.15.4 (built with
- * the component excluded); missing esp_netif_init; an explicit filter mask
- * instead of all-ones; stale PHY calibration; and both antennas. eFuse reports
- * Wi-Fi 6 present, so the part is not fused off.
+ * Full write-up: docs/2026-09-05-wifi-investigation-postmortem.md
  *
- * CORRECTION. This comment previously rested on "ESP-IDF's own simple_sniffer
- * captures 0 packets here too". That was confounded and the claim was wrong:
- * Espressif's examples never drive GPIO3, which is pulled UP at reset and
- * leaves the FM8625H switch unpowered, so any stock example is deaf on this
- * board by construction. Every example result quoted above was re-taken with
- * the switch explicitly powered.
- *
- * Conclusion: a hardware fault in this part's Wi-Fi PHY. Warranty claim first.
- * The full record, with the numbers, is in
- * docs/upstream/2026-09-05-esp32c6-wifi-rx-deaf.md.
- *
- * Two traps that wasted time and are worth knowing. Building with
- * SDKCONFIG_DEFAULTS overwrites the project's root sdkconfig, which silently
- * disabled 802.15.4 in what was supposed to be the full build. A zeroed
- * wifi_scan_config_t means zero dwell per channel, so it finds nothing however
- * loud the air is -- a broken instrument that looks like a broken radio. And
- * netsh wlan show networks returns a CACHE: it read 1 network on 5 GHz for two
- * minutes before refreshing to 8 on 2.4 GHz. */
+ * Traps worth keeping. Building with SDKCONFIG_DEFAULTS overwrites the
+ * project's root sdkconfig, which silently disabled 802.15.4 in what was meant
+ * to be the full build. A zeroed wifi_scan_config_t means zero dwell per
+ * channel, so it finds nothing however loud the air is. And
+ * netsh wlan show networks returns a CACHE: it read one 5 GHz network for two
+ * minutes before refreshing to eight on 2.4 GHz. */
