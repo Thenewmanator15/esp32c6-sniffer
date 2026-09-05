@@ -47,6 +47,49 @@ CHAN_OFDM = 0x0040
 FLAG_FCS_AT_END = 0x10
 FLAG_BAD_FCS = 0x40
 
+
+class PhyFormat:
+    """`cur_bb_format` from the C6's receive descriptor.
+
+    Values match wifi_rx_bb_format_t in esp_wifi_he_types.h.
+    """
+
+    B = 0
+    G = 1          # also 11a, same encoding
+    HT = 2         # 11n
+    VHT = 3        # 11ac
+    HE_SU = 4
+    HE_MU = 5
+    HE_ERSU = 6
+    HE_TB = 7
+    VHT_MU = 11
+
+
+# 11b transmission rates, in 500 kbps units as radiotap wants them. The radio
+# reports a 5-bit encoding; only the four DSSS/CCK rates are meaningful here.
+_CCK_RATES = {0: 2, 1: 4, 2: 11, 3: 22}   # 1, 2, 5.5, 11 Mbit/s
+
+# The L-SIG RATE field, 4 bits, for OFDM frames. Again in 500 kbps units.
+_LSIG_RATES = {
+    0xB: 12, 0xF: 18, 0xA: 24, 0xE: 36,
+    0x9: 48, 0xD: 72, 0x8: 96, 0xC: 108,
+}
+
+
+def rate_500kbps(phy_format: int, rate_code: int) -> int | None:
+    """Radiotap Rate for a legacy frame, or None when it cannot be expressed.
+
+    HT, VHT and HE frames carry a modulation-and-coding index, not a legacy
+    rate, and radiotap has separate fields for those. Emitting the Rate field
+    anyway would put a plausible but wrong number in front of every 11n and
+    11ax frame, so those return None and the field is omitted.
+    """
+    if phy_format == PhyFormat.B:
+        return _CCK_RATES.get(rate_code & 0x1F)
+    if phy_format == PhyFormat.G:
+        return _LSIG_RATES.get(rate_code & 0x0F)
+    return None
+
 _HEADER = struct.Struct("<BBHI")
 HEADER_LEN = _HEADER.size  # 8
 
@@ -69,8 +112,14 @@ def build_radiotap(
     ofdm: bool = True,
     bad_fcs: bool = False,
     fcs_present: bool = False,
+    rate_500kbps_units: int | None = None,
 ) -> bytes:
-    """Builds a radiotap header. Returns the bytes to prepend to the frame."""
+    """Builds a radiotap header. Returns the bytes to prepend to the frame.
+
+    `ofdm` selects the channel's modulation flag; pass False for 11b, which is
+    CCK. `rate_500kbps_units` adds the Rate field, and should be omitted for
+    HT/VHT/HE frames whose rate radiotap cannot express here.
+    """
     if not -128 <= rssi_dbm <= 127:
         raise ValueError(f"rssi {rssi_dbm} outside a signed byte")
     if noise_dbm is not None and not -128 <= noise_dbm <= 127:
@@ -96,6 +145,14 @@ def build_radiotap(
     if bad_fcs:
         flags |= FLAG_BAD_FCS
     body.append(flags)
+
+    if rate_500kbps_units is not None:
+        # Bit 2, so it must be written after FLAGS and before CHANNEL: fields
+        # appear in ascending bit order and radiotap has no per-field tags.
+        if not 0 < rate_500kbps_units <= 0xFF:
+            raise ValueError(f"rate {rate_500kbps_units} outside a byte")
+        present |= 1 << BIT_RATE
+        body.append(rate_500kbps_units)
 
     present |= 1 << BIT_CHANNEL
     align(2)

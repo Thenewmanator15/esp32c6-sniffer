@@ -23,10 +23,14 @@ advance.
 from __future__ import annotations
 
 import struct
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 
 from .framing import FrameType, encode_frame
 from .tap import CHANNEL_MAX, CHANNEL_MIN
+
+#: Largest snapshot length the firmware will accept, from
+#: SN_80211_MAX_SNAPLEN in firmware/main/radio80211.h.
+MAX_SNAPLEN = 512
 
 COMMAND_PAYLOAD_LEN = 5
 REPLY_PAYLOAD_LEN = 6
@@ -44,6 +48,34 @@ class Command(IntEnum):
     ENERGY_DETECT = 6
     SET_RADIO = 7
     WIFI_SCAN = 8
+    SET_SNAPLEN = 9
+    SET_FILTER = 10
+
+
+class FrameFilter(IntFlag):
+    """Which 802.11 frame types the board should deliver.
+
+    Note this is a PASS mask despite being called a filter: a set bit means
+    deliver that type, not block it. Values match WIFI_PROMIS_FILTER_MASK_* in
+    esp_wifi_types_generic.h.
+
+    Narrowing this is the cheapest defence against a busy channel. Control
+    frames are the most numerous and the least informative -- acknowledgements
+    mostly -- so dropping them costs little and buys a lot of link budget.
+    """
+
+    MGMT = 1 << 0
+    CTRL = 1 << 1
+    DATA = 1 << 2
+    MISC = 1 << 3
+    FCS_FAIL = 1 << 6
+
+    #: Everything the radio will give us.
+    ALL = MGMT | CTRL | DATA | MISC
+    #: Beacons, probes and associations only. Enough to map a network.
+    MGMT_ONLY = MGMT
+    #: The usual choice for a busy channel: keep the meaning, drop the noise.
+    NO_CTRL = MGMT | DATA
 
 
 class Radio(IntEnum):
@@ -99,6 +131,8 @@ def encode_command(
             )
     if command is Command.SET_ANTENNA and value not in tuple(Antenna):
         raise ValueError(f"antenna {value} is not 0 (internal) or 1 (external)")
+    if command is Command.SET_SNAPLEN and not 1 <= value <= MAX_SNAPLEN:
+        raise ValueError(f"snaplen {value} outside 1-{MAX_SNAPLEN}")
     if not 0 <= value <= 0xFFFFFFFF:
         raise ValueError(f"value {value} does not fit in 32 bits")
 

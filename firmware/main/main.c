@@ -54,7 +54,7 @@ static sn_radio_t s_radio = SN_RADIO_154;
 #endif
 
 /* Reported by GET_INFO so the host can check it is talking to what it expects. */
-#define SN_FIRMWARE_VERSION 1u
+#define SN_FIRMWARE_VERSION 2u
 
 static const char *TAG = "main";
 
@@ -119,6 +119,20 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         sn_radio80211_stop();
         return SN_STATUS_OK;
 
+    case SN_CMD_SET_SNAPLEN:
+        if (sn_radio80211_set_snaplen((uint16_t)value) != ESP_OK) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_FILTER:
+        if (sn_radio80211_set_filter(value) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
     case SN_CMD_WIFI_SCAN: {
         uint16_t aps = 0;
         /* One 2.4 GHz front end, shared. A scan issued without a preceding
@@ -155,6 +169,8 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_ENERGY_DETECT:
     case SN_CMD_SET_RADIO:
     case SN_CMD_WIFI_SCAN:
+    case SN_CMD_SET_SNAPLEN:
+    case SN_CMD_SET_FILTER:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -253,6 +269,12 @@ void app_main(void)
             sn_154_stats_t radio;
             sn_80211_stats_t wifi;
         } combined;
+        /* Before reading the counters, so a rebuild is reflected in the same
+         * frame that reports the stall which caused it. */
+        if (s_radio == SN_RADIO_WIFI && sn_radio80211_service()) {
+            ESP_LOGW(TAG, "Wi-Fi receiver went deaf; driver rebuilt");
+        }
+
         sn_usb_link_get_stats(&combined.link);
         sn_radio154_get_stats(&combined.radio);
         sn_radio80211_get_stats(&combined.wifi);

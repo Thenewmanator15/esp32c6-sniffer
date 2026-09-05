@@ -30,8 +30,16 @@ typedef struct __attribute__((packed)) {
     uint8_t flags;
     uint32_t timestamp_us; /* hardware-latched from the radio's own counter */
     uint16_t orig_len;     /* on-air length, so truncation stays visible */
-    uint16_t reserved;
+    /* PHY of the received frame, so the host can put a real data rate and
+     * modulation into radiotap instead of assuming OFDM. Previously these two
+     * bytes were reserved and every frame was labelled OFDM, which is simply
+     * wrong for 11b. */
+    uint8_t rate;          /* rx_ctrl.rate: 11b transmission rate, else L-SIG */
+    uint8_t phy;           /* low nibble cur_bb_format, high nibble secondary */
 } sn_80211_meta_t;
+
+#define SN_80211_PHY_FORMAT(p) ((uint8_t)((p) & 0x0Fu))
+#define SN_80211_PHY_SECOND(p) ((uint8_t)(((p) >> 4) & 0x0Fu))
 
 /* Deliver every frame type. Numerically equal to
  * WIFI_PROMIS_FILTER_MASK_ALL, defined here so callers need not pull in
@@ -54,6 +62,11 @@ typedef struct {
     uint32_t isr_queue_full;
     uint32_t link_rejected;
     uint32_t bytes_dropped_by_snaplen;
+    /* This board's Wi-Fi receiver goes deaf for minutes at a time; see the
+     * STATUS note at the foot of this header. These two make that visible
+     * rather than indistinguishable from a quiet channel. */
+    uint32_t stalled_seconds; /* consecutive seconds with the radio up and no callback */
+    uint32_t recoveries;      /* times the driver was torn down and rebuilt */
 } sn_80211_stats_t;
 
 /* Starts promiscuous capture.
@@ -77,6 +90,36 @@ void sn_radio80211_get_stats(sn_80211_stats_t *out);
  * different driver path, so it discriminates between "the radio cannot hear
  * anything" and "promiscuous mode specifically is not delivering". */
 esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
+
+/* Sets the snapshot length for subsequent frames, 1..SN_80211_MAX_SNAPLEN.
+ * Takes effect immediately; frames already queued keep the old length. */
+esp_err_t sn_radio80211_set_snaplen(uint16_t snaplen);
+
+/* Sets which frame types are delivered, as a wifi_promiscuous_filter_t mask.
+ * Dropping control frames is the cheapest way to survive a busy channel: they
+ * are the most numerous and the least informative. */
+esp_err_t sn_radio80211_set_filter(uint32_t filter_mask);
+
+/* Call once a second while capturing.
+ *
+ * Watches for the receiver going deaf -- the radio reports running, every call
+ * returned ESP_OK, and the callback simply never fires -- and after
+ * SN_80211_STALL_LIMIT_S rebuilds the driver from scratch. Returns true if it
+ * performed a recovery on this call.
+ *
+ * Without this a deaf stretch is silent, and indistinguishable from a channel
+ * with nothing on it. */
+bool sn_radio80211_service(void);
+
+/* Seconds of a running radio with no callback before the driver is rebuilt.
+ * Long enough not to fire on a genuinely idle channel: even an empty 2.4 GHz
+ * channel carries beacons from neighbours roughly every 100 ms. */
+#define SN_80211_STALL_LIMIT_S 15u
+
+/* Ceiling for the backoff after repeated rebuilds fail to help. */
+#define SN_80211_STALL_LIMIT_MAX_S 120u
+
+#define SN_80211_MAX_SNAPLEN 512
 
 #ifdef __cplusplus
 }

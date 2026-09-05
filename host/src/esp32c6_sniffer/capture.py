@@ -19,10 +19,22 @@ from typing import Iterator
 
 import serial
 
-from .control import Antenna, Command, Radio, decode_reply, encode_command
+from .control import (
+    Antenna,
+    Command,
+    FrameFilter,
+    Radio,
+    decode_reply,
+    encode_command,
+)
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
-from .radiotap import LINKTYPE_IEEE802_11_RADIOTAP, build_radiotap
+from .radiotap import (
+    LINKTYPE_IEEE802_11_RADIOTAP,
+    PhyFormat,
+    build_radiotap,
+    rate_500kbps,
+)
 from .tap import (
     CHANNEL_MAX,
     CHANNEL_MIN,
@@ -42,7 +54,7 @@ META_LEN = _META.size
 # 32-bit here against the 802.15.4 radio's 64, so it wraps about every 71
 # minutes; _anchor works from differences, so a wrap shows as one bad interval
 # rather than a broken capture.
-_WIFI_META = struct.Struct("<BbbBIHH")
+_WIFI_META = struct.Struct("<BbbBIHBB")
 WIFI_META_LEN = _WIFI_META.size
 
 FLAG_HAS_FCS = 0x01
@@ -56,6 +68,8 @@ WIFI_FLAG_RX_ERROR = 0x02
 # the first two blocks, so the short form is still accepted.
 _STATS = struct.Struct("<8I")
 _STATS_FULL = struct.Struct("<16I")
+# Firmware 2 added the stall and recovery counters to the Wi-Fi block.
+_STATS_V2 = struct.Struct("<18I")
 
 
 def channel_range(radio: Radio) -> tuple[int, int]:
@@ -89,6 +103,10 @@ class CaptureStats:
     # is reported but deliberately NOT counted as loss.
     fw_frames_truncated: int = 0
     fw_bytes_dropped_by_snaplen: int = 0
+    # This board's Wi-Fi receiver goes deaf for minutes at a time. These make
+    # that visible instead of indistinguishable from a quiet channel.
+    fw_stalled_seconds: int = 0
+    fw_recoveries: int = 0
 
     @property
     def lossless(self) -> bool:
@@ -117,6 +135,8 @@ class CaptureSession:
         antenna: Antenna = Antenna.INTERNAL,
         timeout: float = 0.05,
         radio: Radio = Radio.IEEE802154,
+        snaplen: int | None = None,
+        frame_filter: FrameFilter | None = None,
     ) -> None:
         self._port_name = port
         self._radio = radio
@@ -133,6 +153,8 @@ class CaptureSession:
         self._tracker = SequenceTracker()
         self._t0_device: int | None = None
         self._t0_host: float = 0.0
+        self._snaplen = snaplen
+        self._frame_filter = frame_filter
         self._pending_channel: int | None = None
         self._pending_antenna: int | None = None
         self._pending_lock = threading.Lock()
@@ -187,6 +209,12 @@ class CaptureSession:
         # the 802.15.4 range and be rejected.
         self._command(Command.SET_RADIO, int(self._radio))
         self._command(Command.SET_ANTENNA, int(self._antenna))
+        # Both before the channel, because SET_CHANNEL starts the radio and
+        # these two are what it starts with.
+        if self._snaplen is not None:
+            self._command(Command.SET_SNAPLEN, self._snaplen)
+        if self._frame_filter is not None:
+            self._command(Command.SET_FILTER, int(self._frame_filter))
         self._command(Command.SET_CHANNEL, self._channel)
 
     def close(self) -> None:
@@ -340,10 +368,12 @@ class CaptureSession:
         capture would report itself lossless: those counters stay at zero
         because that radio is stopped.
         """
-        if len(payload) >= _STATS_FULL.size:
-            values = _STATS_FULL.unpack_from(payload)
+        if len(payload) >= _STATS_V2.size:
+            values = _STATS_V2.unpack_from(payload)
+        elif len(payload) >= _STATS_FULL.size:
+            values = _STATS_FULL.unpack_from(payload) + (0, 0)
         elif len(payload) >= _STATS.size:
-            values = _STATS.unpack_from(payload) + (0,) * 8
+            values = _STATS.unpack_from(payload) + (0,) * 10
         else:
             return
 
@@ -365,7 +395,9 @@ class CaptureSession:
                 self.stats.fw_isr_queue_full,
                 self.stats.fw_link_rejected,
                 self.stats.fw_bytes_dropped_by_snaplen,
-            ) = values[8:16]
+                self.stats.fw_stalled_seconds,
+                self.stats.fw_recoveries,
+            ) = values[8:18]
         else:
             (
                 self.stats.fw_frames_captured,
@@ -390,20 +422,29 @@ class CaptureSession:
                 flags,
                 device_us,
                 on_air_len,
-                _reserved,
+                rate_code,
+                phy,
             ) = _WIFI_META.unpack_from(payload)
             body = payload[WIFI_META_LEN:]
-            # The firmware sends no FCS: the driver hands over the frame
-            # without one, and claiming otherwise makes Wireshark mark every
-            # frame Bad FCS, which is what the 802.15.4 path already learned.
+            phy_format = phy & 0x0F
+            # The firmware strips the FCS and says so, which is true. Claiming
+            # an FCS that is not there makes Wireshark mark every frame Bad
+            # FCS, as the 802.15.4 path already learned the hard way.
+            #
+            # Modulation comes from the radio rather than being assumed: 11b is
+            # CCK, and labelling it OFDM -- which this did for every frame --
+            # is wrong for exactly the older access points whose beacons use
+            # it. HT/VHT/HE frames carry an MCS index that the radiotap Rate
+            # field cannot express, so the rate is omitted rather than guessed.
             header = build_radiotap(
                 channel=channel,
                 rssi_dbm=rssi,
                 noise_dbm=noise,
                 timestamp_us=device_us,
-                ofdm=True,
+                ofdm=(phy_format != PhyFormat.B),
                 bad_fcs=bool(flags & WIFI_FLAG_RX_ERROR),
                 fcs_present=False,
+                rate_500kbps_units=rate_500kbps(phy_format, rate_code),
             )
             # on_air_len is the length before the firmware's snapshot cut, so
             # the pcap can declare the frame sliced rather than complete.

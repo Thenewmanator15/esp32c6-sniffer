@@ -68,12 +68,31 @@ cd ..
 .\extcap\install.ps1
 ```
 
-Restart Wireshark. The interface appears on the welcome screen, with channel and
-antenna selectable in its options. Zigbee commonly uses channels 11, 15, 20 and
-25; Thread uses anything from 11 to 26.
+Restart Wireshark. Both interfaces appear on the welcome screen, with channel
+and antenna selectable in their options. Zigbee commonly uses channels 11, 15,
+20 and 25; Thread uses anything from 11 to 26.
 
 The sniffer is passive, so it only shows traffic that already exists. If a
-channel looks empty, it probably is.
+channel looks empty, it probably is -- though on Wi-Fi, check the toolbar log
+before believing it, because this board's receiver goes deaf for minutes at a
+time and the log says when that is happening.
+
+### Wi-Fi options
+
+The Wi-Fi interface has three settings the 802.15.4 one does not need, because
+a busy 802.11 channel produces roughly twenty-five times what the USB link
+carries. They are throughput controls, not preferences.
+
+| Option | Default | What it does |
+|---|---|---|
+| Snapshot length | 256 B | Bytes kept per frame. What is cut is encrypted payload; the headers worth having are at the front. Truncation is declared in the pcap, so Wireshark marks frames sliced rather than malformed. |
+| Frame types | Management and data | Control frames are the most numerous and least informative. Dropping them buys link budget cheaply. |
+| Channel hop | Off | Sweeps 1/6/11 or all of 1-13 at a chosen dwell. Each frame carries its own channel in radiotap, so a hopped capture stays self-describing. |
+
+Hopping trades completeness for coverage: you will miss whatever arrives while
+the radio is on another channel. A beacon interval is about 100 ms, so a dwell
+below roughly 300 ms starts losing beacons from the very networks you are
+trying to find.
 
 ## Finding the networks
 

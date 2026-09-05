@@ -212,3 +212,49 @@ def test_channel_remains_a_config_option_too():
     """tshark has no toolbar, so nothing essential may live only there."""
     out = _run("--extcap-config", "--extcap-interface", INTERFACE)
     assert "call=--channel" in out
+
+
+def test_wifi_offers_throughput_controls():
+    """A busy 802.11 channel produces far more than the link carries, so these
+    are throughput controls rather than preferences."""
+    out = _run("--extcap-config", "--extcap-interface", WIFI_INTERFACE)
+    assert "{call=--snaplen}" in out
+    assert "{call=--filter}" in out
+
+
+def test_wifi_offers_channel_hopping():
+    out = _run("--extcap-config", "--extcap-interface", WIFI_INTERFACE)
+    assert "{call=--hop}" in out
+    assert "{call=--hop-dwell}" in out
+    assert "1, 6, 11" in out
+
+
+def test_802154_does_not_offer_wifi_only_options():
+    """Offering a control the board would silently ignore is worse than not
+    offering it."""
+    out = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    assert "{call=--snaplen}" not in out
+    assert "{call=--filter}" not in out
+    assert "{call=--hop}" not in out
+
+
+def test_out_of_range_snaplen_is_rejected():
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture",
+         "--extcap-interface", WIFI_INTERFACE,
+         "--fifo", "unused", "--channel", "6", "--snaplen", "9000"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "snaplen" in result.stderr.lower()
+
+
+def test_unknown_hop_set_is_rejected():
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture",
+         "--extcap-interface", WIFI_INTERFACE,
+         "--fifo", "unused", "--channel", "6", "--hop", "99"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "hop" in result.stderr.lower()

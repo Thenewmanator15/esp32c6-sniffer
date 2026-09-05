@@ -82,6 +82,14 @@ WIFI_DEFAULT_CHANNEL = 6
 # snapshot length is not a tuning knob but a requirement. What it discards is
 # encrypted payload; the headers worth having are at the front.
 WIFI_DEFAULT_SNAPLEN = 256
+WIFI_MAX_SNAPLEN = 512
+
+# Channel sets for hopping. 1/6/11 are the non-overlapping set in the UK.
+HOP_SETS = {
+    0: None,
+    1: (1, 6, 11),
+    2: tuple(range(1, 14)),
+}
 
 DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 
@@ -248,6 +256,36 @@ def print_config(interface: str) -> None:
     print("value {arg=2}{value=0}{display=Onboard ceramic}")
     print("value {arg=2}{value=1}{display=External U.FL}")
 
+    if interface != WIFI_INTERFACE:
+        return
+
+    # Wi-Fi only. A busy 802.11 channel produces roughly 25x what the USB link
+    # carries, so both of these are throughput controls, not preferences.
+    print(f"arg {{number=3}}{{call=--snaplen}}{{display=Snapshot length}}"
+          f"{{type=integer}}{{range=64,{WIFI_MAX_SNAPLEN}}}"
+          f"{{default={WIFI_DEFAULT_SNAPLEN}}}"
+          f"{{tooltip=Bytes kept per frame. What is discarded is encrypted "
+          f"payload; the headers worth having are at the front}}")
+    print("arg {number=4}{call=--filter}{display=Frame types}"
+          "{type=selector}{default=5}"
+          "{tooltip=Control frames are the most numerous and the least "
+          "informative, so dropping them buys link budget cheaply}")
+    print("value {arg=4}{value=5}{display=Management and data (recommended)}")
+    print("value {arg=4}{value=15}{display=Everything, including control}")
+    print("value {arg=4}{value=1}{display=Management only (beacons, probes)}")
+    print("arg {number=5}{call=--hop}{display=Channel hop}"
+          "{type=selector}{default=0}"
+          "{tooltip=Sweeps channels during the capture. Each frame carries its "
+          "own channel in radiotap, so a hopped capture stays self-describing. "
+          "You will miss whatever lands while the radio is elsewhere}")
+    print("value {arg=5}{value=0}{display=Off, stay on one channel}")
+    print("value {arg=5}{value=1}{display=1, 6, 11 (non-overlapping)}")
+    print("value {arg=5}{value=2}{display=All channels, 1-13}")
+    print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
+          "{type=integer}{range=100,10000}{default=500}"
+          "{tooltip=Time on each channel. A beacon interval is about 100 ms, "
+          "so below roughly 300 ms you will miss beacons}")
+
 
 # --- control pipe framing --------------------------------------------------
 #
@@ -284,13 +322,24 @@ def control_write(fp, arg: int, cmd: int, payload: bytes) -> None:
 
 def do_capture(fifo: str, port: str, channel: int, antenna: int,
                control_in: str | None, control_out: str | None,
-               interface: str = INTERFACE) -> int:
+               interface: str = INTERFACE, snaplen: int | None = None,
+               frame_filter: int | None = None, hop: int = 0,
+               hop_dwell_ms: int = 500) -> int:
     from esp32c6_sniffer.capture import CaptureSession
-    from esp32c6_sniffer.control import Antenna, Radio
+    from esp32c6_sniffer.control import Antenna, FrameFilter, Radio
 
     from esp32c6_sniffer.pcap import PcapWriter
 
     radio = Radio.WIFI if interface == WIFI_INTERFACE else Radio.IEEE802154
+    # Snapshot length and frame filter apply to Wi-Fi only; sending them on an
+    # 802.15.4 capture would be silently ignored, which is worse than not
+    # sending them.
+    wifi = radio is Radio.WIFI
+    session_snaplen = snaplen if wifi else None
+    session_filter = (
+        FrameFilter(frame_filter) if wifi and frame_filter else None
+    )
+    hop_channels = HOP_SETS.get(hop) if wifi else None
 
     state = {"initialized": False, "running": True}
     fp_out = None
@@ -353,7 +402,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
         with CaptureSession(port, channel=channel,
                             antenna=Antenna(antenna),
-                            radio=radio) as session:
+                            radio=radio,
+                            snaplen=session_snaplen,
+                            frame_filter=session_filter) as session:
             thread = None
             if fp_in is not None:
                 thread = threading.Thread(target=reader, args=(fp_in, session),
@@ -361,6 +412,25 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 thread.start()
             else:
                 state["initialized"] = True   # no toolbar; nothing to wait for
+
+            if hop_channels:
+                # request_channel() only sets a flag; the capture loop owns the
+                # serial port and applies it between reads, so hopping from a
+                # second thread cannot interleave bytes mid-frame.
+                def hopper() -> None:
+                    index = 0
+                    while state["running"]:
+                        time.sleep(hop_dwell_ms / 1000.0)
+                        if not state["running"]:
+                            return
+                        index = (index + 1) % len(hop_channels)
+                        try:
+                            session.request_channel(hop_channels[index])
+                        except ValueError as exc:
+                            log(f"hop skipped: {exc}")
+
+                threading.Thread(target=hopper, daemon=True).start()
+                log(f"hopping {list(hop_channels)} every {hop_dwell_ms} ms")
 
             next_report = time.monotonic() + 1.0
             try:
@@ -377,11 +447,17 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                         next_report = now + 1.0
                         s = session.stats
                         extra = ""
+                        if s.fw_recoveries:
+                            # A workaround for a fault that is not ours, so it
+                            # is surfaced rather than hidden.
+                            extra += (f", receiver rebuilt {s.fw_recoveries}x "
+                                      f"after going deaf")
+                        if s.fw_stalled_seconds:
+                            extra += f", no frames for {s.fw_stalled_seconds}s"
                         if s.fw_frames_truncated:
                             # Not loss: the snapshot length is deliberate, and
                             # what it cuts is encrypted payload.
-                            extra = (f", {s.fw_frames_truncated} truncated to "
-                                     f"{WIFI_DEFAULT_SNAPLEN} B")
+                            extra += (f", {s.fw_frames_truncated} truncated")
                         if s.lossless:
                             log(f"ch {session._channel}: {s.frames} frames, "
                                 f"no loss{extra}")
@@ -418,6 +494,10 @@ def main(argv: list[str] | None = None) -> int:
     # 802.15.4 default would be an invalid Wi-Fi channel.
     parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--antenna", type=int, default=0)
+    parser.add_argument("--snaplen", type=int, default=None)
+    parser.add_argument("--filter", dest="frame_filter", type=int, default=None)
+    parser.add_argument("--hop", type=int, default=0)
+    parser.add_argument("--hop-dwell", dest="hop_dwell", type=int, default=500)
     args, _unknown = parser.parse_known_args(argv)
 
     if args.extcap_interfaces:
@@ -450,9 +530,18 @@ def main(argv: list[str] | None = None) -> int:
                 f"channel {channel} outside {spec['min']}-{spec['max']}\n"
             )
             return 1
+        if args.snaplen is not None and not 1 <= args.snaplen <= WIFI_MAX_SNAPLEN:
+            sys.stderr.write(
+                f"snaplen {args.snaplen} outside 1-{WIFI_MAX_SNAPLEN}" + os.linesep
+            )
+            return 1
+        if args.hop not in HOP_SETS:
+            sys.stderr.write(f"unknown hop set {args.hop}" + os.linesep)
+            return 1
         return do_capture(args.fifo, args.port, channel, args.antenna,
                           args.extcap_control_in, args.extcap_control_out,
-                          interface)
+                          interface, args.snaplen, args.frame_filter,
+                          args.hop, args.hop_dwell)
 
     print_interfaces(args.extcap_interface)
     return 0

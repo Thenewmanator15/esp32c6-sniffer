@@ -20,6 +20,8 @@ typedef enum {
     SN_CMD_ENERGY_DETECT = 6,
     SN_CMD_SET_RADIO = 7,
     SN_CMD_WIFI_SCAN = 8,
+    SN_CMD_SET_SNAPLEN = 9,
+    SN_CMD_SET_FILTER = 10,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

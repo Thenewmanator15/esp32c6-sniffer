@@ -20,7 +20,7 @@ static const char *TAG = "radio80211";
  * elsewhere and defer. They also warn that promiscuous mode "has a great impact
  * on throughput". So the callback copies and queues, nothing more. */
 #define RX_QUEUE_LEN   24
-#define MAX_SNAPLEN    512
+#define MAX_SNAPLEN    SN_80211_MAX_SNAPLEN
 #define DEFAULT_SNAPLEN 256
 
 typedef struct {
@@ -36,6 +36,14 @@ static uint16_t s_snaplen = DEFAULT_SNAPLEN;
 static volatile bool s_running;
 static sn_80211_stats_t s_stats;
 static bool s_wifi_inited;
+static uint32_t s_filter_mask = SN_80211_FILTER_ALL;
+/* Snapshot of the callback count at the last service() tick, to spot a
+ * receiver that has stopped delivering without reporting anything. */
+static uint32_t s_last_seen_callbacks;
+/* Grows each time a rebuild fails to bring the receiver back, so a fault the
+ * driver cannot fix is not met by tearing the stack down every 15 seconds
+ * forever. Reset as soon as a frame arrives. */
+static uint32_t s_stall_limit = SN_80211_STALL_LIMIT_S;
 
 /* Sender-owned; only the rx task touches it. */
 static uint8_t s_out[sizeof(sn_80211_meta_t) + MAX_SNAPLEN];
@@ -55,7 +63,20 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         return;
     }
 
-    const uint16_t on_air = (uint16_t)pkt->rx_ctrl.sig_len;
+    /* sig_len counts the MPDU INCLUDING its frame check sequence; dump_len is
+     * the same frame without it. Sending sig_len bytes while telling the host
+     * there is no FCS -- which is what this did -- leaves four bytes of CRC on
+     * the end of every frame for Wireshark to parse as information elements.
+     * Truncation hid it on long frames and it showed up on short ones.
+     *
+     * So the FCS is dropped and no FCS is declared, which is true. Nothing is
+     * lost: rx_state already reports whether the radio liked the frame, and it
+     * saves four bytes per frame on a link that is the binding constraint. */
+    uint16_t on_air = (uint16_t)pkt->rx_ctrl.sig_len;
+    const uint16_t without_fcs = (uint16_t)pkt->rx_ctrl.dump_len;
+    if (without_fcs > 0u && without_fcs <= on_air) {
+        on_air = without_fcs;
+    }
     if (on_air == 0) {
         s_stats.skipped_zero_len++;
         return;
@@ -67,7 +88,12 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     item.meta.noise_floor = (int8_t)pkt->rx_ctrl.noise_floor;
     item.meta.timestamp_us = (uint32_t)pkt->rx_ctrl.timestamp;
     item.meta.orig_len = on_air;
-    item.meta.reserved = 0;
+    /* cur_bb_format distinguishes 11b from everything else, so the host can
+     * label CCK as CCK. Assuming OFDM for every frame was wrong for 11b, which
+     * is exactly what beacons from older access points use. */
+    item.meta.rate = (uint8_t)pkt->rx_ctrl.rate;
+    item.meta.phy = (uint8_t)((pkt->rx_ctrl.cur_bb_format & 0x0Fu) |
+                              ((pkt->rx_ctrl.second & 0x0Fu) << 4));
     item.meta.flags = (pkt->rx_ctrl.rx_state != 0) ? SN_80211_FLAG_RX_ERROR : 0u;
 
     uint16_t take = on_air;
@@ -171,6 +197,43 @@ static esp_err_t wifi_init_once(void)
     return ESP_OK;
 }
 
+/* An explicit union rather than all-ones. ALL is documented as 0xFFFFFFFF, but
+ * naming the types we want removes any doubt about reserved bits being
+ * interpreted. */
+static esp_err_t apply_filter(uint32_t filter_mask)
+{
+    if (filter_mask == SN_80211_FILTER_ALL) {
+        filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT |
+                      WIFI_PROMIS_FILTER_MASK_DATA |
+                      WIFI_PROMIS_FILTER_MASK_CTRL;
+    }
+    wifi_promiscuous_filter_t filter = {.filter_mask = filter_mask};
+    return esp_wifi_set_promiscuous_filter(&filter);
+}
+
+esp_err_t sn_radio80211_set_snaplen(uint16_t snaplen)
+{
+    if (snaplen == 0u || snaplen > MAX_SNAPLEN) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_snaplen = snaplen;
+    ESP_LOGI(TAG, "snaplen now %u", (unsigned)snaplen);
+    return ESP_OK;
+}
+
+esp_err_t sn_radio80211_set_filter(uint32_t filter_mask)
+{
+    s_filter_mask = filter_mask;
+    if (!s_running) {
+        return ESP_OK; /* remembered, applied when capture starts */
+    }
+    esp_err_t err = apply_filter(filter_mask);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "filter now 0x%08x", (unsigned)filter_mask);
+    }
+    return err;
+}
+
 esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
                               uint32_t filter_mask)
 {
@@ -212,16 +275,8 @@ esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
      * once. Measured: callback count stayed at exactly 0. */
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* An explicit union rather than all-ones. ALL is documented as
-     * 0xFFFFFFFF, but naming the types we want removes any doubt about
-     * reserved bits being interpreted. */
-    if (filter_mask == SN_80211_FILTER_ALL) {
-        filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT |
-                      WIFI_PROMIS_FILTER_MASK_DATA |
-                      WIFI_PROMIS_FILTER_MASK_CTRL;
-    }
-    wifi_promiscuous_filter_t filter = {.filter_mask = filter_mask};
-    ESP_ERROR_CHECK(esp_wifi_set_promiscuous_filter(&filter));
+    s_filter_mask = filter_mask;
+    ESP_ERROR_CHECK(apply_filter(filter_mask));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promiscuous_cb));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
     ESP_ERROR_CHECK(esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE));
@@ -256,7 +311,77 @@ void sn_radio80211_stop(void)
     }
     esp_wifi_set_promiscuous(false);
     s_running = false;
+    s_stats.stalled_seconds = 0;
     ESP_LOGI(TAG, "capture stopped");
+}
+
+bool sn_radio80211_service(void)
+{
+    if (!s_running) {
+        s_stats.stalled_seconds = 0;
+        s_last_seen_callbacks = s_stats.callbacks;
+        return false;
+    }
+
+    if (s_stats.callbacks != s_last_seen_callbacks) {
+        s_last_seen_callbacks = s_stats.callbacks;
+        s_stats.stalled_seconds = 0;
+        s_stall_limit = SN_80211_STALL_LIMIT_S; /* it is alive; start over */
+        return false;
+    }
+
+    /* Nothing delivered since the last tick. On 2.4 GHz that is already odd:
+     * neighbouring access points beacon roughly every 100 ms, so even an
+     * unused channel is not silent for long. */
+    s_stats.stalled_seconds++;
+    if (s_stats.stalled_seconds < s_stall_limit) {
+        return false;
+    }
+
+    /* Rebuild the driver completely rather than just re-arming promiscuous
+     * mode.
+     *
+     * Measured: this does NOT clear the deafness on this board. Three
+     * consecutive rebuilds left callbacks at exactly 0, so the fault is below
+     * the driver, and a full erase-flash does not clear it either. The rebuild
+     * is kept because it does fix an ordinary driver-level stall, and because
+     * the attempt is what makes the condition visible -- but it backs off
+     * rather than tearing the stack down every 15 seconds indefinitely.
+     *
+     * This is a workaround for a fault that is not ours: Espressif's own
+     * unmodified scan binary goes deaf on this board too. It is reported in
+     * the counters rather than hidden. If recoveries climb while frames do
+     * not, the radio is the problem, not the code. */
+    const uint8_t channel = s_channel;
+    const uint16_t snaplen = s_snaplen;
+    const uint32_t filter = s_filter_mask;
+
+    ESP_LOGW(TAG, "no frames for %us on channel %u; rebuilding the driver",
+             (unsigned)s_stats.stalled_seconds, (unsigned)channel);
+
+    esp_wifi_set_promiscuous(false);
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    s_wifi_inited = false;
+    s_running = false;
+    s_stats.stalled_seconds = 0;
+    s_stats.recoveries++;
+
+    esp_err_t err = sn_radio80211_start(channel, snaplen, filter);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "rebuild failed: %s", esp_err_to_name(err));
+    }
+    s_last_seen_callbacks = s_stats.callbacks;
+
+    /* Back off, capped, so a persistent fault costs one rebuild a minute
+     * rather than four. Any frame at all resets this. */
+    if (s_stall_limit < SN_80211_STALL_LIMIT_MAX_S) {
+        s_stall_limit *= 2u;
+        if (s_stall_limit > SN_80211_STALL_LIMIT_MAX_S) {
+            s_stall_limit = SN_80211_STALL_LIMIT_MAX_S;
+        }
+    }
+    return true;
 }
 
 uint8_t sn_radio80211_channel(void)

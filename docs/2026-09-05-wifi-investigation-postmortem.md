@@ -79,6 +79,13 @@ which is explicitly powered and logged, and which 802.15.4 shares. It is not
 NVS calibration: a full `erase-flash` does not clear it, and both a
 freshly-calibrated and a stored-calibration boot appear in both states.
 
+Two more things it is not, established by the recovery code added afterwards:
+a **full driver teardown and rebuild does not clear it** (three consecutive
+rebuilds left the callback count at exactly 0), and neither does a full
+`erase-flash`. Whatever is wrong sits below `esp_wifi_init`. The rebuild is
+kept anyway, with backoff, because it fixes an ordinary driver-level stall and
+because the attempt is what makes the condition visible in the counters.
+
 What has not been done is characterising it properly — a scripted N-boot trial
 recording calibration mode, temperature and outcome, rather than the ad-hoc
 runs that produced this table. Until that exists, "intermittent" is the honest

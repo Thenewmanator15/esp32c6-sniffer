@@ -19,10 +19,18 @@ from esp32c6_sniffer.capture import (
 )
 from esp32c6_sniffer.control import Radio
 from esp32c6_sniffer.pcap import PcapWriter
-from esp32c6_sniffer.radiotap import LINKTYPE_IEEE802_11_RADIOTAP
+from esp32c6_sniffer.radiotap import (
+    BIT_RATE,
+    CHAN_CCK,
+    CHAN_OFDM,
+    HEADER_LEN,
+    LINKTYPE_IEEE802_11_RADIOTAP,
+    PhyFormat,
+    rate_500kbps,
+)
 from esp32c6_sniffer.tap import CHANNEL_MAX, CHANNEL_MIN, LINKTYPE_IEEE802_15_4_TAP
 
-WIFI_META = struct.Struct("<BbbBIHH")
+WIFI_META = struct.Struct("<BbbBIHBB")   # ..., orig_len, rate, phy
 META_154 = struct.Struct("<BBbBQ")
 
 # pcap record header: ts_sec, ts_usec, incl_len, orig_len
@@ -40,9 +48,27 @@ def session_154(channel: int = 25) -> CaptureSession:
 
 
 def wifi_payload(body: bytes, on_air_len: int, *, channel=6, rssi=-55,
-                 noise=-96, flags=0, timestamp=1234) -> bytes:
+                 noise=-96, flags=0, timestamp=1234, rate=0xB,
+                 phy=PhyFormat.G) -> bytes:
     return WIFI_META.pack(channel, rssi, noise, flags, timestamp,
-                          on_air_len, 0) + body
+                          on_air_len, rate, phy) + body
+
+
+def present_bitmap(record: bytes) -> int:
+    return struct.unpack_from("<I", record, 4)[0]
+
+
+def channel_flags(record: bytes) -> int:
+    """Reads the radiotap Channel flags out of a built header.
+
+    Field order is TSFT (8, 8-aligned), Flags (1), Rate (1, optional), then
+    Channel (two u16, 2-aligned). The optional Rate byte is followed by padding
+    when absent, so Channel lands at the same offset either way.
+    """
+    offset = HEADER_LEN + 8 + 1          # header, TSFT, Flags
+    offset += 1 if present_bitmap(record) & (1 << BIT_RATE) else 0
+    offset += offset % 2                 # 2-byte alignment
+    return struct.unpack_from("<H", record, offset + 2)[0]
 
 
 def test_channel_ranges_differ_per_radio():
@@ -192,3 +218,66 @@ def test_pcap_declares_the_truncation_end_to_end():
     assert incl_len == len(record)
     assert orig_len == original
     assert orig_len > incl_len
+
+
+def test_legacy_ofdm_frame_carries_a_rate():
+    """L-SIG rate code 0xB is 6 Mbit/s, which radiotap counts in 500 kbps."""
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0xB,
+                     phy=PhyFormat.G)
+    )
+    assert present_bitmap(record) & (1 << BIT_RATE)
+    assert rate_500kbps(PhyFormat.G, 0xB) == 12
+    assert channel_flags(record) & CHAN_OFDM
+
+
+def test_11b_frame_is_labelled_cck_not_ofdm():
+    """Assuming OFDM for every frame mislabels exactly the older access points
+    whose beacons are CCK."""
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0, phy=PhyFormat.B)
+    )
+    assert channel_flags(record) & CHAN_CCK
+    assert not channel_flags(record) & CHAN_OFDM
+    assert rate_500kbps(PhyFormat.B, 0) == 2      # 1 Mbit/s
+    assert rate_500kbps(PhyFormat.B, 3) == 22     # 11 Mbit/s
+
+
+def test_ht_and_he_frames_omit_the_rate_field():
+    """Radiotap's Rate cannot express an MCS index, and a plausible wrong
+    number in front of every 11n frame is worse than no number at all."""
+    for fmt in (PhyFormat.HT, PhyFormat.VHT, PhyFormat.HE_SU, PhyFormat.HE_MU):
+        assert rate_500kbps(fmt, 0xB) is None
+        record, _b, _us, _o = wifi_session()._build_record(
+            wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0xB, phy=fmt)
+        )
+        assert not present_bitmap(record) & (1 << BIT_RATE), fmt
+
+
+def test_unknown_rate_code_is_omitted_rather_than_guessed():
+    assert rate_500kbps(PhyFormat.G, 0x0) is None
+
+
+def test_stall_and_recovery_counters_reach_the_host():
+    """Without these a deaf receiver looks the same as a quiet band."""
+    s = wifi_session()
+    s._update_stats(struct.pack(
+        "<18I",
+        *(10, 0, 0, 0, 4096),           # link
+        *(0, 0, 0),                     # 802.15.4
+        *(0, 0, 0, 0, 0, 0, 0, 0),      # wifi counters, all quiet
+        15, 3,                          # stalled_seconds, recoveries
+    ))
+    assert s.stats.fw_stalled_seconds == 15
+    assert s.stats.fw_recoveries == 3
+
+
+def test_firmware_1_stats_still_parse():
+    """16-counter frames predate the stall counters."""
+    s = wifi_session()
+    s._update_stats(struct.pack(
+        "<16I", *(10, 0, 0, 0, 4096), *(0, 0, 0),
+        *(500, 0, 0, 480, 0, 0, 0, 0),
+    ))
+    assert s.stats.fw_frames_captured == 480
+    assert s.stats.fw_recoveries == 0
