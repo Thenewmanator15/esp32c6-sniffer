@@ -61,8 +61,9 @@ static sn_radio_t s_radio = SN_RADIO_154;
  *   2: Wi-Fi counters added to the stats frame
  *   3: Wi-Fi metadata gained a 64-bit timestamp, rate/PHY and the raw signal
  *      field; AP_RECORD frames added
+ *   4: A-MPDU flag, CSI frames, bandwidth and control-subtype commands
  */
-#define SN_FIRMWARE_VERSION 3u
+#define SN_FIRMWARE_VERSION 4u
 
 static const char *TAG = "main";
 
@@ -145,6 +146,30 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         *out_value = value;
         return SN_STATUS_OK;
 
+    case SN_CMD_SET_BANDWIDTH:
+        if (sn_radio80211_set_bandwidth((uint8_t)value) != ESP_OK) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_CTRL_FILTER:
+        if (sn_radio80211_set_ctrl_filter(value) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_CSI:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        if (sn_radio80211_set_csi(value == 1u) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
     case SN_CMD_RADIO_POWER_CYCLE:
         /* The strongest reset available without touching the hardware.
          *
@@ -209,6 +234,9 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_SET_SNAPLEN:
     case SN_CMD_SET_FILTER:
     case SN_CMD_RADIO_POWER_CYCLE:
+    case SN_CMD_SET_BANDWIDTH:
+    case SN_CMD_SET_CTRL_FILTER:
+    case SN_CMD_SET_CSI:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;

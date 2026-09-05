@@ -25,6 +25,9 @@ typedef enum {
     /* Power-gates the radio domain by way of a deep-sleep reset. See the
      * handler in main.c for why this exists and what it does not prove. */
     SN_CMD_RADIO_POWER_CYCLE = 11,
+    SN_CMD_SET_BANDWIDTH = 12,   /* 0 = 20 MHz, 1 = HT40 above, 2 = HT40 below */
+    SN_CMD_SET_CTRL_FILTER = 13, /* subtype mask for control frames */
+    SN_CMD_SET_CSI = 14,         /* 0 = off, 1 = on */
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

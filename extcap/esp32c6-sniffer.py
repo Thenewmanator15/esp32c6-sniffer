@@ -285,6 +285,22 @@ def print_config(interface: str) -> None:
           "{type=integer}{range=100,10000}{default=500}"
           "{tooltip=Time on each channel. A beacon interval is about 100 ms, "
           "so below roughly 300 ms you will miss beacons}")
+    print("arg {number=7}{call=--bandwidth}{display=Channel width}"
+          "{type=selector}{default=0}"
+          "{tooltip=Watching a 40 MHz network on its primary channel alone "
+          "sees half of it, so this must match the network}")
+    print("value {arg=7}{value=0}{display=20 MHz}")
+    print("value {arg=7}{value=1}{display=40 MHz, secondary above}")
+    print("value {arg=7}{value=2}{display=40 MHz, secondary below}")
+    print("arg {number=8}{call=--drop-acks}{display=Drop acknowledgements}"
+          "{type=boolflag}{default=false}"
+          "{tooltip=Acknowledgements dominate control-frame volume and carry "
+          "almost nothing. Only applies when control frames are captured}")
+    print("arg {number=9}{call=--csi}{display=CSI sidecar file}"
+          "{type=fileselect}{fileext=CSV files (*.csv)}"
+          "{tooltip=Writes per-subcarrier channel response beside the capture. "
+          "No pcap link type can carry it, so it goes to its own file sharing "
+          "the capture timestamps. Costs a few hundred bytes per frame}")
 
 
 # --- control pipe framing --------------------------------------------------
@@ -324,9 +340,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                control_in: str | None, control_out: str | None,
                interface: str = INTERFACE, snaplen: int | None = None,
                frame_filter: int | None = None, hop: int = 0,
-               hop_dwell_ms: int = 500) -> int:
+               hop_dwell_ms: int = 500, bandwidth: int = 0,
+               drop_acks: bool = False, csi_path: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
-    from esp32c6_sniffer.control import Antenna, FrameFilter, Radio
+    from esp32c6_sniffer.control import (
+        Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
+    )
+    from esp32c6_sniffer.csi import CSV_HEADER, to_csv_row
 
     from esp32c6_sniffer.pcap import PcapWriter
 
@@ -340,6 +360,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         FrameFilter(frame_filter) if wifi and frame_filter else None
     )
     hop_channels = HOP_SETS.get(hop) if wifi else None
+    session_bandwidth = Bandwidth(bandwidth) if wifi else None
+    session_ctrl = CtrlFilter.NO_ACK if (wifi and drop_acks) else None
 
     state = {"initialized": False, "running": True}
     fp_out = None
@@ -387,6 +409,26 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
     # Order matters: capture fifo, then control-out, then control-in. Both
     # reference implementations do this and the pipes can block otherwise.
+    # Opened before the capture pipe so a bad path fails immediately rather
+    # than after Wireshark has already started showing packets.
+    csi_file = None
+    csi_written = 0
+    if csi_path and wifi:
+        csi_file = open(csi_path, "w", encoding="utf-8", newline="")
+        print(CSV_HEADER, file=csi_file)
+        # Flushed now so the file is readable even if the capture is killed
+        # rather than stopped, which is how Wireshark often ends one.
+        csi_file.flush()
+
+    def on_csi(record) -> None:
+        nonlocal csi_written
+        print(to_csv_row(record), file=csi_file)
+        csi_written += 1
+        # Flushed regularly rather than per record: CSI arrives as fast as
+        # frames do, and this file is read after the capture, not during.
+        if csi_written % 50 == 0:
+            csi_file.flush()
+
     with open(fifo, "wb") as pipe:
         # Link type follows the radio, so the header matches what records()
         # actually emits rather than whichever one was written first.
@@ -404,7 +446,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             antenna=Antenna(antenna),
                             radio=radio,
                             snaplen=session_snaplen,
-                            frame_filter=session_filter) as session:
+                            frame_filter=session_filter,
+                            bandwidth=session_bandwidth,
+                            ctrl_filter=session_ctrl,
+                            csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:
                 thread = threading.Thread(target=reader, args=(fp_in, session),
@@ -452,6 +497,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             # is surfaced rather than hidden.
                             extra += (f", receiver rebuilt {s.fw_recoveries}x "
                                       f"after going deaf")
+                        if csi_file is not None:
+                            extra += (f", CSI {csi_written} records"
+                                      f"{f', {s.fw_csi_dropped} dropped'
+                                         if s.fw_csi_dropped else ''}")
                         if s.fw_stalled_seconds:
                             extra += (f", no frames for {s.fw_stalled_seconds}s"
                                       f" -- if this persists the receiver has "
@@ -475,6 +524,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             )
             finally:
                 state["running"] = False
+                if csi_file is not None:
+                    csi_file.close()
                 if fp_out is not None:
                     fp_out.close()
     return 0
@@ -501,6 +552,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--filter", dest="frame_filter", type=int, default=None)
     parser.add_argument("--hop", type=int, default=0)
     parser.add_argument("--hop-dwell", dest="hop_dwell", type=int, default=500)
+    parser.add_argument("--bandwidth", type=int, default=0)
+    parser.add_argument("--drop-acks", dest="drop_acks", action="store_true")
+    parser.add_argument("--csi", dest="csi_path", default=None)
     args, _unknown = parser.parse_known_args(argv)
 
     if args.extcap_interfaces:
@@ -544,7 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         return do_capture(args.fifo, args.port, channel, args.antenna,
                           args.extcap_control_in, args.extcap_control_out,
                           interface, args.snaplen, args.frame_filter,
-                          args.hop, args.hop_dwell)
+                          args.hop, args.hop_dwell, args.bandwidth,
+                          args.drop_acks, args.csi_path)
 
     print_interfaces(args.extcap_interface)
     return 0

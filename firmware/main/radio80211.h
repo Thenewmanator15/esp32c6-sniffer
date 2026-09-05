@@ -63,6 +63,10 @@ typedef struct __attribute__((packed)) {
 
 #define SN_80211_FLAG_TRUNCATED 0x01u /* payload cut to the snapshot length */
 #define SN_80211_FLAG_RX_ERROR  0x02u /* radio reported a reception error */
+/* Part of an aggregate rather than a single MPDU. Radiotap has a field for
+ * this, and it changes how a busy channel should be read: one A-MPDU is one
+ * transmission opportunity, not twenty. */
+#define SN_80211_FLAG_AMPDU     0x04u
 
 typedef struct {
     /* Counted at the very top of the callback, before any filtering, so a
@@ -81,6 +85,12 @@ typedef struct {
      * rather than indistinguishable from a quiet channel. */
     uint32_t stalled_seconds; /* consecutive seconds with the radio up and no callback */
     uint32_t recoveries;      /* times the driver was torn down and rebuilt */
+    uint32_t csi_records;     /* CSI records forwarded */
+    uint32_t csi_dropped;     /* CSI records dropped, queue full or oversized */
+    /* Frames whose dump_len could not be trusted, so the FCS could not be
+     * stripped. Those frames carry four extra bytes the host cannot account
+     * for. */
+    uint32_t fcs_length_unknown;
 } sn_80211_stats_t;
 
 /* Starts promiscuous capture.
@@ -133,7 +143,58 @@ bool sn_radio80211_service(void);
 /* Ceiling for the backoff after repeated rebuilds fail to help. */
 #define SN_80211_STALL_LIMIT_MAX_S 120u
 
+/* 802.11 frame check sequence, always four bytes, always present in what the
+ * promiscuous callback hands over. */
+#define SN_80211_FCS_LEN 4
+
 #define SN_80211_MAX_SNAPLEN 512
+
+/* Channel bandwidth, as the secondary-channel position. Sniffing a 40 MHz
+ * network on its primary channel alone sees the 20 MHz half and mislabels the
+ * rest, so this has to match the network being watched. */
+typedef enum {
+    SN_80211_BW_20 = 0,
+    SN_80211_BW_40_ABOVE = 1,
+    SN_80211_BW_40_BELOW = 2,
+} sn_80211_bandwidth_t;
+
+esp_err_t sn_radio80211_set_bandwidth(uint8_t bandwidth);
+
+/* Subtype mask for control frames, a wifi_promiscuous_filter_t ctrl mask.
+ * Acknowledgements are the bulk of control-frame volume and carry almost
+ * nothing, so dropping them alone is often the difference between keeping up
+ * and not. */
+esp_err_t sn_radio80211_set_ctrl_filter(uint32_t mask);
+
+/* Channel state information: the per-subcarrier channel response for every
+ * frame received, which is what RSSI is a single scalar summary of.
+ *
+ * Enabling it costs bandwidth -- a few hundred bytes per frame on top of the
+ * frame itself -- and it is off by default. There is nowhere in a pcap to put
+ * it, so records go to the host as their own frame type. */
+esp_err_t sn_radio80211_set_csi(bool enable);
+
+/* Largest CSI record the firmware will forward. HT40 with all long training
+ * fields is the worst case. */
+#define SN_80211_CSI_MAX 512
+
+/* CSI record payload, little-endian, then csi_len bytes of signed pairs:
+ *
+ *     uint64 timestamp_us
+ *     int8   rssi_dbm
+ *     int8   noise_floor
+ *     uint8  channel
+ *     uint8  phy          low nibble format, high nibble secondary channel
+ *     uint8  mac[6]       source
+ *     uint16 rx_seq
+ *     uint8  flags        bit 0: first four bytes of CSI are invalid
+ *     uint16 csi_len
+ */
+/* 8 + 1 + 1 + 1 + 1 + 6 + 2 + 1 + 2. Written out rather than left as a bare
+ * number because getting it wrong truncates the last byte of every record and
+ * the host rejects the lot -- which is exactly what happened. */
+#define SN_80211_CSI_HEADER 23
+#define SN_80211_CSI_FLAG_FIRST_WORD_INVALID 0x01u
 
 /* Performs a scan and emits one SN_FRAME_AP_RECORD per access point found,
  * before the command reply carrying the count. Payload layout, little-endian:

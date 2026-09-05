@@ -104,6 +104,9 @@ carries. They are throughput controls, not preferences.
 | Snapshot length | 256 B | Bytes kept per frame. What is cut is encrypted payload; the headers worth having are at the front. Truncation is declared in the pcap, so Wireshark marks frames sliced rather than malformed. |
 | Frame types | Management and data | Control frames are the most numerous and least informative. Dropping them buys link budget cheaply. |
 | Channel hop | Off | Sweeps 1/6/11 or all of 1-13 at a chosen dwell. Each frame carries its own channel in radiotap, so a hopped capture stays self-describing. |
+| Channel width | 20 MHz | Watching a 40 MHz network on its primary channel alone sees half of it, so this must match the network. |
+| Drop acknowledgements | Off | ACKs dominate control-frame volume and carry almost nothing. Only relevant when control frames are captured. |
+| CSI sidecar file | Off | Per-subcarrier channel response, written beside the pcap. See below. |
 
 Hopping trades completeness for coverage: you will miss whatever arrives while
 the radio is on another channel. A beacon interval is about 100 ms, so a dwell
@@ -139,6 +142,27 @@ Use `--repeat` and mean it. This board's Wi-Fi receiver goes deaf for minutes at
 a time, so an empty result is not evidence of an empty band. `spectrum.py` uses
 the 802.15.4 radio and keeps working when Wi-Fi does not, which makes it a
 useful second opinion.
+
+### Channel state information
+
+Every frame's radiotap header carries an RSSI: one number for the whole
+channel. CSI is what that number summarises -- amplitude and phase for each
+subcarrier individually, which is the raw channel response. It is the basis of
+Wi-Fi sensing work, because a person moving through a room changes the
+multipath long before it shows up in RSSI.
+
+No pcap link type has anywhere to put it, and inventing a place inside radiotap
+would produce captures only this project could read. So it goes to a CSV beside
+the capture, sharing the capture's timestamps so the two line up afterwards.
+
+Measured on a 25 s capture here: 600 records, 64 subcarriers for legacy OFDM
+frames and 128 for 11n, with the nulls at the DC and guard subcarriers where
+802.11 puts them. It costs a few hundred bytes per frame on a link measured at
+~810 kB/s, so it is off unless you ask for it.
+
+Values are signed 8-bit pairs, **imaginary first**, which is the opposite of
+what most people assume; `esp32c6_sniffer.csi` swaps them so a phase computed
+downstream has the sign you expect.
 
 ## What you will and will not see
 

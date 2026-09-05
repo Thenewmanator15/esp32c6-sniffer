@@ -38,6 +38,8 @@ BIT_CHANNEL = 3
 BIT_DBM_ANTSIGNAL = 5
 BIT_DBM_ANTNOISE = 6
 BIT_MCS = 19
+BIT_AMPDU = 20
+BIT_HE = 23
 
 # Channel flags.
 CHAN_2GHZ = 0x0080
@@ -87,12 +89,73 @@ MCS_KNOWN_STBC = 0x20
 # radiotap MCS flags.
 MCS_BW_20 = 0
 MCS_BW_40 = 1
+MCS_BW_20L = 2   # 20 MHz lower half of a 40 MHz channel
+MCS_BW_20U = 3   # 20 MHz upper half
 MCS_FLAG_SGI = 0x04
 MCS_FLAG_LDPC = 0x10
 MCS_STBC_SHIFT = 5
 
 #: Highest defined HT modulation-and-coding index.
 HT_MCS_MAX = 76
+
+#: Highest HE index this decoder will accept. HE-MCS runs 0-11.
+HE_MCS_MAX = 11
+
+# radiotap HE field, six u16 words. Only the bits actually filled are named.
+HE_DATA1_FORMAT_SU = 0x0000
+HE_DATA1_BSS_COLOR_KNOWN = 0x0004
+HE_DATA1_UL_DL_KNOWN = 0x0010
+HE_DATA1_MCS_KNOWN = 0x0020
+HE_DATA1_DCM_KNOWN = 0x0040
+HE_DATA2_BW_RU_KNOWN = 0x0004
+HE_DATA2_GI_KNOWN = 0x0002
+HE_DATA3_BSS_COLOR_MASK = 0x003F
+HE_DATA3_UL_DL = 0x0080
+HE_DATA3_MCS_SHIFT = 8
+HE_DATA3_DCM = 0x1000
+HE_DATA5_BW_MASK = 0x000F
+HE_DATA5_GI_SHIFT = 4
+
+
+def decode_he_sig_a(sig1: int, sig2: int):
+    """Decodes HE-SIG-A into radiotap HE words, or returns None.
+
+    HE-SIG-A1 for a single-user PPDU: bit 0 Format, bit 1 Beam Change, bit 2
+    UL/DL, bits 3-6 MCS, bit 7 DCM, bits 8-13 BSS Color, bits 15-18 Spatial
+    Reuse, bits 19-20 Bandwidth, bits 21-22 GI and LTF size.
+
+    Two checks guard against a wrong bit layout reaching the capture, in the
+    same spirit as the HT decode's length check: the Format bit must be set,
+    because the radio only labels a frame HE when it is, and the index must be
+    within the 0-11 that HE defines. Either failing means None and no HE field
+    at all, rather than a confident wrong modulation on every 11ax frame.
+    """
+    if not sig1 & 0x01:
+        return None
+    mcs = (sig1 >> 3) & 0x0F
+    if mcs > HE_MCS_MAX:
+        return None
+
+    bss_color = (sig1 >> 8) & 0x3F
+    dcm = (sig1 >> 7) & 0x01
+    ul_dl = (sig1 >> 2) & 0x01
+    bandwidth = (sig1 >> 19) & 0x03
+    gi_ltf = (sig1 >> 21) & 0x03
+
+    data1 = (HE_DATA1_FORMAT_SU | HE_DATA1_BSS_COLOR_KNOWN
+             | HE_DATA1_UL_DL_KNOWN | HE_DATA1_MCS_KNOWN
+             | HE_DATA1_DCM_KNOWN)
+    data2 = HE_DATA2_BW_RU_KNOWN | HE_DATA2_GI_KNOWN
+    data3 = (bss_color & HE_DATA3_BSS_COLOR_MASK)
+    data3 |= (mcs << HE_DATA3_MCS_SHIFT)
+    if dcm:
+        data3 |= HE_DATA3_DCM
+    if ul_dl:
+        data3 |= HE_DATA3_UL_DL
+    data4 = 0
+    data5 = (bandwidth & HE_DATA5_BW_MASK) | (gi_ltf << HE_DATA5_GI_SHIFT)
+    data6 = 0
+    return (data1, data2, data3, data4, data5, data6)
 
 
 def decode_ht_sig(sig1: int, sig2: int, expected_length: int):
@@ -167,6 +230,8 @@ def build_radiotap(
     fcs_present: bool = False,
     rate_500kbps_units: int | None = None,
     mcs: tuple[int, int, int] | None = None,
+    ampdu_reference: int | None = None,
+    he: tuple[int, int, int, int, int, int] | None = None,
 ) -> bytes:
     """Builds a radiotap header. Returns the bytes to prepend to the frame.
 
@@ -224,5 +289,19 @@ def build_radiotap(
         # Bit 19, so it follows everything above; three bytes, no alignment.
         present |= 1 << BIT_MCS
         body.extend(bytes(mcs))
+
+    if ampdu_reference is not None:
+        # Bit 20: a 32-bit reference shared by the subframes of one aggregate,
+        # then flags and two reserved bytes. Wireshark groups by the reference,
+        # which is what makes an A-MPDU readable as one transmission rather
+        # than twenty unrelated frames.
+        present |= 1 << BIT_AMPDU
+        align(4)
+        body.extend(struct.pack("<IHBB", ampdu_reference & 0xFFFFFFFF, 0, 0, 0))
+
+    if he is not None:
+        present |= 1 << BIT_HE
+        align(2)
+        body.extend(struct.pack("<6H", *he))
 
     return _HEADER.pack(0, 0, HEADER_LEN + len(body), present) + bytes(body)

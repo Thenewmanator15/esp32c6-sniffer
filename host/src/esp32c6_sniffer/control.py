@@ -51,6 +51,9 @@ class Command(IntEnum):
     SET_SNAPLEN = 9
     SET_FILTER = 10
     RADIO_POWER_CYCLE = 11
+    SET_BANDWIDTH = 12
+    SET_CTRL_FILTER = 13
+    SET_CSI = 14
 
 
 class FrameFilter(IntFlag):
@@ -77,6 +80,44 @@ class FrameFilter(IntFlag):
     MGMT_ONLY = MGMT
     #: The usual choice for a busy channel: keep the meaning, drop the noise.
     NO_CTRL = MGMT | DATA
+
+
+class Bandwidth(IntEnum):
+    """Channel width, expressed as where the secondary channel sits.
+
+    Watching a 40 MHz network on its primary channel alone sees half of it, so
+    this has to match the network, not the preference.
+    """
+
+    HT20 = 0
+    HT40_ABOVE = 1
+    HT40_BELOW = 2
+
+
+class CtrlFilter(IntFlag):
+    """Which control-frame subtypes to deliver, a pass mask like FrameFilter.
+
+    Acknowledgements dominate control-frame volume and carry almost nothing, so
+    excluding them alone is often what keeps a busy channel within the link
+    budget. Values match WIFI_PROMIS_CTRL_FILTER_MASK_* in
+    esp_wifi_types_generic.h, which start at bit 23.
+    """
+
+    ADMINISTRATIVE = 1 << 23   # wrapper, block-ack request and block-ack
+    BAR = 1 << 24
+    BA = 1 << 25
+    PSPOLL = 1 << 26
+    RTS = 1 << 27
+    CTS = 1 << 28
+    ACK = 1 << 29
+    CFEND = 1 << 30
+    CFENDACK = 1 << 31
+
+    ALL = (ADMINISTRATIVE | BAR | BA | PSPOLL | RTS | CTS | ACK | CFEND
+           | CFENDACK)
+    #: Keep the frames that describe the conversation, drop the acknowledgement
+    #: storm.
+    NO_ACK = ALL & ~ACK
 
 
 class Radio(IntEnum):

@@ -21,3 +21,8 @@ CONFIG_IEEE802154_RX_BUFFER_SIZE=50
 # The driver's "Rx buffer full" warning is compiled out unless this is set,
 # which makes overflow completely invisible in a default build.
 CONFIG_IEEE802154_DEBUG=y
+
+# Channel state information. Off by default in ESP-IDF, and without it
+# esp_wifi_set_csi_config() returns a bare ESP_FAIL: the API is present, the
+# driver support is not compiled in. Costs a 512-byte static receive buffer.
+CONFIG_ESP_WIFI_CSI_ENABLED=y

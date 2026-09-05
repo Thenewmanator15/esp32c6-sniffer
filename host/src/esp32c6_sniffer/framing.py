@@ -45,6 +45,7 @@ class FrameType(IntEnum):
     CONTROL_REPLY = 5
     CONTROL_CMD = 6
     AP_RECORD = 7
+    CSI = 8
 
 
 @dataclass(frozen=True)

@@ -35,6 +35,10 @@ typedef enum {
      * packed into the command reply, because the list is variable length and
      * a reply carries a single 32-bit value. */
     SN_FRAME_AP_RECORD = 7,
+    /* Channel state information for one received frame: the per-subcarrier
+     * channel response, which no pcap link type has a place for, so it travels
+     * beside the capture rather than inside it. */
+    SN_FRAME_CSI = 8,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

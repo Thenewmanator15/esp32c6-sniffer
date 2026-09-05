@@ -21,7 +21,9 @@ import serial
 
 from .control import (
     Antenna,
+    Bandwidth,
     Command,
+    CtrlFilter,
     FrameFilter,
     Radio,
     decode_reply,
@@ -29,10 +31,15 @@ from .control import (
 )
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
+from .csi import parse_csi_record
 from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
+    MCS_BW_20,
+    MCS_BW_20L,
+    MCS_BW_20U,
     PhyFormat,
     build_radiotap,
+    decode_he_sig_a,
     decode_ht_sig,
     rate_500kbps,
 )
@@ -51,7 +58,7 @@ WIFI_CHANNEL_MAX = 14
 #: firmware/main/main.c. Checked at open() because the failure it prevents is
 #: silent: an older board packs its metadata differently, so every field would
 #: decode to a confident wrong number rather than an error.
-EXPECTED_FIRMWARE_VERSION = 3
+EXPECTED_FIRMWARE_VERSION = 4
 
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
@@ -69,6 +76,7 @@ FLAG_HAS_FCS = 0x01
 
 WIFI_FLAG_TRUNCATED = 0x01
 WIFI_FLAG_RX_ERROR = 0x02
+WIFI_FLAG_AMPDU = 0x04
 
 
 # The capture build emits this once a second: sn_link_stats_t (5 x uint32),
@@ -76,8 +84,40 @@ WIFI_FLAG_RX_ERROR = 0x02
 # the first two blocks, so the short form is still accepted.
 _STATS = struct.Struct("<8I")
 _STATS_FULL = struct.Struct("<16I")
-# Firmware 2 added the stall and recovery counters to the Wi-Fi block.
+# Firmware 2 added the stall and recovery counters to the Wi-Fi block, and
+# firmware 4 the CSI counters.
 _STATS_V2 = struct.Struct("<18I")
+_STATS_V4 = struct.Struct("<20I")
+
+
+#: PHY formats that carry HE-SIG-A rather than HT-SIG.
+_HE_FORMATS = (
+    PhyFormat.HE_SU,
+    PhyFormat.HE_MU,
+    PhyFormat.HE_ERSU,
+    PhyFormat.HE_TB,
+)
+
+#: wifi_second_chan_t: 0 none, 1 above, 2 below.
+_SECOND_ABOVE = 1
+_SECOND_BELOW = 2
+
+
+def _apply_secondary(mcs: tuple[int, int, int], secondary: int):
+    """Refines the radiotap MCS bandwidth using the secondary channel.
+
+    HT-SIG only distinguishes 20 from 40 MHz. Where the secondary channel sits
+    says which half of a 40 MHz channel a 20 MHz frame occupied, which is the
+    difference between "somewhere in 40 MHz" and a specific 20 MHz slot.
+    """
+    known, flags, index = mcs
+    if flags & 0x03 != MCS_BW_20:
+        return mcs      # already says 40 MHz; nothing to refine
+    if secondary == _SECOND_ABOVE:
+        return known, (flags & ~0x03) | MCS_BW_20L, index
+    if secondary == _SECOND_BELOW:
+        return known, (flags & ~0x03) | MCS_BW_20U, index
+    return mcs
 
 
 def channel_range(radio: Radio) -> tuple[int, int]:
@@ -115,6 +155,9 @@ class CaptureStats:
     # that visible instead of indistinguishable from a quiet channel.
     fw_stalled_seconds: int = 0
     fw_recoveries: int = 0
+    fw_csi_records: int = 0
+    fw_csi_dropped: int = 0
+    csi_malformed: int = 0
 
     @property
     def lossless(self) -> bool:
@@ -145,6 +188,9 @@ class CaptureSession:
         radio: Radio = Radio.IEEE802154,
         snaplen: int | None = None,
         frame_filter: FrameFilter | None = None,
+        bandwidth: Bandwidth | None = None,
+        ctrl_filter: CtrlFilter | None = None,
+        csi_sink=None,
     ) -> None:
         self._port_name = port
         self._radio = radio
@@ -164,6 +210,11 @@ class CaptureSession:
         self._t0_host: float = 0.0
         self._snaplen = snaplen
         self._frame_filter = frame_filter
+        self._bandwidth = bandwidth
+        self._ctrl_filter = ctrl_filter
+        # Called for each CSI record. CSI has no place in a pcap, so it leaves
+        # by a different door rather than being forced into one.
+        self._csi_sink = csi_sink
         self._pending_channel: int | None = None
         self._pending_antenna: int | None = None
         self._pending_lock = threading.Lock()
@@ -238,6 +289,12 @@ class CaptureSession:
             self._command(Command.SET_SNAPLEN, self._snaplen)
         if self._frame_filter is not None:
             self._command(Command.SET_FILTER, int(self._frame_filter))
+        if self._ctrl_filter is not None:
+            self._command(Command.SET_CTRL_FILTER, int(self._ctrl_filter))
+        if self._bandwidth is not None:
+            self._command(Command.SET_BANDWIDTH, int(self._bandwidth))
+        if self._csi_sink is not None:
+            self._command(Command.SET_CSI, 1)
         self._command(Command.SET_CHANNEL, self._channel)
 
     def close(self) -> None:
@@ -366,6 +423,16 @@ class CaptureSession:
                     self._update_stats(frame.payload)
                     continue
 
+                if frame.ftype is FrameType.CSI:
+                    if self._csi_sink is not None:
+                        try:
+                            self._csi_sink(parse_csi_record(frame.payload))
+                        except ValueError:
+                            # A malformed record must not end a capture; the
+                            # board's own counters say how many were sent.
+                            self.stats.csi_malformed += 1
+                    continue
+
                 if frame.ftype is not FrameType.PACKET:
                     continue
 
@@ -391,12 +458,14 @@ class CaptureSession:
         capture would report itself lossless: those counters stay at zero
         because that radio is stopped.
         """
-        if len(payload) >= _STATS_V2.size:
-            values = _STATS_V2.unpack_from(payload)
+        if len(payload) >= _STATS_V4.size:
+            values = _STATS_V4.unpack_from(payload)
+        elif len(payload) >= _STATS_V2.size:
+            values = _STATS_V2.unpack_from(payload) + (0, 0)
         elif len(payload) >= _STATS_FULL.size:
-            values = _STATS_FULL.unpack_from(payload) + (0, 0)
+            values = _STATS_FULL.unpack_from(payload) + (0,) * 4
         elif len(payload) >= _STATS.size:
-            values = _STATS.unpack_from(payload) + (0,) * 10
+            values = _STATS.unpack_from(payload) + (0,) * 12
         else:
             return
 
@@ -420,7 +489,9 @@ class CaptureSession:
                 self.stats.fw_bytes_dropped_by_snaplen,
                 self.stats.fw_stalled_seconds,
                 self.stats.fw_recoveries,
-            ) = values[8:18]
+                self.stats.fw_csi_records,
+                self.stats.fw_csi_dropped,
+            ) = values[8:20]
         else:
             (
                 self.stats.fw_frames_captured,
@@ -452,13 +523,20 @@ class CaptureSession:
             ) = _WIFI_META.unpack_from(payload)
             body = payload[WIFI_META_LEN:]
             phy_format = phy & 0x0F
-            # 11n only. HE-SIG-A carries an MCS too, but expressing it needs
-            # radiotap's HE field, whose layout cannot be checked against this
-            # board while its receiver keeps going deaf. Nothing is claimed for
-            # 11ax rather than something unverified being claimed.
+            secondary = (phy >> 4) & 0x0F
             mcs = (
                 decode_ht_sig(siga1, siga2, on_air_len)
                 if phy_format == PhyFormat.HT
+                else None
+            )
+            if mcs is not None:
+                # The radio reports where the secondary channel sits, which is
+                # what turns "40 MHz" into "which 20 MHz half". HT-SIG only
+                # says 20 or 40.
+                mcs = _apply_secondary(mcs, secondary)
+            he = (
+                decode_he_sig_a(siga1, siga2)
+                if phy_format in _HE_FORMATS
                 else None
             )
             # The firmware strips the FCS and says so, which is true. Claiming
@@ -480,6 +558,15 @@ class CaptureSession:
                 fcs_present=False,
                 rate_500kbps_units=rate_500kbps(phy_format, rate_code),
                 mcs=mcs,
+                he=he,
+                # One aggregate is one transmission opportunity. Wireshark
+                # groups subframes by this reference; the timestamp is shared
+                # across an A-MPDU's subframes and differs between aggregates,
+                # so it identifies them without the firmware having to count.
+                ampdu_reference=(
+                    device_us & 0xFFFFFFFF
+                    if flags & WIFI_FLAG_AMPDU else None
+                ),
             )
             # on_air_len is the length before the firmware's snapshot cut, so
             # the pcap can declare the frame sliced rather than complete.

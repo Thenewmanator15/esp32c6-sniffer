@@ -49,6 +49,9 @@ static uint32_t s_stall_limit = SN_80211_STALL_LIMIT_S;
  * the receive callback, which is serialised by the driver task. */
 static uint32_t s_ts_last;
 static uint64_t s_ts_epoch;
+static uint8_t s_bandwidth = SN_80211_BW_20;
+static uint32_t s_ctrl_filter;      /* 0 = leave the driver's default alone */
+static bool s_csi_enabled;
 
 /* Sender-owned; only the rx task touches it. */
 static uint8_t s_out[sizeof(sn_80211_meta_t) + MAX_SNAPLEN];
@@ -68,19 +71,27 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
         return;
     }
 
-    /* sig_len counts the MPDU INCLUDING its frame check sequence; dump_len is
-     * the same frame without it. Sending sig_len bytes while telling the host
-     * there is no FCS -- which is what this did -- leaves four bytes of CRC on
-     * the end of every frame for Wireshark to parse as information elements.
-     * Truncation hid it on long frames and it showed up on short ones.
+    /* The FCS is on the end of every frame and must come off.
      *
-     * So the FCS is dropped and no FCS is declared, which is true. Nothing is
-     * lost: rx_state already reports whether the radio liked the frame, and it
-     * saves four bytes per frame on a link that is the binding constraint. */
-    uint16_t on_air = (uint16_t)pkt->rx_ctrl.sig_len;
-    const uint16_t without_fcs = (uint16_t)pkt->rx_ctrl.dump_len;
-    if (without_fcs > 0u && without_fcs <= on_air) {
-        on_air = without_fcs;
+     * Measured on this chip rather than taken from the header, whose comments
+     * point the wrong way: dump_len reads FOUR BYTES LARGER than sig_len, not
+     * smaller, so it is not "the MPDU excluding the FCS" as documented. What
+     * sig_len does include is the four-byte FCS, confirmed by walking the
+     * information-element chain of a captured probe request: the tags end
+     * exactly four bytes before sig_len, and those four parse as a bogus
+     * empty SSID followed by a tag that overruns the frame.
+     *
+     * This hid for a long time because a frame longer than the snapshot length
+     * is marked truncated, and Wireshark stops parsing before reaching the
+     * tail. Only short complete frames showed it -- which is why every probe
+     * request was malformed while beacons looked fine. */
+    const uint16_t with_fcs = (uint16_t)pkt->rx_ctrl.sig_len;
+    uint16_t on_air = 0;
+    if (with_fcs > SN_80211_FCS_LEN) {
+        on_air = (uint16_t)(with_fcs - SN_80211_FCS_LEN);
+    } else {
+        /* Too short to hold an FCS at all: not a frame we can make sense of. */
+        s_stats.fcs_length_unknown++;
     }
     if (on_air == 0) {
         s_stats.skipped_zero_len++;
@@ -112,6 +123,19 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     item.meta.siga1 = (uint32_t)pkt->rx_ctrl.he_siga1;
     item.meta.siga2 = (uint16_t)pkt->rx_ctrl.he_siga2;
     item.meta.flags = (pkt->rx_ctrl.rx_state != 0) ? SN_80211_FLAG_RX_ERROR : 0u;
+    /* cur_single_mpdu is set for a lone MPDU, so its absence means aggregate.
+     * One A-MPDU is one transmission opportunity however many frames it
+     * carries, which is the difference between a channel being busy and being
+     * merely talkative.
+     *
+     * Only meaningful from HT onwards: 11b and 11g have no aggregation, and
+     * the field simply reads 0 for them. Trusting it there marked every CCK
+     * probe request as aggregated, and Wireshark then tried to reassemble
+     * them -- 167 malformed frames in one 25 s capture, all probe requests. */
+    if (pkt->rx_ctrl.cur_bb_format >= 2 /* RX_BB_FORMAT_HT */ &&
+        !pkt->rx_ctrl.cur_single_mpdu) {
+        item.meta.flags |= SN_80211_FLAG_AMPDU;
+    }
 
     uint16_t take = on_air;
     if (take > s_snaplen) {
@@ -217,6 +241,185 @@ static esp_err_t wifi_init_once(void)
 /* An explicit union rather than all-ones. ALL is documented as 0xFFFFFFFF, but
  * naming the types we want removes any doubt about reserved bits being
  * interpreted. */
+static wifi_second_chan_t second_chan(void)
+{
+    switch (s_bandwidth) {
+    case SN_80211_BW_40_ABOVE: return WIFI_SECOND_CHAN_ABOVE;
+    case SN_80211_BW_40_BELOW: return WIFI_SECOND_CHAN_BELOW;
+    default:                   return WIFI_SECOND_CHAN_NONE;
+    }
+}
+
+/* --- Channel state information ------------------------------------------
+ *
+ * CSI is the per-subcarrier channel response: what RSSI is a one-number
+ * summary of. The driver hands it over in its own callback, in a buffer that
+ * is freed as soon as the callback returns, so it must be copied.
+ *
+ * It goes to the host as its own frame type. No pcap link type has anywhere to
+ * put it, and inventing a place inside radiotap would make captures that only
+ * this project can read.
+ */
+
+typedef struct {
+    uint8_t out[SN_80211_CSI_HEADER + SN_80211_CSI_MAX];
+    uint16_t len;               /* total, header included */
+} csi_item_t;
+
+static QueueHandle_t s_csi_queue;
+static TaskHandle_t s_csi_task;
+
+static void csi_task(void *arg)
+{
+    (void)arg;
+    static csi_item_t item;
+
+    while (true) {
+        if (xQueueReceive(s_csi_queue, &item, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (sn_usb_link_send(SN_FRAME_CSI, item.out, item.len)) {
+            s_stats.csi_records++;
+        } else {
+            s_stats.csi_dropped++;
+        }
+    }
+}
+
+/* Runs in the Wi-Fi driver task. Copies and queues, nothing else. */
+static void csi_cb(void *ctx, wifi_csi_info_t *info)
+{
+    (void)ctx;
+    if (info == NULL || info->buf == NULL || info->len == 0) {
+        return;
+    }
+    if (info->len > SN_80211_CSI_MAX) {
+        /* Better to count it than to send a silently half-truncated channel
+         * response, which would look like real data. */
+        s_stats.csi_dropped++;
+        return;
+    }
+
+    csi_item_t item;
+    uint8_t *p = item.out;
+    const uint32_t raw_ts = (uint32_t)info->rx_ctrl.timestamp;
+    const uint64_t ts = s_ts_epoch + raw_ts;
+    memcpy(p, &ts, 8);                                   p += 8;
+    *p++ = (uint8_t)(int8_t)info->rx_ctrl.rssi;
+    *p++ = (uint8_t)(int8_t)info->rx_ctrl.noise_floor;
+    *p++ = (uint8_t)info->rx_ctrl.channel;
+    *p++ = (uint8_t)((info->rx_ctrl.cur_bb_format & 0x0Fu) |
+                     ((info->rx_ctrl.second & 0x0Fu) << 4));
+    memcpy(p, info->mac, 6);                             p += 6;
+    const uint16_t seq = info->rx_seq;
+    memcpy(p, &seq, 2);                                  p += 2;
+    *p++ = info->first_word_invalid
+               ? SN_80211_CSI_FLAG_FIRST_WORD_INVALID : 0u;
+    const uint16_t csi_len = info->len;
+    memcpy(p, &csi_len, 2);                              p += 2;
+    memcpy(p, info->buf, csi_len);
+
+    item.len = (uint16_t)(SN_80211_CSI_HEADER + csi_len);
+
+    if (xQueueSend(s_csi_queue, &item, 0) != pdTRUE) {
+        s_stats.csi_dropped++;
+    }
+}
+
+esp_err_t sn_radio80211_set_csi(bool enable)
+{
+    if (!enable) {
+        s_csi_enabled = false;
+        return s_wifi_inited ? esp_wifi_set_csi(false) : ESP_OK;
+    }
+
+    if (s_csi_queue == NULL) {
+        /* Shallow: each entry is over half a kilobyte, and CSI is a diagnostic
+         * stream rather than the capture. Dropping one is visible in the
+         * counters and costs nothing that matters. */
+        s_csi_queue = xQueueCreate(4, sizeof(csi_item_t));
+        if (s_csi_queue == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    if (s_csi_task == NULL) {
+        if (xTaskCreate(csi_task, "sn_csi", 4096, NULL, 8, &s_csi_task)
+                != pdPASS) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    s_csi_enabled = true;
+    if (!s_wifi_inited) {
+        return ESP_OK; /* remembered, applied when the radio starts */
+    }
+
+    /* Legacy and HT20 long training fields. HT40 and the HE variants are left
+     * off: they multiply the record size, and this link is the constraint. */
+    wifi_csi_config_t cfg = {
+        .enable = 1,
+        .acquire_csi_legacy = 1,
+        .acquire_csi_ht20 = 1,
+        .acquire_csi_su = 1,
+        .val_scale_cfg = 0,
+        /* Acknowledgements are short, numerous and carry no payload worth
+         * correlating a channel response against. */
+        .dump_ack_en = 0,
+    };
+    /* No lltf_bit_mode here: that field exists only on MAC version 3 parts,
+     * and the C6 is not one. Records are 12-bit I/Q as a result. */
+    /* Each step logged with its own error code: a bare ESP_FAIL from this
+     * function said nothing about which of the three calls refused, which is
+     * exactly the trap the scan path already fell into once. */
+    esp_err_t err = esp_wifi_set_csi_config(&cfg);
+    ESP_LOGI(TAG, "csi: set_csi_config -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_wifi_set_csi_rx_cb(csi_cb, NULL);
+    ESP_LOGI(TAG, "csi: set_csi_rx_cb -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_wifi_set_csi(true);
+    ESP_LOGI(TAG, "csi: set_csi(true) -> %s", esp_err_to_name(err));
+    return err;
+}
+
+esp_err_t sn_radio80211_set_bandwidth(uint8_t bandwidth)
+{
+    if (bandwidth > SN_80211_BW_40_BELOW) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_bandwidth = bandwidth;
+    if (!s_running) {
+        return ESP_OK; /* remembered, applied when capture starts */
+    }
+    /* Re-tune so the change takes effect now rather than at the next retune. */
+    esp_err_t err = esp_wifi_set_channel(s_channel, second_chan());
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "bandwidth now %s",
+                 bandwidth == SN_80211_BW_20 ? "20 MHz" :
+                 bandwidth == SN_80211_BW_40_ABOVE ? "40 MHz, secondary above"
+                                                   : "40 MHz, secondary below");
+    }
+    return err;
+}
+
+esp_err_t sn_radio80211_set_ctrl_filter(uint32_t mask)
+{
+    s_ctrl_filter = mask;
+    if (!s_running) {
+        return ESP_OK;
+    }
+    wifi_promiscuous_filter_t filter = {.filter_mask = mask};
+    esp_err_t err = esp_wifi_set_promiscuous_ctrl_filter(&filter);
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "control-frame subtypes now 0x%08x", (unsigned)mask);
+    }
+    return err;
+}
+
 static esp_err_t apply_filter(uint32_t filter_mask)
 {
     if (filter_mask == SN_80211_FILTER_ALL) {
@@ -294,12 +497,24 @@ esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
 
     s_filter_mask = filter_mask;
     ESP_ERROR_CHECK(apply_filter(filter_mask));
+    if (s_ctrl_filter != 0u) {
+        wifi_promiscuous_filter_t ctrl = {.filter_mask = s_ctrl_filter};
+        ESP_ERROR_CHECK(esp_wifi_set_promiscuous_ctrl_filter(&ctrl));
+    }
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous_rx_cb(promiscuous_cb));
     ESP_ERROR_CHECK(esp_wifi_set_promiscuous(true));
-    ESP_ERROR_CHECK(esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE));
+    ESP_ERROR_CHECK(esp_wifi_set_channel(channel, second_chan()));
 
     s_channel = channel;
     s_running = true;
+    if (s_csi_enabled) {
+        /* Re-applied here so it survives a driver rebuild after a stall. */
+        esp_err_t csi_err = sn_radio80211_set_csi(true);
+        if (csi_err != ESP_OK) {
+            ESP_LOGW(TAG, "CSI could not be re-enabled: %s",
+                     esp_err_to_name(csi_err));
+        }
+    }
     ESP_LOGI(TAG, "capturing on channel %u, snaplen %u",
              (unsigned)channel, (unsigned)s_snaplen);
     return ESP_OK;
@@ -313,7 +528,7 @@ esp_err_t sn_radio80211_set_channel(uint8_t channel)
     if (!s_running) {
         return sn_radio80211_start(channel, s_snaplen, SN_80211_FILTER_ALL);
     }
-    esp_err_t err = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    esp_err_t err = esp_wifi_set_channel(channel, second_chan());
     if (err == ESP_OK) {
         s_channel = channel;
         ESP_LOGI(TAG, "channel now %u", (unsigned)channel);
