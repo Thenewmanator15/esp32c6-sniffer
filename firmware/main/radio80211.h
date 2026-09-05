@@ -28,7 +28,13 @@ typedef struct __attribute__((packed)) {
     int8_t rssi_dbm;
     int8_t noise_floor;
     uint8_t flags;
-    uint32_t timestamp_us; /* hardware-latched from the radio's own counter */
+    /* Hardware-latched from the radio's own counter, widened here.
+     *
+     * The radio reports 32 bits of microseconds, which wraps every 71 minutes.
+     * A capture running across a wrap saw time jump backwards by an hour in
+     * the middle. The firmware counts the wraps, because it sees every frame
+     * in order and the host may not. */
+    uint64_t timestamp_us;
     uint16_t orig_len;     /* on-air length, so truncation stays visible */
     /* PHY of the received frame, so the host can put a real data rate and
      * modulation into radiotap instead of assuming OFDM. Previously these two
@@ -36,6 +42,14 @@ typedef struct __attribute__((packed)) {
      * wrong for 11b. */
     uint8_t rate;          /* rx_ctrl.rate: 11b transmission rate, else L-SIG */
     uint8_t phy;           /* low nibble cur_bb_format, high nibble secondary */
+    /* The raw PHY signalling field, forwarded rather than decoded.
+     *
+     * For an 11n frame this is HT-SIG, whose low seven bits are the modulation
+     * and coding index; for 11ax it is HE-SIG-A. Decoding happens on the host,
+     * where it can be unit-tested against the standard's bit layout instead of
+     * being trusted on a board whose receiver is often deaf. */
+    uint32_t siga1;        /* rx_ctrl.he_siga1: HT-SIG, or HE-SIG-A1 */
+    uint16_t siga2;        /* rx_ctrl.he_siga2: HE-SIG-A2 */
 } sn_80211_meta_t;
 
 #define SN_80211_PHY_FORMAT(p) ((uint8_t)((p) & 0x0Fu))
@@ -120,6 +134,18 @@ bool sn_radio80211_service(void);
 #define SN_80211_STALL_LIMIT_MAX_S 120u
 
 #define SN_80211_MAX_SNAPLEN 512
+
+/* Performs a scan and emits one SN_FRAME_AP_RECORD per access point found,
+ * before the command reply carrying the count. Payload layout, little-endian:
+ *
+ *     int8   rssi_dbm
+ *     uint8  channel
+ *     uint8  authmode      wifi_auth_mode_t
+ *     uint8  ssid_len
+ *     uint8  bssid[6]
+ *     char   ssid[ssid_len]   not NUL terminated
+ */
+#define SN_80211_AP_RECORD_HEADER 10
 
 #ifdef __cplusplus
 }

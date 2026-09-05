@@ -37,6 +37,7 @@ BIT_RATE = 2
 BIT_CHANNEL = 3
 BIT_DBM_ANTSIGNAL = 5
 BIT_DBM_ANTNOISE = 6
+BIT_MCS = 19
 
 # Channel flags.
 CHAN_2GHZ = 0x0080
@@ -76,6 +77,58 @@ _LSIG_RATES = {
 }
 
 
+# radiotap MCS "known" bits.
+MCS_KNOWN_BANDWIDTH = 0x01
+MCS_KNOWN_INDEX = 0x02
+MCS_KNOWN_GI = 0x04
+MCS_KNOWN_FEC = 0x10
+MCS_KNOWN_STBC = 0x20
+
+# radiotap MCS flags.
+MCS_BW_20 = 0
+MCS_BW_40 = 1
+MCS_FLAG_SGI = 0x04
+MCS_FLAG_LDPC = 0x10
+MCS_STBC_SHIFT = 5
+
+#: Highest defined HT modulation-and-coding index.
+HT_MCS_MAX = 76
+
+
+def decode_ht_sig(sig1: int, sig2: int, expected_length: int):
+    """Decodes HT-SIG into radiotap MCS fields, or returns None.
+
+    HT-SIG1 is MCS in bits 0-6, 20/40 bandwidth in bit 7, and the HT Length in
+    bits 8-23. HT-SIG2 carries aggregation, STBC, FEC and the short guard
+    interval in bits 3, 4-5, 6 and 7.
+
+    **The length is used as a self-check.** This decode has not been confirmed
+    against live 11n traffic, so rather than trust the bit layout, the HT Length
+    it yields is compared with the length the radio actually reported. They come
+    from independent places -- one from the signal field, one from the receive
+    descriptor -- so agreement is strong evidence the layout is right, and
+    disagreement means None and no MCS is claimed. That is deliberate: a
+    plausible wrong MCS on every 11n frame is worse than no MCS at all.
+    """
+    mcs = sig1 & 0x7F
+    if mcs > HT_MCS_MAX:
+        return None
+    if ((sig1 >> 8) & 0xFFFF) != expected_length:
+        return None
+
+    known = MCS_KNOWN_INDEX | MCS_KNOWN_BANDWIDTH | MCS_KNOWN_GI
+    known |= MCS_KNOWN_FEC | MCS_KNOWN_STBC
+
+    flags = MCS_BW_40 if (sig1 >> 7) & 1 else MCS_BW_20
+    if (sig2 >> 7) & 1:
+        flags |= MCS_FLAG_SGI
+    if (sig2 >> 6) & 1:
+        flags |= MCS_FLAG_LDPC
+    flags |= ((sig2 >> 4) & 0x03) << MCS_STBC_SHIFT
+
+    return known, flags, mcs
+
+
 def rate_500kbps(phy_format: int, rate_code: int) -> int | None:
     """Radiotap Rate for a legacy frame, or None when it cannot be expressed.
 
@@ -113,6 +166,7 @@ def build_radiotap(
     bad_fcs: bool = False,
     fcs_present: bool = False,
     rate_500kbps_units: int | None = None,
+    mcs: tuple[int, int, int] | None = None,
 ) -> bytes:
     """Builds a radiotap header. Returns the bytes to prepend to the frame.
 
@@ -165,5 +219,10 @@ def build_radiotap(
     if noise_dbm is not None:
         present |= 1 << BIT_DBM_ANTNOISE
         body.extend(struct.pack("<b", noise_dbm))
+
+    if mcs is not None:
+        # Bit 19, so it follows everything above; three bytes, no alignment.
+        present |= 1 << BIT_MCS
+        body.extend(bytes(mcs))
 
     return _HEADER.pack(0, 0, HEADER_LEN + len(body), present) + bytes(body)

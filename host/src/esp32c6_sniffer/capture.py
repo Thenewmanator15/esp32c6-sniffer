@@ -33,6 +33,7 @@ from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
     PhyFormat,
     build_radiotap,
+    decode_ht_sig,
     rate_500kbps,
 )
 from .tap import (
@@ -46,15 +47,22 @@ from .tap import (
 WIFI_CHANNEL_MIN = 1
 WIFI_CHANNEL_MAX = 14
 
+#: Wire format this host code speaks, matching SN_FIRMWARE_VERSION in
+#: firmware/main/main.c. Checked at open() because the failure it prevents is
+#: silent: an older board packs its metadata differently, so every field would
+#: decode to a confident wrong number rather than an error.
+EXPECTED_FIRMWARE_VERSION = 3
+
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
 META_LEN = _META.size
 
-# Matches sn_80211_meta_t in firmware/main/radio80211.h. Note the timestamp is
-# 32-bit here against the 802.15.4 radio's 64, so it wraps about every 71
-# minutes; _anchor works from differences, so a wrap shows as one bad interval
-# rather than a broken capture.
-_WIFI_META = struct.Struct("<BbbBIHBB")
+# Matches sn_80211_meta_t in firmware/main/radio80211.h.
+#
+# The timestamp is 64-bit here even though the radio reports 32: the firmware
+# counts the wraps, because it sees every frame in order. Before that, a
+# capture running past 71 minutes had time jump backwards by an hour.
+_WIFI_META = struct.Struct("<BbbBQHBBIH")
 WIFI_META_LEN = _WIFI_META.size
 
 FLAG_HAS_FCS = 0x01
@@ -151,6 +159,7 @@ class CaptureSession:
         self._serial: serial.Serial | None = None
         self._parser = StreamParser()
         self._tracker = SequenceTracker()
+        self.firmware_version: int | None = None
         self._t0_device: int | None = None
         self._t0_host: float = 0.0
         self._snaplen = snaplen
@@ -203,6 +212,20 @@ class CaptureSession:
             pass
         ser.reset_input_buffer()
         self._serial = ser
+
+        # Version first, so a mismatch is reported before anything is
+        # interpreted. Flashing the firmware and installing the plugin are two
+        # separate steps, and doing only one of them used to leave a capture
+        # that ran happily and decoded nonsense.
+        info = self._command(Command.GET_INFO)
+        self.firmware_version = info["value"]
+        if self.firmware_version != EXPECTED_FIRMWARE_VERSION:
+            raise RuntimeError(
+                f"board is running firmware version {self.firmware_version}, "
+                f"this host expects {EXPECTED_FIRMWARE_VERSION}. "
+                f"Rebuild and reflash: "
+                f"idf.py -DSN_MODE=2 build && .\flash.ps1 -Port <port>"
+            )
 
         # Radio first. SET_CHANNEL is interpreted against whichever radio is
         # selected, so choosing it afterwards would validate channel 6 against
@@ -424,9 +447,20 @@ class CaptureSession:
                 on_air_len,
                 rate_code,
                 phy,
+                siga1,
+                siga2,
             ) = _WIFI_META.unpack_from(payload)
             body = payload[WIFI_META_LEN:]
             phy_format = phy & 0x0F
+            # 11n only. HE-SIG-A carries an MCS too, but expressing it needs
+            # radiotap's HE field, whose layout cannot be checked against this
+            # board while its receiver keeps going deaf. Nothing is claimed for
+            # 11ax rather than something unverified being claimed.
+            mcs = (
+                decode_ht_sig(siga1, siga2, on_air_len)
+                if phy_format == PhyFormat.HT
+                else None
+            )
             # The firmware strips the FCS and says so, which is true. Claiming
             # an FCS that is not there makes Wireshark mark every frame Bad
             # FCS, as the 802.15.4 path already learned the hard way.
@@ -445,6 +479,7 @@ class CaptureSession:
                 bad_fcs=bool(flags & WIFI_FLAG_RX_ERROR),
                 fcs_present=False,
                 rate_500kbps_units=rate_500kbps(phy_format, rate_code),
+                mcs=mcs,
             )
             # on_air_len is the length before the firmware's snapshot cut, so
             # the pcap can declare the frame sliced rather than complete.

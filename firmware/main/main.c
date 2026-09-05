@@ -54,7 +54,14 @@ static sn_radio_t s_radio = SN_RADIO_154;
 #endif
 
 /* Reported by GET_INFO so the host can check it is talking to what it expects. */
-#define SN_FIRMWARE_VERSION 2u
+/* Bumped whenever the wire format changes, so the host can refuse to
+ * misinterpret an older board rather than decoding rubbish confidently.
+ *   1: original
+ *   2: Wi-Fi counters added to the stats frame
+ *   3: Wi-Fi metadata gained a 64-bit timestamp, rate/PHY and the raw signal
+ *      field; AP_RECORD frames added
+ */
+#define SN_FIRMWARE_VERSION 3u
 
 static const char *TAG = "main";
 

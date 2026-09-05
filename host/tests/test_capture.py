@@ -20,17 +20,21 @@ from esp32c6_sniffer.capture import (
 from esp32c6_sniffer.control import Radio
 from esp32c6_sniffer.pcap import PcapWriter
 from esp32c6_sniffer.radiotap import (
+    BIT_MCS,
     BIT_RATE,
     CHAN_CCK,
     CHAN_OFDM,
     HEADER_LEN,
     LINKTYPE_IEEE802_11_RADIOTAP,
+    MCS_FLAG_SGI,
+    MCS_KNOWN_INDEX,
     PhyFormat,
+    decode_ht_sig,
     rate_500kbps,
 )
 from esp32c6_sniffer.tap import CHANNEL_MAX, CHANNEL_MIN, LINKTYPE_IEEE802_15_4_TAP
 
-WIFI_META = struct.Struct("<BbbBIHBB")   # ..., orig_len, rate, phy
+WIFI_META = struct.Struct("<BbbBQHBBIH")  # ..., orig_len, rate, phy, siga1, siga2
 META_154 = struct.Struct("<BBbBQ")
 
 # pcap record header: ts_sec, ts_usec, incl_len, orig_len
@@ -49,9 +53,14 @@ def session_154(channel: int = 25) -> CaptureSession:
 
 def wifi_payload(body: bytes, on_air_len: int, *, channel=6, rssi=-55,
                  noise=-96, flags=0, timestamp=1234, rate=0xB,
-                 phy=PhyFormat.G) -> bytes:
+                 phy=PhyFormat.G, siga1=0, siga2=0) -> bytes:
     return WIFI_META.pack(channel, rssi, noise, flags, timestamp,
-                          on_air_len, rate, phy) + body
+                          on_air_len, rate, phy, siga1, siga2) + body
+
+
+def ht_sig1(mcs: int, length: int, bw40: bool = False) -> int:
+    """HT-SIG1: MCS in bits 0-6, 20/40 in bit 7, HT Length in bits 8-23."""
+    return (mcs & 0x7F) | ((1 if bw40 else 0) << 7) | ((length & 0xFFFF) << 8)
 
 
 def present_bitmap(record: bytes) -> int:
@@ -281,3 +290,62 @@ def test_firmware_1_stats_still_parse():
     ))
     assert s.stats.fw_frames_captured == 480
     assert s.stats.fw_recoveries == 0
+
+
+def test_ht_frame_carries_a_decoded_mcs():
+    body = bytes([0x80, 0x00]) + b"" * 40
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=7, length=len(body)),
+                     siga2=1 << 7)          # short guard interval
+    )
+    assert present_bitmap(record) & (1 << BIT_MCS)
+    # The MCS triple ends the radiotap header, and the frame body follows it,
+    # so measure from the header length rather than the end of the record.
+    header_len = struct.unpack_from("<H", record, 2)[0]
+    known, flags, mcs = record[header_len - 3:header_len]
+    assert mcs == 7
+    assert known & MCS_KNOWN_INDEX
+    assert flags & MCS_FLAG_SGI
+
+
+def test_ht_decode_is_rejected_when_the_length_disagrees():
+    """The self-check that stops a wrong bit layout reaching every frame.
+
+    HT-SIG carries the frame length, and the receive descriptor reports it
+    independently. If the two disagree, the layout assumption is wrong and no
+    MCS is claimed at all.
+    """
+    body = bytes([0x80, 0x00]) + b"" * 40
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=7, length=len(body) + 99))
+    )
+    assert not present_bitmap(record) & (1 << BIT_MCS)
+    assert decode_ht_sig(ht_sig1(7, 100), 0, expected_length=101) is None
+
+
+def test_impossible_mcs_index_is_rejected():
+    assert decode_ht_sig(ht_sig1(120, 50), 0, expected_length=50) is None
+
+
+def test_non_ht_frames_carry_no_mcs():
+    """HE-SIG-A has an MCS too, but radiotap's HE field is not emitted, so
+    nothing is claimed rather than something unverified."""
+    for fmt in (PhyFormat.B, PhyFormat.G, PhyFormat.HE_SU):
+        body = bytes([0x80, 0x00]) + b"" * 40
+        record, _b, _us, _o = wifi_session()._build_record(
+            wifi_payload(body, len(body), phy=fmt,
+                         siga1=ht_sig1(4, len(body)))
+        )
+        assert not present_bitmap(record) & (1 << BIT_MCS), fmt
+
+
+def test_timestamp_is_64_bit_so_it_survives_the_71_minute_wrap():
+    """The radio's counter is 32-bit microseconds; the firmware widens it."""
+    beyond_32_bits = (1 << 32) + 5_000_000
+    _r, _b, device_us, _o = wifi_session()._build_record(
+        wifi_payload(bytes([0x80, 0x00]) + b"" * 10, 12,
+                     timestamp=beyond_32_bits)
+    )
+    assert device_us == beyond_32_bits

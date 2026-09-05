@@ -31,6 +31,10 @@ typedef enum {
     SN_FRAME_HEARTBEAT = 4,
     SN_FRAME_CONTROL_REPLY = 5,
     SN_FRAME_CONTROL_CMD = 6,
+    /* One access point from a Wi-Fi scan. Sent as its own frame rather than
+     * packed into the command reply, because the list is variable length and
+     * a reply carries a single 32-bit value. */
+    SN_FRAME_AP_RECORD = 7,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

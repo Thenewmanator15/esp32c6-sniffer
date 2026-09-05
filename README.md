@@ -68,6 +68,11 @@ cd ..
 .\extcap\install.ps1
 ```
 
+Flash and install together. The two halves share a wire format, and the host
+checks the board's reported firmware version when a capture opens: a mismatch
+stops with a message naming both versions rather than decoding older metadata
+into confident nonsense.
+
 Restart Wireshark. Both interfaces appear on the welcome screen, with channel
 and antenna selectable in their options. Zigbee commonly uses channels 11, 15,
 20 and 25; Thread uses anything from 11 to 26.
@@ -110,6 +115,19 @@ at all, or be quiet and carry a network talking softly, so read them together.
 
 `tools/spectrum.py` runs the energy half alone and faster.
 `tools/antenna_compare.py` measures the two antennas against the same traffic.
+
+For Wi-Fi, `tools/wifi_survey.py` asks the receiver what it can identify rather
+than measuring energy, and prints access points with their channel, signal,
+security and the 802.15.4 channels each one overlaps:
+
+```powershell
+.\.venv\Scripts\python.exe tools\wifi_survey.py --port COM3 --repeat 3
+```
+
+Use `--repeat` and mean it. This board's Wi-Fi receiver goes deaf for minutes at
+a time, so an empty result is not evidence of an empty band. `spectrum.py` uses
+the 802.15.4 radio and keeps working when Wi-Fi does not, which makes it a
+useful second opinion.
 
 ## What you will and will not see
 

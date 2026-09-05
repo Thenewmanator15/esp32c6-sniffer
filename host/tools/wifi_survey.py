@@ -1,0 +1,153 @@
+"""Wi-Fi survey: which access points are there, and on which channels.
+
+The counterpart to spectrum.py. That one measures raw energy across the
+802.15.4 channels; this one asks the Wi-Fi receiver what it can actually
+identify, which is the other half of the same question in a shared band.
+
+    python tools/wifi_survey.py --port COM3
+    python tools/wifi_survey.py --port COM3 --repeat 3
+
+Useful before a capture, because a Wi-Fi capture is single-channel: this says
+which channel is worth sitting on. The 802.15.4 overlap is printed alongside,
+since one Wi-Fi network covers roughly four 802.15.4 channels and is the usual
+reason a mesh performs badly.
+
+A note specific to this board: its Wi-Fi receiver goes deaf for minutes at a
+time (see docs/2026-09-05-wifi-investigation-postmortem.md). An empty result is
+therefore not evidence of an empty band. Use --repeat, and believe a zero only
+after several attempts.
+"""
+
+from __future__ import annotations
+
+import argparse
+import time
+
+import serial
+
+from esp32c6_sniffer.apscan import parse_ap_record
+from esp32c6_sniffer.control import Command, Radio, decode_reply, encode_command
+from esp32c6_sniffer.framing import FrameType
+from esp32c6_sniffer.parser import StreamParser
+
+# One Wi-Fi channel is about 22 MHz wide against 802.15.4's 2 MHz.
+WIFI_TO_154 = {1: "11-14", 6: "16-19", 11: "21-24"}
+
+
+def overlap_note(channel: int) -> str:
+    if channel in WIFI_TO_154:
+        return f"802.15.4 ch {WIFI_TO_154[channel]}"
+    # Every 2.4 GHz Wi-Fi channel overlaps something; only the three
+    # non-overlapping ones have a tidy mapping worth printing.
+    low = 11 + max(0, (channel - 1)) * 5 // 5
+    return f"~802.15.4 ch {min(26, low)}+"
+
+
+def bar(rssi: int, width: int = 30) -> str:
+    """-90 dBm or worse is empty, -30 dBm or better is full."""
+    fraction = max(0.0, min(1.0, (rssi + 90) / 60.0))
+    filled = round(fraction * width)
+    return "#" * filled + "." * (width - filled)
+
+
+def scan_once(ser: serial.Serial, parser: StreamParser,
+              timeout: float = 20.0) -> list:
+    ser.write(encode_command(Command.SET_RADIO, int(Radio.WIFI),
+                             radio=Radio.WIFI))
+    ser.flush()
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        parser.feed(ser.read(4096))
+
+    ser.write(encode_command(Command.WIFI_SCAN, 0, radio=Radio.WIFI))
+    ser.flush()
+
+    found = []
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for frame in parser.feed(ser.read(8192)):
+            if frame.ftype is FrameType.AP_RECORD:
+                try:
+                    found.append(parse_ap_record(frame.payload))
+                except ValueError as exc:
+                    print(f"  skipping a malformed AP record: {exc}")
+            elif frame.ftype is FrameType.CONTROL_REPLY:
+                reply = decode_reply(frame.payload)
+                if reply["command"] is Command.WIFI_SCAN:
+                    if not reply["ok"]:
+                        raise RuntimeError(
+                            f"scan failed, status {reply['status']}"
+                        )
+                    # The reply arrives after the records, so it is the signal
+                    # that the list is complete rather than merely quiet.
+                    return found
+    raise TimeoutError("no scan reply within the timeout")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--port", default="COM3")
+    ap.add_argument("--repeat", type=int, default=1,
+                    help="scan this many times and merge, keeping the "
+                         "strongest sighting of each access point")
+    args = ap.parse_args()
+
+    ser = serial.Serial(args.port, 115200, timeout=0.05)
+    try:
+        ser.set_buffer_size(rx_size=1 << 20)
+    except (AttributeError, OSError):
+        pass
+    ser.reset_input_buffer()
+    parser = StreamParser()
+
+    best = {}
+    empty_scans = 0
+    try:
+        for attempt in range(1, args.repeat + 1):
+            if args.repeat > 1:
+                print(f"scan {attempt} of {args.repeat}...")
+            found = scan_once(ser, parser)
+            if not found:
+                empty_scans += 1
+            for ap_record in found:
+                seen = best.get(ap_record.bssid)
+                if seen is None or ap_record.rssi_dbm > seen.rssi_dbm:
+                    best[ap_record.bssid] = ap_record
+    finally:
+        ser.close()
+
+    if not best:
+        print("\nNo access points found.")
+        if empty_scans:
+            print("On this board that is not proof of an empty band: the "
+                  "Wi-Fi receiver goes deaf for minutes at a time.")
+            print("Try again, or run tools/spectrum.py, which uses the "
+                  "802.15.4 radio and keeps working when Wi-Fi does not.")
+        return 0
+
+    rows = sorted(best.values(), key=lambda a: -a.rssi_dbm)
+    print()
+    print(f"{'ch':>3}  {'RSSI':>5}  {'signal':<30}  {'security':<14}  SSID")
+    for record in rows:
+        name = "<hidden>" if record.hidden else record.ssid
+        print(f"{record.channel:>3}  {record.rssi_dbm:>5}  "
+              f"{bar(record.rssi_dbm):<30}  {record.auth_name:<14}  {name}")
+
+    busiest = {}
+    for record in rows:
+        busiest[record.channel] = busiest.get(record.channel, 0) + 1
+    print("\naccess points per channel:")
+    for channel in sorted(busiest):
+        print(f"  ch {channel:<3} {busiest[channel]:>2}   {overlap_note(channel)}")
+
+    quietest = [c for c in (1, 6, 11) if c not in busiest]
+    if quietest:
+        print(f"\nunused non-overlapping channels: "
+              f"{', '.join(str(c) for c in quietest)}")
+    print("\nA capture is single-channel. Pick the channel carrying the "
+          "traffic you want, not the quietest one.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

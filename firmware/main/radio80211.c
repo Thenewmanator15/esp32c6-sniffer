@@ -1,5 +1,6 @@
 #include "radio80211.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "esp_event.h"
@@ -44,6 +45,10 @@ static uint32_t s_last_seen_callbacks;
  * driver cannot fix is not met by tearing the stack down every 15 seconds
  * forever. Reset as soon as a frame arrives. */
 static uint32_t s_stall_limit = SN_80211_STALL_LIMIT_S;
+/* Wrap tracking for the radio's 32-bit microsecond counter. Touched only by
+ * the receive callback, which is serialised by the driver task. */
+static uint32_t s_ts_last;
+static uint64_t s_ts_epoch;
 
 /* Sender-owned; only the rx task touches it. */
 static uint8_t s_out[sizeof(sn_80211_meta_t) + MAX_SNAPLEN];
@@ -86,7 +91,16 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     item.meta.channel = (uint8_t)pkt->rx_ctrl.channel;
     item.meta.rssi_dbm = (int8_t)pkt->rx_ctrl.rssi;
     item.meta.noise_floor = (int8_t)pkt->rx_ctrl.noise_floor;
-    item.meta.timestamp_us = (uint32_t)pkt->rx_ctrl.timestamp;
+    /* Widen the 32-bit counter. A backwards step of more than half the range
+     * is a wrap; a smaller one is the counter being reset, which happens when
+     * the driver is torn down and rebuilt after a stall, and must NOT be
+     * counted as 71 minutes of elapsed time. */
+    const uint32_t raw_ts = (uint32_t)pkt->rx_ctrl.timestamp;
+    if (raw_ts < s_ts_last && (s_ts_last - raw_ts) > 0x80000000u) {
+        s_ts_epoch += 0x100000000ull;
+    }
+    s_ts_last = raw_ts;
+    item.meta.timestamp_us = s_ts_epoch + raw_ts;
     item.meta.orig_len = on_air;
     /* cur_bb_format distinguishes 11b from everything else, so the host can
      * label CCK as CCK. Assuming OFDM for every frame was wrong for 11b, which
@@ -94,6 +108,9 @@ static void promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type)
     item.meta.rate = (uint8_t)pkt->rx_ctrl.rate;
     item.meta.phy = (uint8_t)((pkt->rx_ctrl.cur_bb_format & 0x0Fu) |
                               ((pkt->rx_ctrl.second & 0x0Fu) << 4));
+    /* Forwarded raw; the host decodes it. */
+    item.meta.siga1 = (uint32_t)pkt->rx_ctrl.he_siga1;
+    item.meta.siga2 = (uint16_t)pkt->rx_ctrl.he_siga2;
     item.meta.flags = (pkt->rx_ctrl.rx_state != 0) ? SN_80211_FLAG_RX_ERROR : 0u;
 
     uint16_t take = on_air;
@@ -366,6 +383,11 @@ bool sn_radio80211_service(void)
     s_running = false;
     s_stats.stalled_seconds = 0;
     s_stats.recoveries++;
+    /* The rebuild restarts the radio's counter. Carry the elapsed time forward
+     * so timestamps keep increasing across a recovery instead of jumping back
+     * to zero mid-capture. */
+    s_ts_epoch += s_ts_last;
+    s_ts_last = 0;
 
     esp_err_t err = sn_radio80211_start(channel, snaplen, filter);
     if (err != ESP_OK) {
@@ -442,7 +464,48 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count)
     }
     uint16_t n = 0;
     err = esp_wifi_scan_get_ap_num(&n);
+    if (err != ESP_OK) {
+        return err;
+    }
     *out_ap_count = n;
     ESP_LOGI(TAG, "scan found %u access points", (unsigned)n);
-    return err;
+    if (n == 0) {
+        return ESP_OK;
+    }
+
+    /* Fetched in small batches rather than all at once: wifi_ap_record_t is
+     * around 700 bytes here, so a busy area would otherwise need tens of
+     * kilobytes of heap on a chip with a few hundred. */
+    static const uint16_t BATCH = 4;
+    wifi_ap_record_t *records = calloc(BATCH, sizeof(wifi_ap_record_t));
+    if (records == NULL) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    uint16_t remaining = n;
+    while (remaining > 0) {
+        uint16_t want = (remaining > BATCH) ? BATCH : remaining;
+        /* esp_wifi_scan_get_ap_records() drains the list, so each call returns
+         * the next batch and the results are freed as they go. */
+        if (esp_wifi_scan_get_ap_records(&want, records) != ESP_OK || want == 0) {
+            break;
+        }
+        for (uint16_t i = 0; i < want; i++) {
+            uint8_t out[SN_80211_AP_RECORD_HEADER + 32];
+            size_t ssid_len = strnlen((const char *)records[i].ssid, 32);
+            out[0] = (uint8_t)records[i].rssi;
+            out[1] = records[i].primary;
+            out[2] = (uint8_t)records[i].authmode;
+            out[3] = (uint8_t)ssid_len;
+            memcpy(out + 4, records[i].bssid, 6);
+            memcpy(out + SN_80211_AP_RECORD_HEADER, records[i].ssid, ssid_len);
+            /* Blocking: a scan result is small, rare, and worth waiting for.
+             * Dropping it would leave the host with a count it cannot explain. */
+            sn_usb_link_send_wait(SN_FRAME_AP_RECORD, out,
+                                  SN_80211_AP_RECORD_HEADER + ssid_len, 1000);
+        }
+        remaining -= want;
+    }
+    free(records);
+    return ESP_OK;
 }

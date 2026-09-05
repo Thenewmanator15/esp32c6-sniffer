@@ -44,6 +44,7 @@ class FrameType(IntEnum):
     HEARTBEAT = 4
     CONTROL_REPLY = 5
     CONTROL_CMD = 6
+    AP_RECORD = 7
 
 
 @dataclass(frozen=True)
