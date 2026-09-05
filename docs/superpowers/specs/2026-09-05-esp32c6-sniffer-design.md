@@ -394,7 +394,27 @@ your own bench.
    driver choice, larger buffers, or write batching.
 3. Whether the Wi-Fi RX timestamp counter shares `esp_timer`'s timebase, and its drift.
    Undocumented; the anchoring design depends on it.
-4. 802.15.4 ISR latency and jitter, before and after IRAM placement and priority raise.
+4. ~~802.15.4 ISR latency and jitter, before and after IRAM placement and
+   priority raise.~~ **ANSWERED 2026-09-05: jitter is ~0.5 µs, and no IRAM
+   placement or priority change is needed.**
+
+   Measured without extra equipment, by exploiting the standard. The gap
+   between a data frame and its acknowledgement is fixed for a given frame
+   length, so across acknowledgements following data frames of *identical*
+   length, any observed spread is our own timestamp jitter. Over 1609 frames on
+   channel 25, every clean group of five or more pairs showed a standard
+   deviation between 0.4 and 0.9 µs, median 0.5 µs.
+
+   The measurement validates itself: median intervals scale correctly with
+   frame length, 2111 µs at 52 payload bytes rising to 4447 µs at 125, matching
+   the 250 kbit/s air rate plus the standard's fixed turnaround. Groups showing
+   spreads in the hundreds of milliseconds are ones where the adjacent
+   acknowledgement was not a reply to that frame, and are discounted.
+
+   This is despite the timestamp being a software `esp_timer_get_time()` read
+   inside the receive interrupt rather than a hardware capture. The concern was
+   real but the measured cost is negligible, so the planned IRAM and interrupt
+   priority work is **not worth doing**.
    Determines whether those timestamps are usable at all.
 5. ~~Real-world antenna delta on this board (community figures disagree: 5 dB
    vs 10 dB).~~ **ANSWERED 2026-09-05: +6.0 dB median in favour of the external

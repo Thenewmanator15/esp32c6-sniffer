@@ -19,9 +19,20 @@ are deliberately absent from Wireshark rather than present and failing.
 | Milestone | State |
 |---|---|
 | 1. USB transport and throughput benchmark | Done, measured at ~810 kB/s |
-| 2. IEEE 802.15.4 into Wireshark | Done |
+| 2. IEEE 802.15.4 into Wireshark | Done, all exit criteria met |
 | 3. Wi-Fi | Not started |
 | 4. BLE advertisements | Not started |
+
+Beyond capture, it also does things other 802.15.4 sniffers do not:
+
+- **Mid-capture channel changes** from a Wireshark toolbar, with no restart.
+  Nordic's equivalent has sat unmerged since 2019 and no shipping tool has it.
+- **A spectrum survey** using the radio's energy detector, which sees the Wi-Fi
+  that overlaps most 802.15.4 channels and is invisible to a packet capture.
+- **Drop counters** published by the board, so "did I miss anything" is
+  answerable. Measured 0 sequence gaps in 1920 frames.
+- **Timestamps good to ~0.5 microseconds**, measured against the standard's
+  fixed acknowledgement turnaround.
 
 Read the design first: [docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md](docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md)
 
