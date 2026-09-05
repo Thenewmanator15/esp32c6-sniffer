@@ -13,14 +13,22 @@ networks and devices you own or are authorised to test.
 ## Status
 
 **802.15.4 capture works.** The board appears in Wireshark's interface list and
-captures live Zigbee and Thread traffic. Wi-Fi and BLE are not built yet, and
-are deliberately absent from Wireshark rather than present and failing.
+captures live Zigbee and Thread traffic. BLE is not built yet, and is
+deliberately absent from Wireshark rather than present and failing.
+
+**Wi-Fi is blocked by a hardware fault, not by missing code.** The firmware and
+host path are written, but this particular board's 2.4 GHz Wi-Fi radio neither
+receives nor transmits, on two ESP-IDF major versions, while 802.15.4 on the
+same antenna in the same session works. It is therefore not offered in
+Wireshark. The full investigation, including a correction to an earlier wrong
+conclusion of mine, is in
+[docs/upstream/2026-09-05-esp32c6-wifi-rx-deaf.md](docs/upstream/2026-09-05-esp32c6-wifi-rx-deaf.md).
 
 | Milestone | State |
 |---|---|
 | 1. USB transport and throughput benchmark | Done, measured at ~810 kB/s |
 | 2. IEEE 802.15.4 into Wireshark | Done, all exit criteria met |
-| 3. Wi-Fi | Not started |
+| 3. Wi-Fi | Code written; blocked, this board's Wi-Fi radio is dead |
 | 4. BLE advertisements | Not started |
 
 Beyond capture, it also does things other 802.15.4 sniffers do not:

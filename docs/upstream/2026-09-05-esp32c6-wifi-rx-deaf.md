@@ -1,103 +1,126 @@
-# Draft upstream report: ESP32-C6 Wi-Fi receiver finds nothing, 802.15.4 on the same board works
+# ESP32-C6 Wi-Fi is dead on this board, TX and RX; 802.15.4 on the same antenna works
 
-Status: **draft, not submitted.** Target: `espressif/esp-idf` issues.
-
-Prepared 2026-09-05. Submit only on Mathew's say-so.
+Status: **investigation record.** Conclusion changed on 2026-09-05 after two
+further tests; see "Correction" below. This now reads as a hardware fault, so
+the first action is a warranty claim to Seeed, not an ESP-IDF issue.
 
 ---
 
-## Title
+## Finding
 
-ESP32-C6: Wi-Fi RX finds nothing (scan returns 0 APs, promiscuous callback never
-fires) while 802.15.4 on the same board and antenna receives normally — v6.1
+On this XIAO ESP32-C6, the 2.4 GHz Wi-Fi radio neither receives nor transmits,
+while IEEE 802.15.4 on the same chip, same antenna and same session works
+normally. Every driver call returns `ESP_OK`; the failure is entirely silent.
 
-## Environment
+## Hardware and toolchain
 
 | | |
 |---|---|
-| ESP-IDF | v6.1, commit `fff9895c` (`components/esp_wifi/lib` at the same commit, 2026-08-25) |
-| Target | esp32c6 |
-| Chip | ESP32-C6FH4 (QFN32) rev v0.2, 4 MB embedded flash, 40 MHz crystal |
-| eFuse features | `Wi-Fi 6, BT 5 (LE), IEEE802.15.4, Single Core + LP Core, 160MHz` — Wi-Fi is **not** disabled in eFuse |
 | Board | Seeed Studio XIAO ESP32-C6 |
+| Chip | ESP32-C6FH4 (QFN32) rev v0.2, 4 MB embedded flash, 40 MHz crystal |
+| eFuse features | `Wi-Fi 6, BT 5 (LE), IEEE802.15.4, Single Core + LP Core, 160MHz` — Wi-Fi is **not** fused off |
+| Base MAC | aa:bb:cc:dd:ee:ff (softAP aa:bb:cc:dd:ee:f0) |
+| PHY | `phy_version 344,0b4366d,Apr 10 2026` |
 | Host | Windows 11, USB-Serial-JTAG on COM3 |
-| Base MAC | aa:bb:cc:dd:ee:ff |
 
-## Summary
+## Evidence
 
-On this board the Wi-Fi receiver reports success at every API call and receives
-nothing at all. `esp_wifi_scan_start()` completes and
-`esp_wifi_scan_get_ap_num()` returns 0; in promiscuous mode the RX callback is
-never invoked once (counted at the top of the callback before any filtering).
+### Receive
 
-This is not a quiet band and not an antenna fault, because **802.15.4 receives
-normally on the same board, the same antenna and in the same session.**
+Espressif's `examples/wifi/scan`, with only the XIAO RF-switch lines added
+(see Correction), on **two ESP-IDF versions**:
 
-## Reproducer (Espressif's own examples, unmodified)
+| ESP-IDF | `esp_wifi/lib` | Result |
+|---|---|---|
+| v6.1 (`fff9895c`) | 2026-08-25 | `Total APs scanned = 0` |
+| v6.0.2 | 2026-06-19 | `Total APs scanned = 0` |
 
-`examples/wifi/scan`, built and flashed with no source changes:
+`libphy.a`, `libnet80211.a` and `libpp.a` are all **different binaries** between
+the two versions, so this is not one bad blob shared by both.
+
+`examples/network/simple_sniffer`: 0 packets. Our own promiscuous capture: the
+RX callback, counted at its first line before any filtering, fires exactly 0
+times.
+
+### Transmit
+
+`examples/wifi/getting_started/softAP` (RF switch added), beaconing as `myssid`
+on channel 1, confirmed running from its serial banner. The host machine — with
+the board plugged into its own USB port, roughly 10 cm away — never saw it:
 
 ```
-I (2839) scan: Max AP number ap_info can hold = 10
-I (2839) scan: Total APs scanned = 0, actual AP number ap_info holds = 0
-I (2839) main_task: Returned from app_main()
+t=20s  2.4GHz-bssids=8  myssid=absent
+t=40s  2.4GHz-bssids=7  myssid=absent
+t=60s  2.4GHz-bssids=7  myssid=absent
 ```
 
-`examples/network/simple_sniffer`, unmodified: **0 packets captured.**
+In the same scans the host listed eight 2.4 GHz BSSIDs from neighbours,
+including one on channel 1 and two down at 18–20 % signal. A softAP 10 cm from
+the adapter should have been the strongest entry in the list.
 
-At the same time and place, the host machine's own Wi-Fi adapter sees **11
-networks on 2.4 GHz**, two of them on channel 6.
+### The control that makes it Wi-Fi-specific
 
-## Control that makes this specific to Wi-Fi
-
-One firmware, one power-up, one antenna setting, switching only the radio:
+One firmware, one power-up, one antenna setting:
 
 | Radio | Antenna | Result |
 |---|---|---|
 | IEEE 802.15.4, promiscuous, channel 25 | internal ceramic | **78 frames in 12 s** |
-| Wi-Fi scan (STA, active, 120–400 ms dwell) | internal ceramic | 0 APs |
+| Wi-Fi scan | internal ceramic | 0 APs |
 | Wi-Fi scan | external u.FL | 0 APs |
-| Wi-Fi promiscuous, channels 1/6/11 | either | callback count exactly 0 |
+| Wi-Fi promiscuous, channels 1/6/11 | either | 0 callbacks |
 
-The 2.4 GHz front end, the antenna switch and the RF path are therefore all
-working. Only the Wi-Fi receiver is deaf.
+The antenna, the RF switch and the front end therefore all work.
 
-## Ruled out by measurement, not by argument
+## Correction, 2026-09-05
 
-- **Coexistence with 802.15.4.** Rebuilt with `CONFIG_IEEE802154_ENABLED=n`, so
-  the component is not linked at all. Wi-Fi still found 0 APs. The `wifi/scan`
-  example likewise contains no 802.15.4 code.
-- **Missing default event loop.** `esp_event_loop_create_default()` was genuinely
-  missing in our code and is now called (without it the driver logs
-  `failed to post WiFi event ... ret=259`). Fixing it changed nothing.
-- **`esp_wifi_start()`.** Tested both called and omitted.
-- **`esp_netif_init()`.** Tested both ways.
-- **Promiscuous filter mask.** Tested `WIFI_PROMIS_FILTER_MASK_ALL` and an
-  explicit `MGMT|DATA|CTRL` union.
-- **Zero scan dwell.** A zeroed `wifi_scan_config_t` means zero ms per channel;
-  the numbers above use an explicit 120–400 ms active dwell.
-- **Stale PHY calibration.** Full chip erase forced a fresh calibration
-  (`falling back to full calibration`, mode 2). No change.
-- **Antenna selection.** GPIO3 driven low to power the RF switch, GPIO14 tested
-  in both positions.
+An earlier version of this document leaned on "Espressif's own examples fail
+too". **That evidence was confounded and the claim was wrong as stated.**
 
-Every driver call returns `ESP_OK` throughout. The failure is silent.
+On the XIAO ESP32-C6, GPIO3 gates the P-FET supplying the FM8625H RF switch and
+is **pulled up at reset**, so the switch is unpowered on boot and the radio
+reaches the antenna only through roughly 30 dB of leakage. Espressif's examples
+know nothing about this board and never drive it. A stock example finding
+nothing was therefore the expected result and proved nothing.
 
-## What we are asking
+Both example results above were re-taken with GPIO3 driven low and GPIO14
+selecting the ceramic antenna, logged by the firmware at boot
+(`XIAO RF switch powered, internal antenna selected`). The results did not
+change — which is what makes them worth quoting now.
 
-Is this a known ESP32-C6 Wi-Fi RX regression in v6.1, or does it indicate a
-part-specific PHY fault? A GitHub issue search found no matching report.
+## Ruled out by measurement
 
-If the latter, a way to distinguish the two from software (a PHY self-test, an
-RX-path register readback, a raw RSSI floor read) would be far more useful than
-buying a second board to bisect.
+- **ESP-IDF version.** v6.1 and v6.0.2, four different Wi-Fi/PHY blobs.
+- **The antenna switch.** Explicitly powered; see Correction.
+- **Coexistence with 802.15.4.** Built with `CONFIG_IEEE802154_ENABLED=n`; the
+  stock examples contain no 802.15.4 code at all.
+- **Missing default event loop.** A real bug in our code, fixed, not the cause.
+- **`esp_wifi_start()`**, **`esp_netif_init()`** — tested present and absent.
+- **Promiscuous filter mask** — `MASK_ALL` and an explicit `MGMT|DATA|CTRL`.
+- **Zero scan dwell** — an explicit 120–400 ms active dwell is used.
+- **Stale PHY calibration** — full erase, `falling back to full calibration`,
+  mode 2, on both IDF versions.
+- **eFuse** — the part reports Wi-Fi 6 present.
 
-## Local notes, not for upstream
+## Conclusion and next action
 
-- Only a second ESP32-C6 can currently separate "this chip" from "this
-  framework version". We have one board.
-- Two traps that cost time here and are worth remembering: building with
-  `SDKCONFIG_DEFAULTS` on the command line overwrites the project's root
-  `sdkconfig`, which silently disabled 802.15.4 in what was meant to be the
-  full build; and a zeroed `wifi_scan_config_t` is a broken instrument that
-  looks exactly like a broken radio.
+Two ESP-IDF major versions, four distinct blobs, both directions of the link,
+and a working 802.15.4 control on the same antenna. That points at the part,
+not the framework.
+
+1. **Warranty claim to Seeed** for this board. This is the first action.
+2. A second ESP32-C6 would confirm it, and is worth having regardless.
+3. An ESP-IDF issue is now only worth filing to ask whether a Wi-Fi PHY
+   self-test or RX-path register readback exists, so a dead PHY can be
+   distinguished from a software fault without buying hardware. That is a
+   question, not a bug report.
+
+## Notes worth keeping
+
+- Building with `SDKCONFIG_DEFAULTS` on the command line overwrites the
+  project's root `sdkconfig`; it silently disabled 802.15.4 in what was meant
+  to be the full build.
+- A zeroed `wifi_scan_config_t` means zero dwell per channel — a broken
+  instrument that looks exactly like a broken radio.
+- `netsh wlan show networks` returns a **cache**. It showed 1 network on 5 GHz
+  for two minutes before refreshing to 8 on 2.4 GHz. Never conclude "the band
+  is empty" from one call; poll until it refreshes.
