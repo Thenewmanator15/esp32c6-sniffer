@@ -1,8 +1,8 @@
 idf_component_register(
     SRCS "main.c" "board.c" "frame.c" "usb_link.c" "log_sink.c"
-         "bench.c" "control.c"
+         "bench.c" "control.c" "radio154.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_driver_gpio esp_driver_usb_serial_jtag esp_ringbuf esp_timer
+    REQUIRES esp_driver_gpio esp_driver_usb_serial_jtag esp_ringbuf esp_timer ieee802154
 )
 
 # Build-time mode selection, e.g.
