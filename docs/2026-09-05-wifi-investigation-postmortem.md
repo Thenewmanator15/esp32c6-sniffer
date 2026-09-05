@@ -109,10 +109,37 @@ The workaround is `SN_CMD_RADIO_POWER_CYCLE`, exposed as
 automatic stall recovery because it resets the board, which would end a running
 Wireshark capture without warning; the capture log says what to run instead.
 
-Still unknown: what sets the latch. Continuous hours of powered operation is
-the obvious suspect and matches when the deaf stretches got longer, but that is
-a hypothesis, not a measurement. Characterising it properly needs a scripted
-trial that records uptime, temperature and time-to-deafness.
+**What sets it, resolved.** Not time, not heat: leaving the 802.15.4 radio
+enabled when the host disconnects. Three arms, each starting from a working
+Wi-Fi receiver, 25 seconds of activity each:
+
+| arm | Wi-Fi frames before | after |
+|---|---|---|
+| 802.15.4 left running | 389 | **0** |
+| 802.15.4 stopped properly first | 564 | 449 |
+| idle | 425 | 539 |
+
+Reproduced on demand. The "hours-long deaf stretches" earlier in the day were
+not duration at all -- they were ad-hoc probe scripts that opened the port,
+started 802.15.4 and closed without sending STOP, leaving the radio enabled.
+Every later Wi-Fi attempt found the front end still owned. The scan binaries
+that kept working are the ones that never touch 802.15.4.
+
+Two things had to be right for the fix to work, and each was wrong first:
+
+- The flag has to survive a reset, because **opening the serial port resets the
+  chip** -- measured, the since-boot frame counter went 39 to 3 across a
+  reopen while advancing 38 over 12 s with the port held open. So the host
+  cannot connect to ask a question without destroying the answer.
+- `RTC_DATA_ATTR` is not enough. It survives deep sleep but is re-initialised
+  from the image on an ordinary reset, which is precisely the reset in
+  question; it read back false every time and the recovery never ran.
+  `RTC_NOINIT_ATTR` with a magic word is what survives.
+
+Healing automatically at boot was tried and is worse: the board boots when the
+host opens the port, so it would deep-sleep immediately and leave the caller
+holding a handle to a device that had gone away. The host asks instead, over a
+connection it can reopen.
 
 **The stretches got longer.** Early on it alternated within minutes, which is
 where the "minutes at a time" description came from. Later the same day it went

@@ -460,10 +460,19 @@ esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
     if (channel < SN_80211_CHANNEL_MIN || channel > SN_80211_CHANNEL_MAX) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (snaplen == 0 || snaplen > MAX_SNAPLEN) {
+    /* Zero means "keep whatever SET_SNAPLEN configured".
+     *
+     * This used to substitute the default, and the command handler passed a
+     * hard-coded 256, so every SET_SNAPLEN was silently overwritten the moment
+     * a channel was selected. The snapshot length never changed and nothing
+     * said so; the self-test caught it by measuring record sizes rather than
+     * trusting the reply. */
+    if (snaplen > MAX_SNAPLEN) {
         snaplen = DEFAULT_SNAPLEN;
     }
-    s_snaplen = snaplen;
+    if (snaplen != 0) {
+        s_snaplen = snaplen;
+    }
 
     if (s_running) {
         return sn_radio80211_set_channel(channel);
@@ -495,8 +504,11 @@ esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
      * once. Measured: callback count stayed at exactly 0. */
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    s_filter_mask = filter_mask;
-    ESP_ERROR_CHECK(apply_filter(filter_mask));
+    /* Likewise zero means "keep", so SET_FILTER survives a channel change. */
+    if (filter_mask != 0u) {
+        s_filter_mask = filter_mask;
+    }
+    ESP_ERROR_CHECK(apply_filter(s_filter_mask));
     if (s_ctrl_filter != 0u) {
         wifi_promiscuous_filter_t ctrl = {.filter_mask = s_ctrl_filter};
         ESP_ERROR_CHECK(esp_wifi_set_promiscuous_ctrl_filter(&ctrl));

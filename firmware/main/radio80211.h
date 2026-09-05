@@ -212,23 +212,30 @@ esp_err_t sn_radio80211_set_csi(bool enable);
 }
 #endif
 
-/* STATUS: Wi-Fi capture works, and the receiver is intermittently deaf.
+/* STATUS: Wi-Fi capture works. The receiver goes deaf for one reason, now
+ * understood and handled.
  *
- * Measured working, channel 6: 731 frames in 15 s, 632 management and 99 data,
- * RSSI -50 to -96 dBm, qfull=0 rej=0, decoding in Wireshark as radiotap.
+ * Measured working on channel 6: ~55 frames/s, management and data, RSSI -50
+ * to -96 dBm, correct rates and modulation, 0 malformed frames in 1355, CSI
+ * alongside.
  *
- * INTERMITTENCY. The receiver stops hearing anything for minutes at a time,
- * across power cycles, with no software change between states. Espressif's own
- * unmodified scan binary shows it: 9, 8, 8 access points, then zero on five
- * consecutive boots. Our firmware likewise went 665 frames one minute and 0 the
- * next. Interleaved 802.15.4 captures on the same antenna worked every time.
- * Not the band (a strong channel-6 AP was present at 82 % during a failing
- * stretch), not the RF switch (explicitly powered, and 802.15.4 shares it), and
- * not NVS calibration (a full erase-flash does not clear it). Not yet
- * characterised, so nothing has been reported upstream. Retry before believing
- * a zero.
+ * THE DEAFNESS. Both radios share one 2.4 GHz front end, and leaving the
+ * 802.15.4 radio ENABLED when the host disconnects leaves the Wi-Fi receiver
+ * deaf until the RF domain is power-gated. Three arms, each starting from a
+ * working Wi-Fi radio and 25 s of activity:
  *
- * Two defects here WERE ours, and both are fixed:
+ *   802.15.4 left running     389 Wi-Fi frames before, 0 after
+ *   802.15.4 stopped properly 564 before, 449 after
+ *   idle for the same time    425 before, 539 after
+ *
+ * So it is not using the radio, it is walking away with it still on. A capture
+ * session sends STOP on close, so ordinary use is fine; a crashed or killed
+ * host is what poisons it. Nothing short of power-gating recovers it: not a
+ * driver rebuild, not a reflash, not a full erase-flash. The board records the
+ * condition in RTC_NOINIT memory and the host power-cycles before a Wi-Fi
+ * capture when it sees it, automatically.
+ *
+ * Two defects here WERE ours and are fixed:
  *
  *   1. Espressif's examples never drive GPIO3, which is pulled UP at reset and
  *      leaves the XIAO's FM8625H switch unpowered, so every stock example was
@@ -238,15 +245,12 @@ esp_err_t sn_radio80211_set_csi(bool enable);
  *      points, and the zero was read as "heard nothing" instead of "never
  *      switched on". See wifi_init_once() below.
  *
- * A claimed v6.0.2-vs-v6.1 PHY regression did not survive an A/B/A either:
- * v6.0.2 -> 9 APs, v6.1 -> 8, v6.0.2 -> 8. With an intermittent fault in the
- * loop, one reading measures the moment, not the system.
- *
  * Full write-up: docs/2026-09-05-wifi-investigation-postmortem.md
  *
  * Traps worth keeping. Building with SDKCONFIG_DEFAULTS overwrites the
  * project's root sdkconfig, which silently disabled 802.15.4 in what was meant
  * to be the full build. A zeroed wifi_scan_config_t means zero dwell per
- * channel, so it finds nothing however loud the air is. And
- * netsh wlan show networks returns a CACHE: it read one 5 GHz network for two
- * minutes before refreshing to eight on 2.4 GHz. */
+ * channel, so it finds nothing however loud the air is. Opening the serial
+ * port RESETS the board, so no ordinary variable survives long enough to be
+ * queried. And netsh wlan show networks returns a CACHE: it read one 5 GHz
+ * network for two minutes before refreshing to eight on 2.4 GHz. */

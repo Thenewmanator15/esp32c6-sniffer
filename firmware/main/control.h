@@ -28,6 +28,9 @@ typedef enum {
     SN_CMD_SET_BANDWIDTH = 12,   /* 0 = 20 MHz, 1 = HT40 above, 2 = HT40 below */
     SN_CMD_SET_CTRL_FILTER = 13, /* subtype mask for control frames */
     SN_CMD_SET_CSI = 14,         /* 0 = off, 1 = on */
+    /* 1 if 802.15.4 has been used since boot, which leaves Wi-Fi deaf until
+     * the radio domain is power-cycled. */
+    SN_CMD_RADIO_DIRTY = 15,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

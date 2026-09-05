@@ -21,23 +21,30 @@ its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
 731 frames in 15 s, management and data, RSSI -50 to -96 dBm, no drops,
 decoding as radiotap.
 
-**Caveat, and it is not a small one: this board's Wi-Fi receiver goes deaf, for
-anything from minutes to hours.** Espressif's own unmodified scan binary shows
-it too -- 9, 8, 8 access points, then zero on five consecutive boots -- while
-802.15.4 on the same antenna never fails. A capture that returns nothing is
-worth retrying before it means anything.
+**One quirk, now understood and handled automatically.** Both radios share a
+single 2.4 GHz front end, and leaving the 802.15.4 radio *enabled* when the
+host disconnects leaves the Wi-Fi receiver deaf until the RF domain is
+power-gated. Measured, three arms, each starting from a working Wi-Fi radio:
 
-**The fix is a power cycle, and it is one command:**
+| what happened | Wi-Fi frames before | after |
+|---|---|---|
+| 802.15.4 left running | 389 | **0** |
+| 802.15.4 stopped properly | 564 | 449 |
+| idle for the same time | 425 | 539 |
 
-```powershell
-.\.venv\Scripts\python.exe tools\wifi_survey.py --port COM3 --recover
+So it is not using the radio that does it, it is walking away with it still on.
+A capture session stops the radio on close, so ordinary use is unaffected; a
+crashed or force-killed host is what leaves it poisoned. Nothing short of
+power-gating recovers it -- not a driver rebuild, not a reflash, not a full
+`erase-flash`.
+
+The board records the condition in RTC memory, where it survives the reset that
+opening the serial port causes, and the host power-cycles before a Wi-Fi
+capture when it sees the flag. It is automatic:
+
 ```
-
-It is a latch in a power domain. No soft reset clears it -- not a driver
-rebuild, not a reflash, not a full `erase-flash` -- because none of those
-removes power from the RF section. A deep-sleep reset does power-gate it, and
-does: measured at the end of an hour-long deaf period, 0 access points before
-and 12 after. What sets the latch is still unknown.
+802.15.4 had been used; power-cycled the radio domain first.
+```
 
 Getting here took several confident wrong conclusions, including "the radio is
 faulty, claim warranty". Written up in

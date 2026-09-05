@@ -2,6 +2,7 @@
 
 #include <string.h>
 
+#include "esp_attr.h"
 #include "esp_log.h"
 #include "frame.h"
 #include "freertos/FreeRTOS.h"
@@ -28,6 +29,46 @@ static QueueHandle_t s_rx_queue;
 static TaskHandle_t s_rx_task;
 static uint8_t s_channel;
 static volatile bool s_running;
+
+/* True while this radio owns the shared 2.4 GHz front end.
+ *
+ * Leaving 802.15.4 ENABLED when the host disconnects leaves the Wi-Fi receiver
+ * deaf until the RF domain is power-gated. Measured, three arms, each after a
+ * power cycle that restored Wi-Fi first:
+ *
+ *   802.15.4 left running  389 Wi-Fi frames before, 0 after
+ *   802.15.4 stopped first 564 before, 449 after
+ *   idle the same time     425 before, 539 after
+ *
+ * So it is not using the radio that does it, it is walking away with it still
+ * on. Stopping it properly hands the front end back.
+ *
+ * The flag has to outlive a CPU reset: opening the serial port resets the chip
+ * (measured, the since-boot frame counter went 39 to 3 across a reopen while
+ * advancing 38 over 12 s with the port held open), and the front end stays
+ * poisoned across that reset even though the radio is no longer running. An
+ * ordinary variable is cleared by the very act of connecting to ask about it.
+ *
+ * RTC_NOINIT_ATTR, not RTC_DATA_ATTR. The latter survives deep sleep but is
+ * re-initialised from the image on an ordinary reset, which is exactly the
+ * reset that matters here -- it read back false every time and the recovery
+ * never ran. Noinit memory is not initialised at all, so a magic word
+ * distinguishes a real value from whatever the RAM held at first power-on. */
+#define SN_DIRTY_MAGIC 0x5AC6D147u
+
+static RTC_NOINIT_ATTR uint32_t s_dirty_magic;
+static RTC_NOINIT_ATTR uint32_t s_dirty_flag;
+
+static bool front_end_dirty(void)
+{
+    return s_dirty_magic == SN_DIRTY_MAGIC && s_dirty_flag != 0u;
+}
+
+static void set_front_end_dirty(bool dirty)
+{
+    s_dirty_magic = SN_DIRTY_MAGIC;
+    s_dirty_flag = dirty ? 1u : 0u;
+}
 static sn_154_stats_t s_stats;
 
 /* Scratch for one outgoing frame: metadata plus the largest possible PSDU.
@@ -133,6 +174,10 @@ esp_err_t sn_radio154_start(uint8_t channel)
     if (err != ESP_OK) {
         return err;
     }
+    /* From here Wi-Fi cannot use the front end until this radio gives it
+     * back. Recorded in RTC memory so an abrupt disconnect is still visible on
+     * the next boot. */
+    set_front_end_dirty(true);
     /* Also disables auto-ACK receive, auto-ACK transmit and enhanced-ACK
      * transmit. Correct for passive observation: we must never acknowledge
      * traffic we are only watching. It also means promiscuous mode and
@@ -186,9 +231,30 @@ void sn_radio154_stop(void)
     if (!s_running) {
         return;
     }
+    /* Sleep before deinit.
+     *
+     * Measured: using this radio at all leaves the Wi-Fi receiver deaf until
+     * the RF domain is power-gated -- 633 Wi-Fi frames before an 802.15.4
+     * capture, 0 after, while idling the same 30 seconds cost nothing. Both
+     * share one 2.4 GHz front end, and esp_ieee802154_disable() alone does not
+     * hand it back. Parking the radio first is the only other lever the API
+     * offers; if it does not help, the workaround is a power cycle. */
+    esp_ieee802154_sleep();
     esp_ieee802154_disable();
     s_running = false;
+    /* The front end is handed back, so the next boot has nothing to undo. */
+    set_front_end_dirty(false);
     ESP_LOGI(TAG, "capture stopped");
+}
+
+bool sn_radio154_used_since_boot(void)
+{
+    return front_end_dirty();
+}
+
+void sn_radio154_clear_dirty(void)
+{
+    set_front_end_dirty(false);
 }
 
 uint8_t sn_radio154_channel(void)
@@ -298,6 +364,8 @@ esp_err_t sn_radio154_set_channel(uint8_t channel)
     return ESP_ERR_NOT_SUPPORTED;
 }
 void sn_radio154_stop(void) {}
+bool sn_radio154_used_since_boot(void) { return false; }
+void sn_radio154_clear_dirty(void) {}
 uint8_t sn_radio154_channel(void) { return 0; }
 void sn_radio154_get_stats(sn_154_stats_t *out) { memset(out, 0, sizeof(*out)); }
 esp_err_t sn_radio154_energy_detect(uint8_t channel, uint32_t duration_symbols,

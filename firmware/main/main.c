@@ -41,10 +41,6 @@
 typedef enum { SN_RADIO_154 = 0, SN_RADIO_WIFI = 1 } sn_radio_t;
 static sn_radio_t s_radio = SN_RADIO_154;
 
-/* A busy 802.11 channel produces roughly 25x what the USB link carries, so
- * truncation is mandatory rather than a tuning choice. What is discarded is
- * encrypted payload; the headers worth having are at the front. */
-#define SN_WIFI_SNAPLEN 256
 #endif
 
 #if SN_MODE == 1
@@ -62,8 +58,9 @@ static sn_radio_t s_radio = SN_RADIO_154;
  *   3: Wi-Fi metadata gained a 64-bit timestamp, rate/PHY and the raw signal
  *      field; AP_RECORD frames added
  *   4: A-MPDU flag, CSI frames, bandwidth and control-subtype commands
+ *   5: RADIO_DIRTY, so the host can power-cycle before a Wi-Fi capture
  */
-#define SN_FIRMWARE_VERSION 4u
+#define SN_FIRMWARE_VERSION 5u
 
 static const char *TAG = "main";
 
@@ -111,8 +108,10 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
                 return SN_STATUS_BAD_VALUE;
             }
             sn_radio154_stop(); /* shared front end */
-            if (sn_radio80211_start((uint8_t)value, SN_WIFI_SNAPLEN,
-                                    SN_80211_FILTER_ALL) != ESP_OK) {
+            /* Zero for both: keep whatever SET_SNAPLEN and SET_FILTER
+             * configured. Passing constants here overwrote them on every
+             * channel selection. */
+            if (sn_radio80211_start((uint8_t)value, 0, 0) != ESP_OK) {
                 return SN_STATUS_FAILED;
             }
             *out_value = sn_radio80211_channel();
@@ -168,6 +167,10 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
             return SN_STATUS_FAILED;
         }
         *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_RADIO_DIRTY:
+        *out_value = sn_radio154_used_since_boot() ? 1u : 0u;
         return SN_STATUS_OK;
 
     case SN_CMD_RADIO_POWER_CYCLE:
@@ -237,6 +240,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_SET_BANDWIDTH:
     case SN_CMD_SET_CTRL_FILTER:
     case SN_CMD_SET_CSI:
+    case SN_CMD_RADIO_DIRTY:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -291,6 +295,21 @@ void app_main(void)
         nvs_err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_err);
+
+#if SN_MODE == SN_MODE_CAPTURE
+    /* Waking from our own timer is the radio power cycle, and the only thing
+     * that hands the shared front end back. Clear the flag here so the host
+     * stops being told a recovery is outstanding.
+     *
+     * Healing automatically at this point was tried and is worse: the board
+     * boots when the host opens the port, so it would deep-sleep immediately
+     * and leave the caller holding a handle to a device that has gone away.
+     * The host asks instead, over a connection it can reopen -- see
+     * SN_CMD_RADIO_DIRTY and esp32c6_sniffer.recovery. */
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
+        sn_radio154_clear_dirty();
+    }
+#endif
 
     ESP_ERROR_CHECK(sn_board_init(s_antenna));
     ESP_ERROR_CHECK(sn_usb_link_init());

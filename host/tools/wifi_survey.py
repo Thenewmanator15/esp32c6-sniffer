@@ -36,6 +36,7 @@ from esp32c6_sniffer.apscan import parse_ap_record
 from esp32c6_sniffer.control import Command, Radio, decode_reply, encode_command
 from esp32c6_sniffer.framing import FrameType
 from esp32c6_sniffer.parser import StreamParser
+from esp32c6_sniffer.recovery import ensure_wifi_ready
 
 # One Wi-Fi channel is about 22 MHz wide against 802.15.4's 2 MHz.
 WIFI_TO_154 = {1: "11-14", 6: "16-19", 11: "21-24"}
@@ -142,6 +143,12 @@ def main() -> int:
                          "and scan once more. Resets the board, so do not use "
                          "it while a capture is running")
     args = ap.parse_args()
+
+    # Automatic rather than optional: if 802.15.4 has run since boot the
+    # Wi-Fi receiver is deaf, and every scan would come back empty for a reason
+    # that has nothing to do with the air.
+    if ensure_wifi_ready(args.port):
+        print("802.15.4 had been used; power-cycled the radio domain first.")
 
     ser = serial.Serial(args.port, 115200, timeout=0.05)
     try:

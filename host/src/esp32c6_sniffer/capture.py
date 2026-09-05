@@ -58,7 +58,7 @@ WIFI_CHANNEL_MAX = 14
 #: firmware/main/main.c. Checked at open() because the failure it prevents is
 #: silent: an older board packs its metadata differently, so every field would
 #: decode to a confident wrong number rather than an error.
-EXPECTED_FIRMWARE_VERSION = 4
+EXPECTED_FIRMWARE_VERSION = 5
 
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
@@ -210,6 +210,9 @@ class CaptureSession:
         self._parser = StreamParser()
         self._tracker = SequenceTracker()
         self.firmware_version: int | None = None
+        #: Set when the session had to power-cycle the board because the
+        #: 802.15.4 radio had been used since boot.
+        self.recovered_from_802154 = False
         self._t0_device: int | None = None
         self._t0_host: float = 0.0
         self._snaplen = snaplen
@@ -258,7 +261,51 @@ class CaptureSession:
         self.close()
 
     def open(self) -> None:
-        ser = serial.Serial(self._port_name, 115200, timeout=self._timeout)
+        self._connect()
+
+        info = self._command(Command.GET_INFO)
+        self.firmware_version = info["value"]
+        if self.firmware_version != EXPECTED_FIRMWARE_VERSION:
+            raise RuntimeError(
+                f"board is running firmware version {self.firmware_version}, "
+                f"this host expects {EXPECTED_FIRMWARE_VERSION}. "
+                f"Rebuild and reflash: "
+                f"idf.py -DSN_MODE=2 build then .\flash.ps1 -Port <port>"
+            )
+
+        # Using the 802.15.4 radio leaves the Wi-Fi receiver deaf until the RF
+        # domain is power-gated. Measured: 633 Wi-Fi frames before an 802.15.4
+        # capture and 0 after, while idling the same 30 seconds cost nothing.
+        # Without this a Wi-Fi capture started after an 802.15.4 one silently
+        # returns nothing at all, which is exactly the failure that cost a day.
+        if self._radio is Radio.WIFI:
+            dirty = self._command(Command.RADIO_DIRTY)
+            if dirty["value"]:
+                self.recovered_from_802154 = True
+                self._command(Command.RADIO_POWER_CYCLE)
+                # The board resets and the USB device re-enumerates.
+                self._serial.close()
+                self._serial = None
+                time.sleep(6.0)
+                self._connect()
+
+        self._configure()
+
+    def _connect(self) -> None:
+        """Opens the port, retrying while the device re-enumerates."""
+        deadline = time.monotonic() + 30.0
+        last: Exception | None = None
+        ser = None
+        while time.monotonic() < deadline:
+            try:
+                ser = serial.Serial(self._port_name, 115200,
+                                    timeout=self._timeout)
+                break
+            except (OSError, serial.SerialException) as exc:
+                last = exc
+                time.sleep(0.5)
+        if ser is None:
+            raise RuntimeError(f"cannot open {self._port_name}: {last}")
         try:
             # pyserial opens Windows ports with only a 4 KB receive buffer, and
             # the board discards data when the host stops draining.
@@ -267,21 +314,11 @@ class CaptureSession:
             pass
         ser.reset_input_buffer()
         self._serial = ser
+        self._parser = StreamParser()
+        self._deferred = []
 
-        # Version first, so a mismatch is reported before anything is
-        # interpreted. Flashing the firmware and installing the plugin are two
-        # separate steps, and doing only one of them used to leave a capture
-        # that ran happily and decoded nonsense.
-        info = self._command(Command.GET_INFO)
-        self.firmware_version = info["value"]
-        if self.firmware_version != EXPECTED_FIRMWARE_VERSION:
-            raise RuntimeError(
-                f"board is running firmware version {self.firmware_version}, "
-                f"this host expects {EXPECTED_FIRMWARE_VERSION}. "
-                f"Rebuild and reflash: "
-                f"idf.py -DSN_MODE=2 build && .\flash.ps1 -Port <port>"
-            )
-
+    def _configure(self) -> None:
+        """Sends the per-session settings, in the order the board needs."""
         # Radio first. SET_CHANNEL is interpreted against whichever radio is
         # selected, so choosing it afterwards would validate channel 6 against
         # the 802.15.4 range and be rejected.

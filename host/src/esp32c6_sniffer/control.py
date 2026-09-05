@@ -54,6 +54,7 @@ class Command(IntEnum):
     SET_BANDWIDTH = 12
     SET_CTRL_FILTER = 13
     SET_CSI = 14
+    RADIO_DIRTY = 15
 
 
 class FrameFilter(IntFlag):

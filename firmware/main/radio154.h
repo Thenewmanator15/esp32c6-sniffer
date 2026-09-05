@@ -45,6 +45,21 @@ typedef struct {
 } sn_154_stats_t;
 
 esp_err_t sn_radio154_start(uint8_t channel);
+
+/* True once this radio has been enabled since boot.
+ *
+ * Enabling it leaves the Wi-Fi receiver deaf until the RF domain is
+ * power-gated: measured 633 Wi-Fi frames before an 802.15.4 capture and 0
+ * after, while idling the same 30 seconds cost nothing. Both radios share one
+ * 2.4 GHz front end and esp_ieee802154_disable() does not hand it back;
+ * esp_ieee802154_sleep() first makes no difference either. The host asks this
+ * before starting a Wi-Fi capture so it can power-cycle rather than hand back
+ * an empty capture. */
+bool sn_radio154_used_since_boot(void);
+
+/* Clears the flag above. Called once on waking from the deep-sleep power
+ * cycle, which is the only thing that actually restores the front end. */
+void sn_radio154_clear_dirty(void);
 esp_err_t sn_radio154_set_channel(uint8_t channel);
 void sn_radio154_stop(void);
 uint8_t sn_radio154_channel(void);
