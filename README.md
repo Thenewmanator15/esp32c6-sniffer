@@ -89,8 +89,36 @@ device into pairing mode. Wireshark picks up the network key from the join and
 decrypts from then on. For a network whose key you already know, add it to that
 file directly.
 
-Thread keys go in Wireshark's IEEE 802.15.4 decryption preferences. Delete
-either file to undo.
+### Matter and Thread
+
+Matter over Thread is already captured: those frames arrive and Wireshark
+identifies them. Reading them needs your Thread network key, because Thread
+encrypts at the MAC layer.
+
+```powershell
+cd host
+.\.venv\Scripts\python.exe tools	hread_key.py --key <32 hex chars>
+```
+
+The key comes from your border router, and only for a network you control.
+Home Assistant exposes it under Settings, Devices & Services, Thread. Apple's
+Home app can share Thread credentials to a Mac. An OpenThread border router
+answers `ot-ctl networkkey`.
+
+With it installed, frames resolve through 6LoWPAN and IPv6 to UDP, and Matter
+traffic to its message layer: which node talks to which, session identifiers,
+counters, acknowledgements. Wireshark has dissectors for Matter, its Bluetooth
+transport and its advertising data built in.
+
+**The Matter payload itself stays encrypted.** It is protected by session keys
+negotiated during commissioning, and Wireshark's built-in Matter dissector has
+no key table at all, so there is nowhere to supply them. A separate
+experimental plugin from the Matter project can decrypt, but it is Linux-only
+and built for Wireshark 3.6. That is a real ceiling, not a configuration
+problem.
+
+Commissioning itself happens over Bluetooth before a device joins Thread, and
+inside a connection, so this chip cannot capture it at all.
 
 ## Honest capability ceilings
 
