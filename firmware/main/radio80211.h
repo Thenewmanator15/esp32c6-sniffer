@@ -82,13 +82,23 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
 }
 #endif
 
-/* STATUS: Wi-Fi capture works. Measured on channel 6: 731 frames in 15 s,
- * 632 management and 99 data, RSSI -50 to -96 dBm, qfull=0 rej=0, decoding
- * correctly in Wireshark as radiotap.
+/* STATUS: Wi-Fi capture works, and the receiver is intermittently deaf.
  *
- * This comment previously said the radio was dead in both directions and
- * advised a warranty claim. That was wrong, and so were two conclusions before
- * it. Nothing was faulty; two defects were, and both were ours to fix:
+ * Measured working, channel 6: 731 frames in 15 s, 632 management and 99 data,
+ * RSSI -50 to -96 dBm, qfull=0 rej=0, decoding in Wireshark as radiotap.
+ *
+ * INTERMITTENCY. The receiver stops hearing anything for minutes at a time,
+ * across power cycles, with no software change between states. Espressif's own
+ * unmodified scan binary shows it: 9, 8, 8 access points, then zero on five
+ * consecutive boots. Our firmware likewise went 665 frames one minute and 0 the
+ * next. Interleaved 802.15.4 captures on the same antenna worked every time.
+ * Not the band (a strong channel-6 AP was present at 82 % during a failing
+ * stretch), not the RF switch (explicitly powered, and 802.15.4 shares it), and
+ * not NVS calibration (a full erase-flash does not clear it). Not yet
+ * characterised, so nothing has been reported upstream. Retry before believing
+ * a zero.
+ *
+ * Two defects here WERE ours, and both are fixed:
  *
  *   1. Espressif's examples never drive GPIO3, which is pulled UP at reset and
  *      leaves the XIAO's FM8625H switch unpowered, so every stock example was
@@ -96,10 +106,11 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
  *   2. sn_radio80211_scan() ran before anything initialised the driver and got
  *      ESP_ERR_WIFI_NOT_INIT from its first call. It reported zero access
  *      points, and the zero was read as "heard nothing" instead of "never
- *      switched on". See wifi_init_once() in radio80211.c.
+ *      switched on". See wifi_init_once() below.
  *
  * A claimed v6.0.2-vs-v6.1 PHY regression did not survive an A/B/A either:
- * v6.0.2 -> 9 APs, v6.1 -> 8, v6.0.2 -> 8. One reading is not a result.
+ * v6.0.2 -> 9 APs, v6.1 -> 8, v6.0.2 -> 8. With an intermittent fault in the
+ * loop, one reading measures the moment, not the system.
  *
  * Full write-up: docs/2026-09-05-wifi-investigation-postmortem.md
  *

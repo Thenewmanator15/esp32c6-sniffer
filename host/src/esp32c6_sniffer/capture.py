@@ -1,8 +1,12 @@
-"""Live 802.15.4 capture session.
+"""Live capture session, 802.15.4 or Wi-Fi.
 
-Opens the board, selects a channel and antenna, and yields IEEE 802.15.4 TAP
-records ready for a pcap stream. Used by both the command-line tool and the
-Wireshark extcap plugin, so the two cannot drift apart.
+Opens the board, selects a radio, channel and antenna, and yields records ready
+for a pcap stream: IEEE 802.15.4 TAP records, or radiotap-prefixed 802.11
+frames. Used by both the command-line tool and the Wireshark extcap plugin, so
+the two cannot drift apart.
+
+One radio at a time. The C6 has a single 2.4 GHz front end and the firmware
+stops the other radio when one is selected.
 """
 
 from __future__ import annotations
@@ -15,21 +19,55 @@ from typing import Iterator
 
 import serial
 
-from .control import Antenna, Command, decode_reply, encode_command
+from .control import Antenna, Command, Radio, decode_reply, encode_command
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
-from .tap import CHANNEL_MAX, CHANNEL_MIN, FcsType, build_tap_record
+from .radiotap import LINKTYPE_IEEE802_11_RADIOTAP, build_radiotap
+from .tap import (
+    CHANNEL_MAX,
+    CHANNEL_MIN,
+    LINKTYPE_IEEE802_15_4_TAP,
+    FcsType,
+    build_tap_record,
+)
+
+WIFI_CHANNEL_MIN = 1
+WIFI_CHANNEL_MAX = 14
 
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
 META_LEN = _META.size
 
+# Matches sn_80211_meta_t in firmware/main/radio80211.h. Note the timestamp is
+# 32-bit here against the 802.15.4 radio's 64, so it wraps about every 71
+# minutes; _anchor works from differences, so a wrap shows as one bad interval
+# rather than a broken capture.
+_WIFI_META = struct.Struct("<BbbBIHH")
+WIFI_META_LEN = _WIFI_META.size
+
 FLAG_HAS_FCS = 0x01
 
+WIFI_FLAG_TRUNCATED = 0x01
+WIFI_FLAG_RX_ERROR = 0x02
 
-# Matches the packed struct the capture build emits once a second:
-# sn_link_stats_t (5 x uint32) then sn_154_stats_t (3 x uint32).
+
+# The capture build emits this once a second: sn_link_stats_t (5 x uint32),
+# then sn_154_stats_t (3), then sn_80211_stats_t (8). Older firmware sent only
+# the first two blocks, so the short form is still accepted.
 _STATS = struct.Struct("<8I")
+_STATS_FULL = struct.Struct("<16I")
+
+
+def channel_range(radio: Radio) -> tuple[int, int]:
+    """Inclusive channel bounds for a radio.
+
+    802.15.4 uses 11-26 and Wi-Fi 1-14, and the two overlap numerically without
+    overlapping in meaning, so a bare channel number is ambiguous unless the
+    radio travels with it.
+    """
+    if radio is Radio.WIFI:
+        return WIFI_CHANNEL_MIN, WIFI_CHANNEL_MAX
+    return CHANNEL_MIN, CHANNEL_MAX
 
 
 @dataclass
@@ -47,6 +85,10 @@ class CaptureStats:
     fw_link_rejected: int = 0
     fw_frames_dropped_ringfull: int = 0
     fw_tx_stalls: int = 0
+    # Wi-Fi only. Truncation is deliberate, set by the snapshot length, so it
+    # is reported but deliberately NOT counted as loss.
+    fw_frames_truncated: int = 0
+    fw_bytes_dropped_by_snaplen: int = 0
 
     @property
     def lossless(self) -> bool:
@@ -74,8 +116,15 @@ class CaptureSession:
         channel: int,
         antenna: Antenna = Antenna.INTERNAL,
         timeout: float = 0.05,
+        radio: Radio = Radio.IEEE802154,
     ) -> None:
         self._port_name = port
+        self._radio = radio
+        low, high = channel_range(radio)
+        if not low <= channel <= high:
+            raise ValueError(
+                f"channel {channel} outside the {radio.name} range {low}-{high}"
+            )
         self._channel = channel
         self._antenna = antenna
         self._timeout = timeout
@@ -93,6 +142,27 @@ class CaptureSession:
         # not account for.
         self._deferred: list = []
         self.stats = CaptureStats()
+
+    @property
+    def radio(self) -> Radio:
+        return self._radio
+
+    @property
+    def channel(self) -> int:
+        return self._channel
+
+    @property
+    def linktype(self) -> int:
+        """The pcap link type this session's records are in.
+
+        Exposed so a caller opens its PcapWriter with the right one rather than
+        hard-coding a link type that only suits one radio.
+        """
+        return (
+            LINKTYPE_IEEE802_11_RADIOTAP
+            if self._radio is Radio.WIFI
+            else LINKTYPE_IEEE802_15_4_TAP
+        )
 
     def __enter__(self) -> "CaptureSession":
         self.open()
@@ -112,6 +182,10 @@ class CaptureSession:
         ser.reset_input_buffer()
         self._serial = ser
 
+        # Radio first. SET_CHANNEL is interpreted against whichever radio is
+        # selected, so choosing it afterwards would validate channel 6 against
+        # the 802.15.4 range and be rejected.
+        self._command(Command.SET_RADIO, int(self._radio))
         self._command(Command.SET_ANTENNA, int(self._antenna))
         self._command(Command.SET_CHANNEL, self._channel)
 
@@ -128,7 +202,7 @@ class CaptureSession:
 
     def _command(self, command: Command, value: int = 0, timeout: float = 5.0) -> dict:
         assert self._serial is not None
-        self._serial.write(encode_command(command, value))
+        self._serial.write(encode_command(command, value, radio=self._radio))
         self._serial.flush()
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -167,8 +241,9 @@ class CaptureSession:
         rather than a defect, but it means `stats.lossless` will read False
         after any retune, and that is honest rather than broken.
         """
-        if not CHANNEL_MIN <= channel <= CHANNEL_MAX:
-            raise ValueError(f"channel {channel} outside {CHANNEL_MIN}-{CHANNEL_MAX}")
+        low, high = channel_range(self._radio)
+        if not low <= channel <= high:
+            raise ValueError(f"channel {channel} outside {low}-{high}")
         with self._pending_lock:
             self._pending_channel = channel
 
@@ -212,8 +287,18 @@ class CaptureSession:
             self._t0_host = time.time()
         return self._t0_host + (device_us - self._t0_device) / 1_000_000.0
 
-    def records(self) -> Iterator[tuple[bytes, float]]:
-        """Yields (tap_record, wall_clock_timestamp) until the session closes."""
+    def records(self) -> Iterator[tuple[bytes, float, int]]:
+        """Yields (record, wall_clock_timestamp, original_length).
+
+        The record is an IEEE 802.15.4 TAP record, or a radiotap header plus
+        802.11 frame, matching `linktype`.
+
+        `original_length` is what the record WOULD have been had the firmware
+        not truncated it, and must reach the pcap. Without it a truncated Wi-Fi
+        frame is declared complete, and Wireshark reports "length of contained
+        item exceeds length of containing item" on every beacon instead of
+        marking it sliced.
+        """
         assert self._serial is not None, "call open() first"
         while self._serial is not None:
             self._apply_pending()
@@ -227,40 +312,115 @@ class CaptureSession:
                 self.stats.sequence_gaps += gap
 
                 if frame.ftype is FrameType.STATS:
-                    if len(frame.payload) >= _STATS.size:
-                        (
-                            _sent,
-                            self.stats.fw_frames_dropped_ringfull,
-                            _short,
-                            self.stats.fw_tx_stalls,
-                            _bytes,
-                            self.stats.fw_frames_captured,
-                            self.stats.fw_isr_queue_full,
-                            self.stats.fw_link_rejected,
-                        ) = _STATS.unpack_from(frame.payload)
+                    self._update_stats(frame.payload)
                     continue
 
                 if frame.ftype is not FrameType.PACKET:
                     continue
-                if len(frame.payload) <= META_LEN:
-                    continue
 
-                channel, lqi, rssi, flags, device_us = _META.unpack_from(
-                    frame.payload
-                )
-                psdu = frame.payload[META_LEN:]
-                fcs = (
-                    FcsType.CRC16 if flags & FLAG_HAS_FCS else FcsType.NONE
-                )
-                record = build_tap_record(
-                    psdu,
-                    channel=channel,
-                    rssi_dbm=float(rssi),
-                    lqi=lqi,
-                    fcs_type=fcs,
-                )
+                # Length is checked inside _build_record, which knows which
+                # metadata layout applies. The two happen to be the same size,
+                # so a shared check here would look correct and stop being so
+                # the moment either changes.
+                built = self._build_record(frame.payload)
+                if built is None:
+                    continue
+                record, body_len, device_us, original_len = built
+
                 self.stats.frames += 1
-                self.stats.bytes_captured += len(psdu)
+                self.stats.bytes_captured += body_len
                 self.stats.resyncs = self._parser.resync_count
                 self.stats.bytes_discarded = self._parser.bytes_discarded
-                yield record, self._anchor(device_us)
+                yield record, self._anchor(device_us), original_len
+
+    def _update_stats(self, payload: bytes) -> None:
+        """Copies the board's counters into stats, from the active radio.
+
+        Reading the 802.15.4 block during a Wi-Fi capture is how a lossy
+        capture would report itself lossless: those counters stay at zero
+        because that radio is stopped.
+        """
+        if len(payload) >= _STATS_FULL.size:
+            values = _STATS_FULL.unpack_from(payload)
+        elif len(payload) >= _STATS.size:
+            values = _STATS.unpack_from(payload) + (0,) * 8
+        else:
+            return
+
+        (
+            _sent,
+            self.stats.fw_frames_dropped_ringfull,
+            _short,
+            self.stats.fw_tx_stalls,
+            _bytes,
+        ) = values[:5]
+
+        if self._radio is Radio.WIFI:
+            (
+                _callbacks,
+                _misc,
+                _zerolen,
+                self.stats.fw_frames_captured,
+                self.stats.fw_frames_truncated,
+                self.stats.fw_isr_queue_full,
+                self.stats.fw_link_rejected,
+                self.stats.fw_bytes_dropped_by_snaplen,
+            ) = values[8:16]
+        else:
+            (
+                self.stats.fw_frames_captured,
+                self.stats.fw_isr_queue_full,
+                self.stats.fw_link_rejected,
+            ) = values[5:8]
+
+    def _build_record(self, payload: bytes):
+        """Turns one PACKET payload into
+        (record, body_len, device_us, original_len).
+
+        Returns None for a payload too short to hold its own metadata, which
+        would otherwise raise inside struct.unpack and kill the capture.
+        """
+        if self._radio is Radio.WIFI:
+            if len(payload) <= WIFI_META_LEN:
+                return None
+            (
+                channel,
+                rssi,
+                noise,
+                flags,
+                device_us,
+                on_air_len,
+                _reserved,
+            ) = _WIFI_META.unpack_from(payload)
+            body = payload[WIFI_META_LEN:]
+            # The firmware sends no FCS: the driver hands over the frame
+            # without one, and claiming otherwise makes Wireshark mark every
+            # frame Bad FCS, which is what the 802.15.4 path already learned.
+            header = build_radiotap(
+                channel=channel,
+                rssi_dbm=rssi,
+                noise_dbm=noise,
+                timestamp_us=device_us,
+                ofdm=True,
+                bad_fcs=bool(flags & WIFI_FLAG_RX_ERROR),
+                fcs_present=False,
+            )
+            # on_air_len is the length before the firmware's snapshot cut, so
+            # the pcap can declare the frame sliced rather than complete.
+            return (header + body, len(body), device_us,
+                    len(header) + on_air_len)
+
+        if len(payload) <= META_LEN:
+            return None
+        channel, lqi, rssi, flags, device_us = _META.unpack_from(payload)
+        psdu = payload[META_LEN:]
+        fcs = FcsType.CRC16 if flags & FLAG_HAS_FCS else FcsType.NONE
+        record = build_tap_record(
+            psdu,
+            channel=channel,
+            rssi_dbm=float(rssi),
+            lqi=lqi,
+            fcs_type=fcs,
+        )
+        # Never truncated: a full 802.15.4 frame is 127 bytes at most.
+        return record, len(psdu), device_us, len(record)

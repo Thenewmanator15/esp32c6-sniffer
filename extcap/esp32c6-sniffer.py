@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""Wireshark extcap plugin: ESP32-C6 as an IEEE 802.15.4 capture interface.
+"""Wireshark extcap plugin: ESP32-C6 as a capture interface.
 
 Wireshark drives an extcap program through query modes and one capture mode.
 It asks what interfaces exist, what link types and options each supports, then
 runs it with a named pipe to write a pcap stream into.
 
-Only the 802.15.4 interface is advertised. Wi-Fi and BLE come in later
-milestones and are deliberately absent rather than present-and-broken: an
-interface that appears in Wireshark and then fails is worse than one that is
-not there yet.
+Two interfaces are advertised, one per radio: IEEE 802.15.4 for Zigbee and
+Thread, and 2.4 GHz Wi-Fi. They cannot run at once -- the C6 has a single
+2.4 GHz front end -- but Wireshark treats them as separate interfaces, so
+starting one while the other captures will simply fail to open the port. BLE
+comes in a later milestone and is deliberately absent rather than
+present-and-broken: an interface that appears in Wireshark and then fails is
+worse than one that is not there yet.
+
+Toolbar channel values carry a one-letter radio prefix ("z25", "w6") rather
+than a bare number. Channels 11 to 14 exist in BOTH radios and mean different
+frequencies, so a bare number in a shared toolbar is ambiguous. The prefix
+makes a mis-click detectable instead of silently retuning to the wrong band.
 
 TOOLBAR CONTROLS
 ----------------
@@ -57,10 +65,50 @@ DISPLAY = "ESP32-C6 IEEE 802.15.4 (Zigbee/Thread)"
 DLT_NUMBER = 283
 DLT_NAME = "IEEE802_15_4_TAP"
 
+WIFI_INTERFACE = "esp32c6-wifi"
+WIFI_DISPLAY = "ESP32-C6 Wi-Fi 2.4 GHz (802.11)"
+WIFI_DLT_NUMBER = 127
+WIFI_DLT_NAME = "IEEE802_11_RADIOTAP"
+
 CHANNEL_MIN = 11
 CHANNEL_MAX = 26
 DEFAULT_CHANNEL = 11
+
+WIFI_CHANNEL_MIN = 1
+WIFI_CHANNEL_MAX = 14
+WIFI_DEFAULT_CHANNEL = 6
+
+# A busy 802.11 channel produces far more than the USB link carries, so the
+# snapshot length is not a tuning knob but a requirement. What it discards is
+# encrypted payload; the headers worth having are at the front.
+WIFI_DEFAULT_SNAPLEN = 256
+
 DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
+
+INTERFACES = {
+    INTERFACE: {
+        "display": DISPLAY,
+        "dlt": DLT_NUMBER,
+        "dlt_name": DLT_NAME,
+        "dlt_display": "IEEE 802.15.4 with TAP pseudo-header",
+        "band": "802.15.4",
+        "prefix": "z",
+        "min": CHANNEL_MIN,
+        "max": CHANNEL_MAX,
+        "default": DEFAULT_CHANNEL,
+    },
+    WIFI_INTERFACE: {
+        "display": WIFI_DISPLAY,
+        "dlt": WIFI_DLT_NUMBER,
+        "dlt_name": WIFI_DLT_NAME,
+        "dlt_display": "IEEE 802.11 with radiotap header",
+        "band": "Wi-Fi",
+        "prefix": "w",
+        "min": WIFI_CHANNEL_MIN,
+        "max": WIFI_CHANNEL_MAX,
+        "default": WIFI_DEFAULT_CHANNEL,
+    },
+}
 
 # Toolbar control numbers. Ordering in the toolbar follows these.
 CTRL_ARG_CHANNEL = 0
@@ -89,20 +137,76 @@ def channel_frequency_mhz(channel: int) -> int:
     return 2405 + 5 * (channel - CHANNEL_MIN)
 
 
-def print_interfaces() -> None:
+def wifi_frequency_mhz(channel: int) -> int:
+    """802.11b/g/n: channel 1 is 2412 MHz, 5 MHz apart, with 14 an exception."""
+    if channel == 14:
+        return 2484
+    return 2412 + 5 * (channel - 1)
+
+
+def channel_label(interface: str, channel: int) -> str:
+    if interface == WIFI_INTERFACE:
+        return f"{channel} ({wifi_frequency_mhz(channel)} MHz)"
+    return f"{channel} ({channel_frequency_mhz(channel)} MHz)"
+
+
+def channel_token(interface: str, channel: int) -> str:
+    """Toolbar value for a channel, prefixed with its radio."""
+    return f"{INTERFACES[interface]['prefix']}{channel}"
+
+
+def parse_channel_token(interface: str, text: str) -> int:
+    """Reads a toolbar channel value back, rejecting the other radio's.
+
+    Raises ValueError with a message worth showing the user.
+    """
+    text = text.strip()
+    expected = INTERFACES[interface]["prefix"]
+    if text and text[0].isalpha():
+        prefix, number = text[0], text[1:]
+        if prefix != expected:
+            other = next(
+                name for name, spec in INTERFACES.items()
+                if spec["prefix"] == prefix
+            )
+            raise ValueError(
+                f"that channel belongs to {INTERFACES[other]['display']}, "
+                f"not this capture"
+            )
+    else:
+        number = text
+    channel = int(number)
+    spec = INTERFACES[interface]
+    if not spec["min"] <= channel <= spec["max"]:
+        raise ValueError(
+            f"channel {channel} outside {spec['min']}-{spec['max']}"
+        )
+    return channel
+
+
+def print_interfaces(selected: str | None = None) -> None:
     # The control bitfield must appear BOTH here and on the interface line.
     # Declaring controls only in --extcap-config does not make Wireshark
     # create the pipes, and the failure is silent.
-    print(f"extcap {{version=0.2.0}}{{display=ESP32-C6 Sniffer}}"
+    print(f"extcap {{version=0.3.0}}{{display=ESP32-C6 Sniffer}}"
           f"{{control={CONTROL_BITS}}}")
-    print(f"interface {{value={INTERFACE}}}{{display={DISPLAY}}}"
-          f"{{control={CONTROL_BITS}}}")
+    for name, spec in INTERFACES.items():
+        print(f"interface {{value={name}}}{{display={spec['display']}}}"
+              f"{{control={CONTROL_BITS}}}")
     print(f"control {{number={CTRL_ARG_CHANNEL}}}{{type=selector}}"
           f"{{display=Channel}}"
           f"{{tooltip=Retunes the radio without restarting the capture}}")
-    for channel in range(CHANNEL_MIN, CHANNEL_MAX + 1):
-        print(f"value {{control={CTRL_ARG_CHANNEL}}}{{value={channel}}}"
-              f"{{display={channel} ({channel_frequency_mhz(channel)} MHz)}}")
+    # When Wireshark names the interface, offer only that radio's channels.
+    # Otherwise offer both, which is why the values are prefixed: 11 to 14
+    # exist in both radios and mean different frequencies.
+    shown = [selected] if selected in INTERFACES else list(INTERFACES)
+    for name in shown:
+        spec = INTERFACES[name]
+        band = "" if len(shown) == 1 else f"{spec['band']} "
+        for channel in range(spec["min"], spec["max"] + 1):
+            print(f"value {{control={CTRL_ARG_CHANNEL}}}"
+                  f"{{value={channel_token(name, channel)}}}"
+                  f"{{display={band}{channel_label(name, channel)}}}")
     print(f"control {{number={CTRL_ARG_ANTENNA}}}{{type=boolean}}"
           f"{{display=External antenna}}{{default=false}}"
           f"{{tooltip=Switch antenna without restarting. Measured +6.0 dB for "
@@ -111,25 +215,32 @@ def print_interfaces() -> None:
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
 
 
-def print_dlts() -> None:
-    print(f"dlt {{number={DLT_NUMBER}}}{{name={DLT_NAME}}}"
-          f"{{display=IEEE 802.15.4 with TAP pseudo-header}}")
+def print_dlts(interface: str) -> None:
+    spec = INTERFACES[interface]
+    print(f"dlt {{number={spec['dlt']}}}{{name={spec['dlt_name']}}}"
+          f"{{display={spec['dlt_display']}}}")
 
 
-def print_config() -> None:
+def print_config(interface: str) -> None:
+    spec = INTERFACES[interface]
     # No baud rate option. This is a USB CDC virtual port with no physical line
     # rate, so the setting is discarded; other projects expose one inherited
     # from bridge-chip designs, which misleads anyone who tries to tune it.
     print(f"arg {{number=0}}{{call=--port}}{{display=Serial port}}"
           f"{{type=string}}{{default={DEFAULT_PORT}}}"
           f"{{tooltip=Serial port the board enumerates as}}{{required=true}}")
+    hint = (
+        "Wi-Fi in the UK mostly sits on 1, 6 and 11"
+        if interface == WIFI_INTERFACE
+        else "Zigbee commonly uses 11, 15, 20 and 25"
+    )
     print(f"arg {{number=1}}{{call=--channel}}{{display=Channel}}"
-          f"{{type=selector}}{{default={DEFAULT_CHANNEL}}}"
+          f"{{type=selector}}{{default={spec['default']}}}"
           f"{{tooltip=Starting channel. Also changeable mid-capture from the "
-          f"toolbar. Zigbee commonly uses 11, 15, 20 and 25}}")
-    for channel in range(CHANNEL_MIN, CHANNEL_MAX + 1):
+          f"toolbar. {hint}}}")
+    for channel in range(spec["min"], spec["max"] + 1):
         print(f"value {{arg=1}}{{value={channel}}}"
-              f"{{display={channel} ({channel_frequency_mhz(channel)} MHz)}}")
+              f"{{display={channel_label(interface, channel)}}}")
     print("arg {number=2}{call=--antenna}{display=Antenna}"
           "{type=selector}{default=0}"
           "{tooltip=External needs a U.FL antenna fitted. Measured +6.0 dB "
@@ -172,11 +283,14 @@ def control_write(fp, arg: int, cmd: int, payload: bytes) -> None:
 
 
 def do_capture(fifo: str, port: str, channel: int, antenna: int,
-               control_in: str | None, control_out: str | None) -> int:
+               control_in: str | None, control_out: str | None,
+               interface: str = INTERFACE) -> int:
     from esp32c6_sniffer.capture import CaptureSession
-    from esp32c6_sniffer.control import Antenna
+    from esp32c6_sniffer.control import Antenna, Radio
+
     from esp32c6_sniffer.pcap import PcapWriter
-    from esp32c6_sniffer.tap import LINKTYPE_IEEE802_15_4_TAP
+
+    radio = Radio.WIFI if interface == WIFI_INTERFACE else Radio.IEEE802154
 
     state = {"initialized": False, "running": True}
     fp_out = None
@@ -210,18 +324,27 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 continue
             if cmd == CTRL_CMD_SET and arg == CTRL_ARG_CHANNEL:
                 try:
-                    wanted = int(payload.decode("utf-8", "ignore").strip())
+                    wanted = parse_channel_token(
+                        interface, payload.decode("utf-8", "ignore")
+                    )
                     session.request_channel(wanted)
                     log(f"retuning to channel {wanted}")
                     control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_STATUSBAR,
                                   f"ESP32-C6: channel {wanted}".encode())
                 except (ValueError, UnicodeDecodeError) as exc:
-                    log(f"bad channel value: {exc}")
+                    # Selecting the other radio's channel lands here. Say so
+                    # rather than silently ignoring it.
+                    log(f"channel not applied: {exc}")
 
     # Order matters: capture fifo, then control-out, then control-in. Both
     # reference implementations do this and the pipes can block otherwise.
     with open(fifo, "wb") as pipe:
-        writer = PcapWriter(pipe, LINKTYPE_IEEE802_15_4_TAP)
+        # Link type follows the radio, so the header matches what records()
+        # actually emits rather than whichever one was written first.
+        session_linktype = (
+            WIFI_DLT_NUMBER if radio is Radio.WIFI else DLT_NUMBER
+        )
+        writer = PcapWriter(pipe, session_linktype)
         writer.flush()
 
         if control_out:
@@ -229,7 +352,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         fp_in = open(control_in, "rb", 0) if control_in else None
 
         with CaptureSession(port, channel=channel,
-                            antenna=Antenna(antenna)) as session:
+                            antenna=Antenna(antenna),
+                            radio=radio) as session:
             thread = None
             if fp_in is not None:
                 thread = threading.Thread(target=reader, args=(fp_in, session),
@@ -240,8 +364,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
             next_report = time.monotonic() + 1.0
             try:
-                for record, timestamp in session.records():
-                    writer.write_packet(record, timestamp)
+                for record, timestamp, original_len in session.records():
+                    writer.write_packet(record, timestamp,
+                                        original_length=original_len)
                     # Flush per packet or Wireshark shows nothing until the
                     # buffer fills, which looks like a broken capture.
                     writer.flush()
@@ -251,14 +376,20 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     if now >= next_report:
                         next_report = now + 1.0
                         s = session.stats
+                        extra = ""
+                        if s.fw_frames_truncated:
+                            # Not loss: the snapshot length is deliberate, and
+                            # what it cuts is encrypted payload.
+                            extra = (f", {s.fw_frames_truncated} truncated to "
+                                     f"{WIFI_DEFAULT_SNAPLEN} B")
                         if s.lossless:
                             log(f"ch {session._channel}: {s.frames} frames, "
-                                f"no loss")
+                                f"no loss{extra}")
                         else:
                             log(f"ch {session._channel}: {s.frames} frames, "
                                 f"LOSS gaps={s.sequence_gaps} "
                                 f"isr={s.fw_isr_queue_full} "
-                                f"link={s.fw_link_rejected}")
+                                f"link={s.fw_link_rejected}{extra}")
                             control_write(
                                 fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
                                 b"ESP32-C6 dropped frames; see the Log button",
@@ -283,37 +414,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--capture", action="store_true")
     parser.add_argument("--fifo", default=None)
     parser.add_argument("--port", default=DEFAULT_PORT)
-    parser.add_argument("--channel", type=int, default=DEFAULT_CHANNEL)
+    # No default here: it depends on which interface was named, and a fixed
+    # 802.15.4 default would be an invalid Wi-Fi channel.
+    parser.add_argument("--channel", type=int, default=None)
     parser.add_argument("--antenna", type=int, default=0)
     args, _unknown = parser.parse_known_args(argv)
 
     if args.extcap_interfaces:
-        print_interfaces()
+        print_interfaces(args.extcap_interface)
         return 0
 
-    if args.extcap_interface is not None and args.extcap_interface != INTERFACE:
+    if (args.extcap_interface is not None
+            and args.extcap_interface not in INTERFACES):
         sys.stderr.write(f"unknown interface: {args.extcap_interface}\n")
         return 1
 
+    # Every remaining mode is interface-specific. Defaulting to 802.15.4
+    # keeps a bare invocation working, as it did before Wi-Fi existed.
+    interface = args.extcap_interface or INTERFACE
+    spec = INTERFACES[interface]
+
     if args.extcap_dlts:
-        print_dlts()
+        print_dlts(interface)
         return 0
     if args.extcap_config:
-        print_config()
+        print_config(interface)
         return 0
     if args.capture:
         if not args.fifo:
             sys.stderr.write("--capture requires --fifo\n")
             return 1
-        if not CHANNEL_MIN <= args.channel <= CHANNEL_MAX:
+        channel = args.channel if args.channel is not None else spec["default"]
+        if not spec["min"] <= channel <= spec["max"]:
             sys.stderr.write(
-                f"channel {args.channel} outside {CHANNEL_MIN}-{CHANNEL_MAX}\n"
+                f"channel {channel} outside {spec['min']}-{spec['max']}\n"
             )
             return 1
-        return do_capture(args.fifo, args.port, args.channel, args.antenna,
-                          args.extcap_control_in, args.extcap_control_out)
+        return do_capture(args.fifo, args.port, channel, args.antenna,
+                          args.extcap_control_in, args.extcap_control_out,
+                          interface)
 
-    print_interfaces()
+    print_interfaces(args.extcap_interface)
     return 0
 
 

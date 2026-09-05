@@ -1,12 +1,15 @@
 # Post-mortem: "the Wi-Fi radio is dead" — it was not, twice over
 
-**Outcome: Wi-Fi works.** Promiscuous capture on channel 6 yields ~50 frames/s,
-management and data, RSSI −50 to −96 dBm, no drops, decoding correctly in
-Wireshark. There is no hardware fault and no ESP-IDF bug. Every failure was
-ours.
+**Outcome: Wi-Fi works, and the receiver is also intermittently deaf.**
+Promiscuous capture on channel 6 yields ~50 frames/s, management and data,
+RSSI −50 to −96 dBm, no drops, decoding correctly in Wireshark. Two real
+defects were ours and are fixed. Separately, and not our doing, the Wi-Fi
+receiver stops hearing anything for minutes at a time — see "The intermittency"
+below, which is the reason single readings kept contradicting each other.
 
-This is kept because the investigation produced three confident wrong
-conclusions in a row, and the pattern that produced them is worth not repeating.
+This is kept because the investigation produced several confident wrong
+conclusions in a row, and the pattern that produced them is worth not
+repeating.
 
 ## What was actually wrong
 
@@ -57,11 +60,41 @@ Wi-Fi work, since one 2.4 GHz front end is shared.
 | our firmware, before the fix | powered | `ESP_ERR_WIFI_NOT_INIT`, 0 APs |
 | our firmware, after the fix | powered | 11 APs; 731 frames in 15 s on ch 6 |
 
+## The intermittency
+
+Established last, and it reframes everything above. The Wi-Fi receiver on this
+board alternates between working and hearing nothing at all, in stretches of
+minutes, across power cycles, with **no software change between states**:
+
+| | |
+|---|---|
+| Espressif's `wifi/scan`, unmodified binary | 9, 8, 8 APs — then 0, 0, 0, 0, 0 on five consecutive boots |
+| our firmware, same binary | 665 frames one minute, 0 the next |
+| 802.15.4, same board, same antenna, interleaved | worked **every** time |
+
+It is not the band going quiet: during a failing stretch the host still saw a
+strong AP on channel 6 at 82 % signal, which is the channel being captured. It
+is not our code: Espressif's own binary shows it. It is not the RF switch,
+which is explicitly powered and logged, and which 802.15.4 shares. It is not
+NVS calibration: a full `erase-flash` does not clear it, and both a
+freshly-calibrated and a stored-calibration boot appear in both states.
+
+What has not been done is characterising it properly — a scripted N-boot trial
+recording calibration mode, temperature and outcome, rather than the ad-hoc
+runs that produced this table. Until that exists, "intermittent" is the honest
+description and nothing should be reported upstream.
+
+**Practical consequence:** any Wi-Fi test must be repeated before it means
+anything, and no offline test may depend on live Wi-Fi traffic. The
+`CaptureSession` tests in `host/tests/test_capture.py` are deliberately
+hardware-free for this reason.
+
 ## The lesson
 
 Each wrong conclusion came from reading **a zero as a measurement**. A zero
 from an instrument nobody has proved is switched on measures the instrument,
-not the world. The 802.15.4 control — 78 frames in 12 s on the same antenna —
+not the world. And with an intermittent fault in the loop, a single zero
+measures the moment, not the system. The 802.15.4 control — 78 frames in 12 s on the same antenna —
 felt like it isolated the fault to Wi-Fi, and it did not, because it shared
 none of the Wi-Fi bring-up path.
 

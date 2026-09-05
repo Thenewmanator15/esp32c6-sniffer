@@ -12,6 +12,7 @@ import pytest
 
 PLUGIN = Path(__file__).resolve().parents[2] / "extcap" / "esp32c6-sniffer.py"
 INTERFACE = "esp32c6-802154"
+WIFI_INTERFACE = "esp32c6-wifi"
 
 
 def _run(*args: str) -> str:
@@ -44,14 +45,59 @@ def test_declares_the_extcap_version_line():
 
 
 def test_does_not_advertise_unimplemented_radios():
-    """Wi-Fi and BLE must not appear until their milestones land.
+    """BLE must not appear until its milestone lands.
 
     An interface that shows up in Wireshark and then fails is worse than one
-    that is not there yet.
+    that is not there yet. Wi-Fi used to be on this list and has now landed,
+    so it is asserted present instead.
     """
     out = _run("--extcap-interfaces")
-    assert "esp32c6-wifi" not in out
     assert "esp32c6-ble" not in out
+
+
+def test_lists_the_wifi_interface():
+    out = _run("--extcap-interfaces")
+    assert f"interface {{value={WIFI_INTERFACE}}}" in out
+
+
+def test_reports_the_radiotap_linktype_for_wifi():
+    out = _run("--extcap-dlts", "--extcap-interface", WIFI_INTERFACE)
+    assert "number=127" in out
+    assert "IEEE802_11_RADIOTAP" in out
+
+
+def test_each_interface_reports_only_its_own_linktype():
+    """A capture written with the wrong link type decodes as noise."""
+    tap = _run("--extcap-dlts", "--extcap-interface", INTERFACE)
+    radiotap = _run("--extcap-dlts", "--extcap-interface", WIFI_INTERFACE)
+    assert "number=127" not in tap
+    assert "number=283" not in radiotap
+
+
+def test_wifi_config_offers_only_wifi_channels():
+    out = _run("--extcap-config", "--extcap-interface", WIFI_INTERFACE)
+    assert "{default=6}" in out
+    assert "value {arg=1}{value=1}" in out
+    assert "value {arg=1}{value=14}" in out
+    # 26 is an 802.15.4 channel and must not be offered here.
+    assert "value {arg=1}{value=26}" not in out
+
+
+def test_toolbar_channel_values_are_radio_prefixed():
+    """Channels 11-14 exist in both radios and mean different frequencies.
+
+    A bare number in a shared toolbar is ambiguous, so a mis-click would
+    silently retune to the wrong band instead of being rejected.
+    """
+    out = _run("--extcap-interfaces")
+    assert "{value=z11}" in out
+    assert "{value=w11}" in out
+
+
+def test_toolbar_scopes_channels_to_a_named_interface():
+    out = _run("--extcap-interfaces", "--extcap-interface", WIFI_INTERFACE)
+    assert "{value=w6}" in out
+    assert "{value=z25}" not in out
 
 
 def test_reports_the_tap_linktype():
@@ -94,11 +140,23 @@ def test_both_antennas_are_selectable():
 def test_unknown_interface_is_rejected():
     result = subprocess.run(
         [sys.executable, str(PLUGIN), "--extcap-dlts",
-         "--extcap-interface", "esp32c6-wifi"],
+         "--extcap-interface", "esp32c6-ble"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode != 0
     assert "unknown interface" in result.stderr.lower()
+
+
+def test_wifi_channel_out_of_range_is_rejected():
+    """26 is a valid 802.15.4 channel and an invalid Wi-Fi one."""
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture",
+         "--extcap-interface", WIFI_INTERFACE,
+         "--fifo", "unused", "--channel", "26"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "outside 1-14" in result.stderr
 
 
 def test_capture_without_fifo_fails_loudly():
@@ -142,7 +200,7 @@ def test_offers_a_channel_selector_control():
     out = _run("--extcap-interfaces")
     assert "control {number=0}{type=selector}" in out
     for channel in (11, 26):
-        assert f"value {{control=0}}{{value={channel}}}" in out
+        assert f"value {{control=0}}{{value=z{channel}}}" in out
 
 
 def test_offers_a_logger_control():

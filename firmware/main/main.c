@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "nvs_flash.h"
 
 /* Build-time mode.
  *
@@ -188,6 +189,27 @@ static void emit_conformance_vectors(void)
 
 void app_main(void)
 {
+    /* Before any radio, and not optional.
+     *
+     * The PHY keeps its RF calibration in NVS and both radios share it. This
+     * call used to live inside the Wi-Fi bring-up only, so starting 802.15.4
+     * first brought the PHY up against an uninitialised store: it logged
+     * "esp_phy_load_cal_data_from_nvs: NVS has not been initialized", fell
+     * back to a full calibration, then SAVED it. Wi-Fi was deaf from that
+     * point on -- callbacks stayed at exactly 0 -- and because the damage sat
+     * in flash it survived power cycles and looked precisely like broken
+     * hardware. It cost a long detour before the log line was actually read.
+     *
+     * A corrupt or version-mismatched store is erased rather than tolerated;
+     * there is nothing in it worth keeping across a reflash. */
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES ||
+        nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(nvs_err);
+
     ESP_ERROR_CHECK(sn_board_init(s_antenna));
     ESP_ERROR_CHECK(sn_usb_link_init());
     sn_log_sink_install();
@@ -219,30 +241,33 @@ void app_main(void)
         /* Not packed: both members are all uint32_t, so the layout is already
          * gap-free at 4-byte alignment. Packing would only make taking their
          * addresses unsafe, which v6 rejects as an error. */
+        /* Both radios' counters go in every frame, whichever is running. The
+         * host picks the block matching the radio it selected. Sending only
+         * the active one would leave the host unable to tell a zero counter
+         * from an absent one, and the Wi-Fi counters were previously not sent
+         * at all -- they went out as a once-a-second log line, so a host
+         * checking losslessness on Wi-Fi silently read the 802.15.4 block and
+         * always saw zero. */
         struct {
             sn_link_stats_t link;
             sn_154_stats_t radio;
+            sn_80211_stats_t wifi;
         } combined;
         sn_usb_link_get_stats(&combined.link);
         sn_radio154_get_stats(&combined.radio);
+        sn_radio80211_get_stats(&combined.wifi);
         sn_usb_link_send(SN_FRAME_STATS, (const uint8_t *)&combined,
                          sizeof(combined));
 
-        if (s_radio == SN_RADIO_WIFI) {
-            sn_80211_stats_t w;
-            sn_radio80211_get_stats(&w);
-            ESP_LOGI(TAG, "wifi: cb=%u misc=%u zerolen=%u sent=%u trunc=%u "
-                          "qfull=%u rej=%u",
-                     (unsigned)w.callbacks, (unsigned)w.skipped_misc,
-                     (unsigned)w.skipped_zero_len, (unsigned)w.frames_captured,
-                     (unsigned)w.frames_truncated, (unsigned)w.isr_queue_full,
-                     (unsigned)w.link_rejected);
-        }
-
-        if (combined.radio.isr_queue_full || combined.radio.link_rejected) {
+        const uint32_t isr_full = (s_radio == SN_RADIO_WIFI)
+                                      ? combined.wifi.isr_queue_full
+                                      : combined.radio.isr_queue_full;
+        const uint32_t rejected = (s_radio == SN_RADIO_WIFI)
+                                      ? combined.wifi.link_rejected
+                                      : combined.radio.link_rejected;
+        if (isr_full || rejected) {
             ESP_LOGW(TAG, "dropped frames: isr=%u link=%u",
-                     (unsigned)combined.radio.isr_queue_full,
-                     (unsigned)combined.radio.link_rejected);
+                     (unsigned)isr_full, (unsigned)rejected);
         }
     }
 

@@ -16,13 +16,20 @@ networks and devices you own or are authorised to test.
 captures live Zigbee and Thread traffic. BLE is not built yet, and is
 deliberately absent from Wireshark rather than present and failing.
 
-**Wi-Fi capture works too, at the firmware level.** Measured on channel 6:
+**Wi-Fi capture works and appears in Wireshark as a second interface**, with
+its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
 731 frames in 15 s, management and data, RSSI -50 to -96 dBm, no drops,
-decoding in Wireshark as radiotap. It is not yet wired into the Wireshark
-plugin, so it is still absent from the interface list.
+decoding as radiotap.
 
-Getting there took three confident wrong conclusions, including "the radio is
-faulty, claim warranty". It was not; two defects were ours. Written up in
+**Caveat, and it is not a small one: this board's Wi-Fi receiver goes deaf for
+minutes at a time.** Espressif's own unmodified scan binary shows it too --
+9, 8, 8 access points, then zero on five consecutive boots -- while 802.15.4
+on the same antenna never fails. A capture that returns nothing is worth
+retrying before it means anything. Not yet characterised, so nothing has been
+reported upstream.
+
+Getting here took several confident wrong conclusions, including "the radio is
+faulty, claim warranty". Written up in
 [docs/2026-09-05-wifi-investigation-postmortem.md](docs/2026-09-05-wifi-investigation-postmortem.md),
 because the way the mistakes were made is more useful than the fix.
 
@@ -30,7 +37,7 @@ because the way the mistakes were made is more useful than the fix.
 |---|---|
 | 1. USB transport and throughput benchmark | Done, measured at ~810 kB/s |
 | 2. IEEE 802.15.4 into Wireshark | Done, all exit criteria met |
-| 3. Wi-Fi | Capture works on the board; not yet in the Wireshark plugin |
+| 3. Wi-Fi | Done, in Wireshark; receiver is intermittently deaf, see above |
 | 4. BLE advertisements | Not started |
 
 Beyond capture, it also does things other 802.15.4 sniffers do not:
