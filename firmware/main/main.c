@@ -140,13 +140,29 @@ void app_main(void)
      * data when nothing drains it. */
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        sn_154_stats_t rs;
-        sn_radio154_get_stats(&rs);
-        if (rs.isr_queue_full || rs.link_rejected) {
-            /* A drop here is a defect, not physics: a saturated 802.15.4
-             * channel is ~31 kB/s against a measured ~810 kB/s link. */
+
+        /* Publish both counter sets once a second so the host can prove a
+         * capture was lossless rather than assume it. Nothing below us
+         * reports drops: the 802.15.4 driver's buffer-full warning is
+         * compiled out of default builds, and there is no Wi-Fi equivalent
+         * at all. A drop on this radio is a defect, not physics, since a
+         * saturated channel is ~31 kB/s against a measured ~810 kB/s link. */
+        /* Not packed: both members are all uint32_t, so the layout is already
+         * gap-free at 4-byte alignment. Packing would only make taking their
+         * addresses unsafe, which v6 rejects as an error. */
+        struct {
+            sn_link_stats_t link;
+            sn_154_stats_t radio;
+        } combined;
+        sn_usb_link_get_stats(&combined.link);
+        sn_radio154_get_stats(&combined.radio);
+        sn_usb_link_send(SN_FRAME_STATS, (const uint8_t *)&combined,
+                         sizeof(combined));
+
+        if (combined.radio.isr_queue_full || combined.radio.link_rejected) {
             ESP_LOGW(TAG, "dropped frames: isr=%u link=%u",
-                     (unsigned)rs.isr_queue_full, (unsigned)rs.link_rejected);
+                     (unsigned)combined.radio.isr_queue_full,
+                     (unsigned)combined.radio.link_rejected);
         }
     }
 

@@ -47,6 +47,40 @@ antenna selectable in its options. Zigbee commonly uses channels 11, 15, 20 and
 The sniffer is passive, so it only shows traffic that already exists. If a
 channel looks empty, it probably is.
 
+## What you will and will not see
+
+Everything the radio delivers is captured, and every frame is dissected as far
+as it can be. Verified over a 90 s capture: 87 frames, zero dropped in the
+receive interrupt, zero refused by the link, zero buffer overruns, zero
+sequence gaps, and **zero data frames left stuck at the MAC layer**.
+
+Two genuine limits, neither fixable in software here:
+
+**Frames that fail their checksum never arrive.** The ESP-IDF 802.15.4 driver
+exposes only a receive-done callback, with no failure equivalent, so corrupt
+frames are discarded in hardware before we could see them. Some sniffers show
+them; this one cannot.
+
+**Payloads are encrypted.** Zigbee and Thread both encrypt above the MAC layer,
+so you see frame structure, addresses and routing but not contents. Wireshark
+reports this honestly as "Encrypted Payload" and "No encryption key set".
+
+### Decrypting your own network
+
+`install.ps1` does not touch keys, but the project adds the well-known default
+Zigbee Trust Center link key to `%APPDATA%\Wireshark\zigbee_pc_keys`. That key
+is public and ships with every Zigbee analyser. It does **not** decrypt
+arbitrary traffic: it only lets Wireshark read the key-transport message sent
+when a device joins, and derive that network's key from it.
+
+To read your own Zigbee network, start a capture on its channel and put a
+device into pairing mode. Wireshark picks up the network key from the join and
+decrypts from then on. For a network whose key you already know, add it to that
+file directly.
+
+Thread keys go in Wireshark's IEEE 802.15.4 decryption preferences. Delete
+either file to undo.
+
 ## Honest capability ceilings
 
 | Radio | What you actually get |

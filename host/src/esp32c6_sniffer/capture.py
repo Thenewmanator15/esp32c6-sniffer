@@ -26,6 +26,11 @@ META_LEN = _META.size
 FLAG_HAS_FCS = 0x01
 
 
+# Matches the packed struct the capture build emits once a second:
+# sn_link_stats_t (5 x uint32) then sn_154_stats_t (3 x uint32).
+_STATS = struct.Struct("<8I")
+
+
 @dataclass
 class CaptureStats:
     frames: int = 0
@@ -33,6 +38,23 @@ class CaptureStats:
     sequence_gaps: int = 0
     resyncs: int = 0
     bytes_discarded: int = 0
+    # Reported by the board. Any non-zero drop here is a defect on this radio,
+    # not a bandwidth limit: a saturated channel is about a twenty-fifth of
+    # what the link carries.
+    fw_frames_captured: int = 0
+    fw_isr_queue_full: int = 0
+    fw_link_rejected: int = 0
+    fw_frames_dropped_ringfull: int = 0
+    fw_tx_stalls: int = 0
+
+    @property
+    def lossless(self) -> bool:
+        return (
+            self.sequence_gaps == 0
+            and self.fw_isr_queue_full == 0
+            and self.fw_link_rejected == 0
+            and self.fw_frames_dropped_ringfull == 0
+        )
 
 
 class CaptureSession:
@@ -128,6 +150,21 @@ class CaptureSession:
             for frame in self._parser.feed(chunk):
                 gap = self._tracker.observe(frame.seq)
                 self.stats.sequence_gaps += gap
+
+                if frame.ftype is FrameType.STATS:
+                    if len(frame.payload) >= _STATS.size:
+                        (
+                            _sent,
+                            self.stats.fw_frames_dropped_ringfull,
+                            _short,
+                            self.stats.fw_tx_stalls,
+                            _bytes,
+                            self.stats.fw_frames_captured,
+                            self.stats.fw_isr_queue_full,
+                            self.stats.fw_link_rejected,
+                        ) = _STATS.unpack_from(frame.payload)
+                    continue
+
                 if frame.ftype is not FrameType.PACKET:
                     continue
                 if len(frame.payload) <= META_LEN:
