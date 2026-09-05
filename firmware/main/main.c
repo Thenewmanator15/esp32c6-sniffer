@@ -117,6 +117,15 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         sn_radio80211_stop();
         return SN_STATUS_OK;
 
+    case SN_CMD_WIFI_SCAN: {
+        uint16_t aps = 0;
+        if (sn_radio80211_scan(&aps) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = aps;
+        return SN_STATUS_OK;
+    }
+
     case SN_CMD_ENERGY_DETECT: {
         /* value packs the channel in the low byte and the measurement window,
          * in 16 us symbols, in the upper three. */
@@ -140,6 +149,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_STOP:
     case SN_CMD_ENERGY_DETECT:
     case SN_CMD_SET_RADIO:
+    case SN_CMD_WIFI_SCAN:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;

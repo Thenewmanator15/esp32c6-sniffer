@@ -43,6 +43,7 @@ class Command(IntEnum):
     GET_INFO = 5
     ENERGY_DETECT = 6
     SET_RADIO = 7
+    WIFI_SCAN = 8
 
 
 class Radio(IntEnum):

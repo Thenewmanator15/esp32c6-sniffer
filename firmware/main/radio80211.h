@@ -72,32 +72,39 @@ void sn_radio80211_stop(void);
 uint8_t sn_radio80211_channel(void);
 void sn_radio80211_get_stats(sn_80211_stats_t *out);
 
+/* Diagnostic: performs a blocking scan and reports how many access points the
+ * radio found. Scanning uses the same receiver as promiscuous capture but a
+ * different driver path, so it discriminates between "the radio cannot hear
+ * anything" and "promiscuous mode specifically is not delivering". */
+esp_err_t sn_radio80211_scan(uint16_t *out_ap_count);
+
 #ifdef __cplusplus
 }
 #endif
 
-/* STATUS: untested against real traffic, for an environmental reason.
+/* STATUS: the Wi-Fi receiver hears nothing on this board. Not our bug.
  *
- * The capture path could not be validated here because there is no 2.4 GHz
- * Wi-Fi in range to capture. The only network visible to the host is 5 GHz
- * channel 108, and this chip has no 5 GHz radio. Our own spectrum survey
- * independently showed a flat -100 dBm floor across the whole 2.4 GHz band,
- * with none of the elevation a nearby access point produces.
+ * Isolated as far as it can be from here:
+ *   - 802.15.4 captures thousands of frames losslessly through the SAME
+ *     antenna and front end, so the RF path and the antenna switch are fine.
+ *   - A Wi-Fi scan finds 0 access points while the host sees 11 on 2.4 GHz.
+ *     Verified with explicit 120-400 ms dwell times, since a zeroed
+ *     wifi_scan_config_t means zero dwell and would find nothing regardless.
+ *   - Promiscuous capture delivers 0 frames on channels 1, 6 and 11, all
+ *     confirmed occupied. A counter at the very top of the callback, before
+ *     any filtering, stays at exactly 0.
+ *   - ESP-IDF's own simple_sniffer example, unmodified, captures 0 packets on
+ *     the same board. That rules out this code.
+ *   - Every driver call returns ESP_OK. The failure is silent.
  *
- * Before concluding that, five hypotheses were tested and eliminated by
- * measurement, and one real defect was found and fixed along the way:
- *   - missing esp_event_loop_create_default(): GENUINE BUG, it logged
- *     "failed to post WiFi event ret=259". Fixed, though it was not the cause
- *     of the empty capture.
- *   - calling esp_wifi_start(), and not calling it: no difference
- *   - coexistence with 802.15.4 (ESP-IDF #18838): disproved by building with
- *     CONFIG_IEEE802154_ENABLED=n
- *   - missing esp_netif_init(), and an explicit filter mask: no difference
+ * Eliminated by measurement: missing event loop (a real bug, fixed, but not
+ * the cause), calling esp_wifi_start, not calling it, coexistence with
+ * 802.15.4 (built with CONFIG_IEEE802154_ENABLED=n and still zero), missing
+ * esp_netif_init, and an explicit filter mask instead of all-ones.
  *
- * The decisive control: ESP-IDF's own simple_sniffer example, unmodified,
- * captured exactly 0 packets on the same board. That rules out this code.
+ * Remaining candidates, untested: a Wi-Fi PHY or calibration fault specific to
+ * this chip revision, or an ESP-IDF v6.1 regression on the C6. Worth reporting
+ * upstream, since it reproduces with Espressif's own example.
  *
- * TO VALIDATE: bring up any 2.4 GHz network within range, a phone hotspot
- * forced to 2.4 GHz is enough, then capture on its channel. Run
- * host/tools/survey.py first: if the band still reads about -100 dBm flat,
- * there is nothing to capture and the fault is not in the firmware. */
+ * sn_radio80211_scan() exists as the discriminator that established this and
+ * is worth keeping. */

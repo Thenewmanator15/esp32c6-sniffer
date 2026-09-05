@@ -246,3 +246,48 @@ void sn_radio80211_get_stats(sn_80211_stats_t *out)
 {
     *out = s_stats;
 }
+
+esp_err_t sn_radio80211_scan(uint16_t *out_ap_count)
+{
+    if (out_ap_count == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_ap_count = 0;
+
+    /* Scanning needs station mode; promiscuous capture uses NULL mode.
+     * Every step is logged with its error code: a bare failure return told us
+     * nothing about which call was refusing. */
+    esp_err_t err = esp_wifi_set_promiscuous(false);
+    ESP_LOGI(TAG, "scan: set_promiscuous(false) -> %s", esp_err_to_name(err));
+
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    ESP_LOGI(TAG, "scan: set_mode(STA) -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = esp_wifi_start();
+    ESP_LOGI(TAG, "scan: wifi_start -> %s", esp_err_to_name(err));
+    if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+        return err;
+    }
+
+    /* Explicit dwell times. A zeroed config means zero milliseconds per
+     * channel, and a scan that never lingers finds nothing however loud the
+     * air is -- a broken instrument that looks like a broken radio. */
+    wifi_scan_config_t cfg = {0};
+    cfg.show_hidden = true;
+    cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    cfg.scan_time.active.min = 120;
+    cfg.scan_time.active.max = 400;
+    err = esp_wifi_scan_start(&cfg, true); /* blocking */
+    ESP_LOGI(TAG, "scan: scan_start -> %s", esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+    uint16_t n = 0;
+    err = esp_wifi_scan_get_ap_num(&n);
+    *out_ap_count = n;
+    ESP_LOGI(TAG, "scan found %u access points", (unsigned)n);
+    return err;
+}
