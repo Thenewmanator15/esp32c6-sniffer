@@ -122,3 +122,35 @@ def test_capture_rejects_an_out_of_range_channel(channel):
     )
     assert result.returncode != 0
     assert "channel" in result.stderr.lower()
+
+
+def test_declares_toolbar_controls_on_both_lines():
+    """The control bitfield must appear on the extcap AND interface lines.
+
+    Declaring controls only in --extcap-config does not make Wireshark create
+    the control pipes, and the failure is silent.
+    """
+    out = _run("--extcap-interfaces")
+    lines = out.splitlines()
+    extcap_line = next(l for l in lines if l.startswith("extcap "))
+    iface_line = next(l for l in lines if l.startswith("interface "))
+    assert "{control=" in extcap_line
+    assert "{control=" in iface_line
+
+
+def test_offers_a_channel_selector_control():
+    out = _run("--extcap-interfaces")
+    assert "control {number=0}{type=selector}" in out
+    for channel in (11, 26):
+        assert f"value {{control=0}}{{value={channel}}}" in out
+
+
+def test_offers_a_logger_control():
+    out = _run("--extcap-interfaces")
+    assert "{role=logger}" in out
+
+
+def test_channel_remains_a_config_option_too():
+    """tshark has no toolbar, so nothing essential may live only there."""
+    out = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    assert "call=--channel" in out
