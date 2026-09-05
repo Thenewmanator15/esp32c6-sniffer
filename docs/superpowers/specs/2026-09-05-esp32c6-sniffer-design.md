@@ -415,6 +415,24 @@ your own bench.
    inside the receive interrupt rather than a hardware capture. The concern was
    real but the measured cost is negligible, so the planned IRAM and interrupt
    priority work is **not worth doing**.
+
+   **Nor is any further improvement.** The levers exist: the driver allocates
+   its interrupt with a flags argument of literally `0`, carrying Espressif's
+   own `// TODO: Add flags for IEEE802154 ISR allocating. TZ-102`, so the
+   handler is neither IRAM-resident nor raised in priority. Neither is exposed
+   as a Kconfig option, so using them means patching ESP-IDF and carrying that
+   patch forever.
+
+   The reason not to is physical rather than practical. At 2 Mchip/s the chip
+   period is 0.5 µs, so **our jitter is exactly one chip** — the finest interval
+   the modulation itself resolves. Against a 16 µs symbol, a 192 µs
+   acknowledgement turnaround and a 10 ms TSCH slot, it is already three to
+   four orders of magnitude finer than anything a sniffer measures. We resolved
+   those 192 µs turnarounds cleanly enough to measure the jitter *with* them.
+
+   The one application wanting better is time-of-flight ranging, which needs
+   hardware capture registers this chip does not expose, so patching interrupt
+   flags would not reach it either.
    Determines whether those timestamps are usable at all.
 5. ~~Real-world antenna delta on this board (community figures disagree: 5 dB
    vs 10 dB).~~ **ANSWERED 2026-09-05: +6.0 dB median in favour of the external
