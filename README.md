@@ -58,6 +58,23 @@ antenna selectable in its options. Zigbee commonly uses channels 11, 15, 20 and
 The sniffer is passive, so it only shows traffic that already exists. If a
 channel looks empty, it probably is.
 
+## Finding the networks
+
+Don't guess at channels. The survey measures both halves of the question:
+
+```powershell
+cd host
+.\.venv\Scripts\python.exe tools\survey.py --port COM3
+```
+
+Energy detection sees anything radiating, including the Wi-Fi that overlaps
+most 802.15.4 channels and is invisible to a packet capture. Traffic counting
+sees decoded frames. A channel can be electrically noisy and carry no 802.15.4
+at all, or be quiet and carry a network talking softly, so read them together.
+
+`tools/spectrum.py` runs the energy half alone and faster.
+`tools/antenna_compare.py` measures the two antennas against the same traffic.
+
 ## What you will and will not see
 
 Everything the radio delivers is captured, and every frame is dissected as far

@@ -13,12 +13,15 @@ not there yet.
 TOOLBAR CONTROLS
 ----------------
 Wireshark can give an extcap a toolbar, driven by a pair of control pipes. We
-use it for two things:
+use it for three things:
 
 * A channel selector that retunes the radio MID-CAPTURE, with no restart. This
   is coherent for us specifically because we emit IEEE802_15_4_TAP, where the
   channel is a per-packet field, so a retuned capture stays self-describing.
   A sniffer whose channel lived in a file-level header could not do this.
+* An antenna toggle, which makes the measured +6.0 dB difference between the
+  onboard and external antennas a live A/B on the same traffic rather than a
+  comparison across two runs where the traffic itself has changed.
 * A log window showing frame counts and the board's own drop counters, so
   "did I miss anything?" is answerable at a glance instead of never.
 
@@ -61,7 +64,8 @@ DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 
 # Toolbar control numbers. Ordering in the toolbar follows these.
 CTRL_ARG_CHANNEL = 0
-CTRL_ARG_LOGGER = 1
+CTRL_ARG_ANTENNA = 1
+CTRL_ARG_LOGGER = 2
 CTRL_ARG_NONE = 255
 
 # Control commands. Wireshark only ever SENDS 0 and 1; the rest are ours to send.
@@ -99,6 +103,10 @@ def print_interfaces() -> None:
     for channel in range(CHANNEL_MIN, CHANNEL_MAX + 1):
         print(f"value {{control={CTRL_ARG_CHANNEL}}}{{value={channel}}}"
               f"{{display={channel} ({channel_frequency_mhz(channel)} MHz)}}")
+    print(f"control {{number={CTRL_ARG_ANTENNA}}}{{type=boolean}}"
+          f"{{display=External antenna}}{{default=false}}"
+          f"{{tooltip=Switch antenna without restarting. Measured +6.0 dB for "
+          f"external on this board, so this is a live A/B on the same traffic}}")
     print(f"control {{number={CTRL_ARG_LOGGER}}}{{type=button}}{{role=logger}}"
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
 
@@ -190,6 +198,15 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 # Writing before this is ignored.
                 state["initialized"] = True
                 log(f"capture started on channel {session._channel}")
+                continue
+            if cmd == CTRL_CMD_SET and arg == CTRL_ARG_ANTENNA:
+                # Boolean controls carry a raw 0/1 byte, not the ASCII digit.
+                external = bool(payload and payload[0])
+                try:
+                    session.request_antenna(1 if external else 0)
+                    log(f"antenna -> {'external' if external else 'onboard'}")
+                except ValueError as exc:
+                    log(f"bad antenna value: {exc}")
                 continue
             if cmd == CTRL_CMD_SET and arg == CTRL_ARG_CHANNEL:
                 try:

@@ -85,6 +85,7 @@ class CaptureSession:
         self._t0_device: int | None = None
         self._t0_host: float = 0.0
         self._pending_channel: int | None = None
+        self._pending_antenna: int | None = None
         self._pending_lock = threading.Lock()
         # Frames that arrive while waiting for a command reply. Without this
         # they were parsed and dropped, so every channel change silently lost
@@ -171,6 +172,28 @@ class CaptureSession:
         with self._pending_lock:
             self._pending_channel = channel
 
+    def request_antenna(self, antenna: int) -> None:
+        """Switch antenna mid-capture, from another thread.
+
+        Useful as a live A/B on the same traffic: the external antenna measured
+        +6.0 dB over the onboard one on this board, and toggling during a
+        capture shows that on frames you can compare directly, rather than
+        across two separate runs where the traffic itself has changed.
+        """
+        if antenna not in (0, 1):
+            raise ValueError(f"antenna {antenna} is not 0 (internal) or 1 (external)")
+        with self._pending_lock:
+            self._pending_antenna = antenna
+
+    def _apply_pending(self) -> None:
+        with self._pending_lock:
+            antenna = self._pending_antenna
+            self._pending_antenna = None
+        if antenna is not None:
+            self._command(Command.SET_ANTENNA, antenna)
+            self._antenna = Antenna(antenna)
+        self._apply_pending_channel()
+
     def _apply_pending_channel(self) -> int | None:
         with self._pending_lock:
             channel = self._pending_channel
@@ -193,7 +216,7 @@ class CaptureSession:
         """Yields (tap_record, wall_clock_timestamp) until the session closes."""
         assert self._serial is not None, "call open() first"
         while self._serial is not None:
-            self._apply_pending_channel()
+            self._apply_pending()
             chunk = self._serial.read(8192)
             frames = self._deferred + self._parser.feed(chunk)
             self._deferred = []
