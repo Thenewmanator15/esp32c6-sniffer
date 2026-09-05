@@ -1,6 +1,7 @@
 """Holds firmware frame.c to byte-identical output with framing.py.
 
-Host-only checks run anywhere. The hardware check needs the board attached:
+Host-only checks run anywhere. The hardware checks need the board attached
+running the conformance build (SN_MODE=0):
 
     pytest -m hardware --port COM3
 """
@@ -28,19 +29,29 @@ def test_host_encoder_still_matches_stored_vectors(case):
     assert produced.hex() == case["encoded"]
 
 
-def _collect(port, seconds: float, parser: StreamParser) -> list:
+def _collect(port, seconds: float, parser: StreamParser):
+    """Returns (raw_bytes, frames). Raw is kept for byte-identity checks."""
+    raw = bytearray()
     frames = []
     end = time.monotonic() + seconds
     while time.monotonic() < end:
-        frames.extend(parser.feed(port.read(4096)))
-    return frames
+        chunk = port.read(4096)
+        if chunk:
+            raw.extend(chunk)
+            frames.extend(parser.feed(chunk))
+    return bytes(raw), frames
 
 
 def _find_burst_start(frames) -> int:
-    """The firmware repeats its burst, so anchor on the first vector."""
+    """The firmware repeats its burst, so anchor on the first vector.
+
+    Anchors on type and payload, not sequence number: the link assigns
+    sequence numbers at runtime, so they differ between bursts.
+    """
     first = VECTORS[0]
+    want_payload = bytes.fromhex(first["payload"])
     for i, frame in enumerate(frames):
-        if int(frame.ftype) == first["type"] and frame.seq == first["seq"]:
+        if int(frame.ftype) == first["type"] and frame.payload == want_payload:
             if len(frames) - i >= len(VECTORS):
                 return i
     return -1
@@ -48,18 +59,29 @@ def _find_burst_start(frames) -> int:
 
 @pytest.mark.hardware
 def test_firmware_emits_identical_bytes(sniffer_port):
-    """The C encoder must produce exactly what the Python encoder produces."""
+    """The C encoder must produce exactly what the Python encoder produces.
+
+    Sequence numbers come from the link at runtime, so we cannot compare
+    against a stored encoding directly. Instead, for each received frame we
+    encode the same (type, seq, payload) in Python and require those exact
+    bytes to appear in the raw stream. That covers the header layout and the
+    CRC, not merely the payload.
+    """
     parser = StreamParser()
-    frames = _collect(sniffer_port, 8.0, parser)
+    raw, frames = _collect(sniffer_port, 8.0, parser)
 
     start = _find_burst_start(frames)
-    assert start >= 0, (
-        f"no complete conformance burst seen in {len(frames)} frames"
-    )
+    assert start >= 0, f"no complete conformance burst in {len(frames)} frames"
 
     for case, frame in zip(VECTORS, frames[start:]):
-        rebuilt = encode_frame(frame.ftype, frame.seq, frame.payload)
-        assert rebuilt.hex() == case["encoded"], f"mismatch on {case['name']}"
+        assert int(frame.ftype) == case["type"], f"type differs: {case['name']}"
+        assert frame.payload.hex() == case["payload"], (
+            f"payload differs: {case['name']}"
+        )
+        expected = encode_frame(frame.ftype, frame.seq, frame.payload)
+        assert expected in raw, (
+            f"C encoding differs from Python for {case['name']}"
+        )
 
 
 @pytest.mark.hardware
@@ -85,8 +107,25 @@ def test_no_unframed_bytes_once_synchronised(sniffer_port):
         pytest.fail("never synchronised to the frame stream")
 
     baseline = parser.bytes_discarded
-    frames = _collect(sniffer_port, 6.0, parser)
+    _, frames = _collect(sniffer_port, 6.0, parser)
 
     assert frames, "no frames after synchronisation"
     leaked = parser.bytes_discarded - baseline
     assert leaked == 0, f"{leaked} unframed bytes reached the host after sync"
+
+
+@pytest.mark.hardware
+def test_log_output_arrives_as_framed_log_messages(sniffer_port):
+    """ESP_LOG must travel in-band as LOG frames, not as raw interleaved text.
+
+    With USB-C as the only cable there is no second channel to read a console
+    on, so log output is redirected into the frame protocol and the host
+    demultiplexes it.
+    """
+    parser = StreamParser()
+    _, frames = _collect(sniffer_port, 8.0, parser)
+
+    log_frames = [f for f in frames if f.ftype is FrameType.LOG]
+    assert log_frames, "no LOG frames received"
+    for frame in log_frames:
+        frame.payload.decode("utf-8", errors="strict")
