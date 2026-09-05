@@ -30,14 +30,35 @@ foreach ($f in @(
     if (-not (Test-Path $f)) { throw "missing $f - run 'idf.py build' first" }
 }
 
-& $py -m esptool --chip esp32c6 -p $Port -b $Baud `
-    --before default-reset --after hard-reset `
-    write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m `
-    0x0     "$build\bootloader\bootloader.bin" `
-    0x8000  "$build\partition_table\partition-table.bin" `
-    0x10000 "$build\esp32c6_sniffer.bin"
+# esptool writes its progress bars to stderr. If a caller merges stderr into
+# the pipeline (2>&1) while ErrorActionPreference is 'Stop', PowerShell turns
+# those progress lines into terminating errors and the flash appears to fail
+# despite succeeding. Relax the preference across the native call only.
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
 
-if ($LASTEXITCODE -ne 0) {
-    throw "flash failed. Hold BOOT, tap RESET, release BOOT, then retry."
+# Retry, because a board already streaming at full rate can drown esptool's
+# sync handshake. Each attempt resets the chip first, and the benchmark
+# firmware stays quiet for a few seconds after boot to leave room for this.
+$code = 1
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    if ($attempt -gt 1) {
+        Write-Host "  flash attempt $attempt..." -ForegroundColor Yellow
+        Start-Sleep -Milliseconds 800
+    }
+    & $py -m esptool --chip esp32c6 -p $Port -b $Baud `
+        --before default-reset --after hard-reset `
+        write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m `
+        0x0     "$build\bootloader\bootloader.bin" `
+        0x8000  "$build\partition_table\partition-table.bin" `
+        0x10000 "$build\esp32c6_sniffer.bin"
+    $code = $LASTEXITCODE
+    if ($code -eq 0) { break }
+}
+
+$ErrorActionPreference = $prevEap
+
+if ($code -ne 0) {
+    throw "flash failed after 3 attempts (esptool exit $code). Hold BOOT, tap RESET, release BOOT, then retry."
 }
 Write-Host "Flashed $Port" -ForegroundColor Green

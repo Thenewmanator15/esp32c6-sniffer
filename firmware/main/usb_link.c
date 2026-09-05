@@ -11,8 +11,22 @@
 
 static const char *TAG = "usb_link";
 
-#define RING_BYTES        (32 * 1024)
-#define TX_CHUNK          1024
+/* 64 KB of the C6's 512 KB SRAM. Sized to absorb bursts rather than sustained
+ * overload: no buffer fixes a radio that outruns the link, but a large one
+ * stops a brief burst from costing frames. There is no PSRAM on this part. */
+#define RING_BYTES        (64 * 1024)
+/* Drain in large chunks. The peripheral moves 64 bytes per interrupt with no
+ * DMA, so every call carries fixed overhead that a bigger chunk amortises.
+ * Tunable from the build for throughput experiments:
+ *   idf.py -DSN_TX_CHUNK=4096 -DSN_TX_BUFFER=16384 build */
+#ifndef SN_TX_CHUNK
+#define SN_TX_CHUNK 4096
+#endif
+#ifndef SN_TX_BUFFER
+#define SN_TX_BUFFER 16384
+#endif
+
+#define TX_CHUNK          SN_TX_CHUNK
 #define WRITE_TIMEOUT_MS  20
 #define STALL_LIMIT       50   /* consecutive zero-byte writes before giving up */
 
@@ -84,7 +98,7 @@ esp_err_t sn_usb_link_init(void)
     /* Not const: the driver takes a non-const pointer and v6 builds
      * -Wdiscarded-qualifiers as an error. */
     usb_serial_jtag_driver_config_t cfg = {
-        .tx_buffer_size = 4096,
+        .tx_buffer_size = SN_TX_BUFFER,
         .rx_buffer_size = 1024,
     };
     esp_err_t err = usb_serial_jtag_driver_install(&cfg);
@@ -109,29 +123,45 @@ esp_err_t sn_usb_link_init(void)
     return ESP_OK;
 }
 
-bool sn_usb_link_send(sn_frame_type_t type, const uint8_t *payload, size_t len)
+static bool link_send(sn_frame_type_t type, const uint8_t *payload, size_t len,
+                      TickType_t ring_wait)
 {
     if (len > SN_MAX_PAYLOAD) {
         return false;
     }
-    /* Short timeout: a caller blocked here would be worse than a dropped
-     * frame, and the log sink can reach this from arbitrary tasks. */
-    if (xSemaphoreTake(s_send_lock, pdMS_TO_TICKS(10)) != pdTRUE) {
+    /* The lock is held across the encode and the ring write, so a blocking
+     * caller must be allowed to hold it for as long as it waits. */
+    const TickType_t lock_wait =
+        (ring_wait == 0) ? pdMS_TO_TICKS(10) : ring_wait + pdMS_TO_TICKS(10);
+    if (xSemaphoreTake(s_send_lock, lock_wait) != pdTRUE) {
         stats_bump(&s_stats.frames_dropped_ringfull, 1);
         return false;
     }
 
+    /* The sequence number is consumed even when the ring write fails, so a
+     * drop shows up as a gap on the host rather than vanishing silently. */
     const uint16_t seq = s_seq++;
     const size_t n = sn_frame_encode(s_scratch, sizeof(s_scratch), type, seq,
                                      payload, len);
     bool ok = false;
     if (n > 0) {
-        ok = (xRingbufferSend(s_ring, s_scratch, n, 0) == pdTRUE);
+        ok = (xRingbufferSend(s_ring, s_scratch, n, ring_wait) == pdTRUE);
     }
     xSemaphoreGive(s_send_lock);
 
     stats_bump(ok ? &s_stats.frames_sent : &s_stats.frames_dropped_ringfull, 1);
     return ok;
+}
+
+bool sn_usb_link_send(sn_frame_type_t type, const uint8_t *payload, size_t len)
+{
+    return link_send(type, payload, len, 0);
+}
+
+bool sn_usb_link_send_wait(sn_frame_type_t type, const uint8_t *payload,
+                           size_t len, uint32_t timeout_ms)
+{
+    return link_send(type, payload, len, pdMS_TO_TICKS(timeout_ms));
 }
 
 void sn_usb_link_get_stats(sn_link_stats_t *out)

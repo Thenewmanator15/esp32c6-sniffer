@@ -55,6 +55,25 @@ def run(port: str, seconds: float) -> dict:
     packet_frames = 0
     last_stats: tuple[int, ...] | None = None
 
+    # Do not start the clock until data is actually flowing.
+    #
+    # Closing the serial port resets the board: the CDC control lines are wired
+    # to reset on this interface, which is how esptool reboots it. The benchmark
+    # firmware then waits ~5 s before streaming so esptool can reach it. Timing
+    # from the moment of open therefore counts that dead time as zero
+    # throughput, which made repeat measurements read ~411 kB/s against a true
+    # ~730. Wait for the first packet, then measure.
+    warmup_deadline = time.monotonic() + 15.0
+    while time.monotonic() < warmup_deadline:
+        chunk = ser.read(8192)
+        if not chunk:
+            continue
+        if any(f.ftype is FrameType.PACKET for f in parser.feed(chunk)):
+            break
+    else:
+        ser.close()
+        raise RuntimeError("no packets within 15 s; is the benchmark build flashed?")
+
     start = time.monotonic()
     end = start + seconds
     idle_reads = 0

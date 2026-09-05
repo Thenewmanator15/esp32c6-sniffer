@@ -29,9 +29,18 @@ typedef struct {
 esp_err_t sn_usb_link_init(void);
 
 /* Encodes and queues one frame, assigning the sequence number internally.
- * Returns false if the ring buffer was full and the frame was dropped.
- * Safe to call from multiple tasks. Not safe from an ISR. */
+ * Returns immediately, returning false if the ring was full and the frame was
+ * dropped. Use this on capture paths: a radio callback cannot afford to wait,
+ * and blocking one would cost later frames rather than this one.
+ * Safe from multiple tasks. Not safe from an ISR. */
 bool sn_usb_link_send(sn_frame_type_t type, const uint8_t *payload, size_t len);
+
+/* Blocking variant: waits up to `timeout_ms` for ring space instead of
+ * dropping. For producers that can afford back-pressure, such as the
+ * throughput benchmark, where dropping would measure overload behaviour
+ * rather than the sustained rate. Never call from an ISR. */
+bool sn_usb_link_send_wait(sn_frame_type_t type, const uint8_t *payload,
+                           size_t len, uint32_t timeout_ms);
 
 void sn_usb_link_get_stats(sn_link_stats_t *out);
 

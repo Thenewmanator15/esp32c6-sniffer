@@ -89,13 +89,87 @@ implementable. There is no second wire; USB-C is the only link.
 | Quantity | Value |
 |---|---|
 | Theoretical full-speed bulk maximum | ~1.2 MB/s |
-| Best measured figure available (ESP32-S3, not C6) | ~770 kB/s |
+| **Measured on this board, wire rate** | **~785 kB/s** |
+| **Measured on this board, payload rate** | **680–781 kB/s, rising with frame size** |
+| ESP32-S3 figure, for comparison | ~770 kB/s |
 | 802.15.4 saturated channel | ~31 kB/s |
 | BLE advertisements | a few kB/s |
 | Wi-Fi 2.4 GHz peak | 150 Mbit/s, ~20x over budget |
 
-**No C6 throughput measurement has been published anywhere.** Establishing it is
-milestone 1.
+### Measured, 2026-09-05
+
+No C6 figure had been published anywhere. Measured here with a blocking
+generator so nothing is dropped, 20 s per point, `firmware/bench-sweep.ps1`:
+
+| Payload | Payload kB/s | Wire kB/s | Frames/s | Missed |
+|---|---|---|---|---|
+| 64 | 680.1 | 786.3 | 10626 | 1 |
+| 128 | 729.9 | 786.9 | 5703 | 2 |
+| 256 | 747.3 | 776.5 | 2919 | 2 |
+| 512 | 774.8 | 789.9 | 1513 | 2 |
+| 1024 | 781.4 | 789.0 | 763 | 2 |
+| 1500 | 774.4 | 779.5 | 516 | 2 |
+
+**The wire rate is flat independent of frame size.** The link moves a fixed
+number of bytes per second; payload throughput varies only in the share the
+10-byte header takes.
+
+The one or two "missed" frames per run are the partial frame in flight when the
+host attaches, not real loss. `fw_short_writes` was zero throughout;
+`fw_tx_stalls` sat at a steady ~93 per 20 s in every run without costing data.
+
+### Final figure, after correcting the measurement
+
+The sweep above times from the moment the port opens. That silently counts the
+firmware's startup delay as zero throughput (see the traps table: closing the
+port resets the board). The benchmark now waits for the first packet before
+starting its clock. Re-measured on that basis, three repeats per configuration:
+
+| Transmit path | Mean wire rate | Range |
+|---|---|---|
+| ESP-IDF driver | **809.9 kB/s** | 787.6 – 823.5 |
+| Direct FIFO, IRAM, raw registers | 797.2 kB/s | 778.6 – 808.9 |
+
+**Take ~810 kB/s as the figure, and ~4% as the run-to-run spread.** Any reported
+difference smaller than that is not resolved by a single measurement.
+
+The two rows matter less for which won than for how close they are. Two
+completely different write paths — one through the driver's ring buffer and
+interrupt handler, the other bypassing all of it from IRAM with direct register
+writes — land within noise of each other. When rewriting the entire path does
+not move the number, the constraint is not in the path. It is the single-buffered
+endpoint (§ traps) plus host scheduling, and 1216 kB/s is unreachable by
+construction because reaching it would require zero turnaround.
+
+**The remaining headroom changes no decision.** A realistic ceiling is ~1050
+kB/s, so roughly 25% is unclaimed. 802.15.4 needs 31 kB/s and already has 26x
+headroom; BLE needs less; Wi-Fi needs ~20,000 kB/s and is hopeless at any
+achievable USB rate, so it filters and truncates either way. Optimising further
+would be optimising a resource we are not short of. **Decision: keep the ESP-IDF
+driver, stop here.**
+
+Also unresolved and not worth pursuing now: the board sits behind a USB hub on
+this machine, which enumerates seven of them and appears to offer no true root
+port. Moving between two different hubs changed the figure by less than the
+noise. A Linux host would decisively test whether Windows' generic serial driver
+binds, and replacing it with a raw USB driver might recover some of the 25%, at
+the cost of plug-and-play and of `esptool` on that port.
+
+**On compression.** Since the wire rate is fixed, fewer bytes would mean more
+captured information. It is still the wrong tool here. The modes with spare
+capacity (802.15.4, BLE) have ~25x more link than they can fill, and the mode
+that needs help (Wi-Fi) is dominated on busy networks by WPA2/WPA3 payloads,
+which are maximum-entropy and incompressible. Management frames compress well
+but dominate only on quiet networks, where the limit was never reached. So
+compression helps most exactly where it is not needed. Truncating a 1500-byte
+frame to 128 bytes is an 11x reduction, works identically on encrypted traffic,
+and costs no CPU on a part with no DMA for USB that already copies every byte by
+hand. Espressif also warn that promiscuous Wi-Fi "costs lots of CPU
+performance", so compression there would risk dropping frames at the radio to
+save bandwidth downstream. **Decision: snaplen and filtering, no compression.**
+Revisit only if a real Wi-Fi capture shows management frames dominating while
+the link saturates; a small repeated-MAC dictionary would be the cheap step
+then.
 
 Consequence: 802.15.4 and BLE fit comfortably and should never drop. Wi-Fi cannot
 fit, and no transport available on this chip closes that gap. The answer is on-chip
@@ -290,6 +364,9 @@ Recorded because each was believed during design and disproved by checking.
 | ETM could trigger DMA or timestamps on frame RX | The radio raises **no ETM events at all**. Every such use is impossible. |
 | Hardware SHA could replace software CRC | Full DMA setup cost for a 2-block frame, steals a GDMA channel, and emits 8x more bytes onto our actual bottleneck. |
 | Console can be separated by per-task stdio redirect | **Picolibc replaced Newlib in v6**; those streams are now global. Use explicit writes. |
+| Matching byte counters prove the host is not the bottleneck | **They prove nothing about which end sets the rate.** USB bulk is flow-controlled by NAK: a slow host leaves the endpoint full and blocks the device, a slow device makes the host retry, and the counters match either way. They prove only that no data was lost. |
+| Closing the serial port is harmless | **It resets the board.** The CDC control lines are wired to reset on this interface, which is how esptool reboots it. Measured: first packet arrives 0.01 s after opening a long-idle port, and 4.34 s after opening one that was just closed. Any benchmark timing from the moment of open silently measures the firmware's startup delay as zero throughput. This made repeat runs read ~411 kB/s against a true ~730. |
+| Bypassing the ESP-IDF USB driver will be faster | Lost four times (622, 637, 679, and again with IRAM and raw register writes). Its interrupt refills the endpoint the moment the host drains it; a polling task must be rescheduled first, and with a single-buffered endpoint the whole contest is turnaround latency. **Keep the driver.** |
 
 ---
 
