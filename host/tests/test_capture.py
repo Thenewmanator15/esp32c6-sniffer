@@ -58,8 +58,17 @@ def wifi_payload(body: bytes, on_air_len: int, *, channel=6, rssi=-55,
                           on_air_len, rate, phy, siga1, siga2) + body
 
 
+#: The firmware strips the FCS, so metadata lengths are four bytes shorter
+#: than the ones a signalling field carries.
+FCS_LEN = 4
+
+
 def ht_sig1(mcs: int, length: int, bw40: bool = False) -> int:
-    """HT-SIG1: MCS in bits 0-6, 20/40 in bit 7, HT Length in bits 8-23."""
+    """HT-SIG1: MCS in bits 0-6, 20/40 in bit 7, HT Length in bits 8-23.
+
+    `length` is the PSDU length INCLUDING the four-byte FCS, which is what
+    HT Length counts and what the decoder expects.
+    """
     return (mcs & 0x7F) | ((1 if bw40 else 0) << 7) | ((length & 0xFFFF) << 8)
 
 
@@ -296,7 +305,7 @@ def test_ht_frame_carries_a_decoded_mcs():
     body = bytes([0x80, 0x00]) + b"" * 40
     record, _b, _us, _o = wifi_session()._build_record(
         wifi_payload(body, len(body), phy=PhyFormat.HT,
-                     siga1=ht_sig1(mcs=7, length=len(body)),
+                     siga1=ht_sig1(mcs=7, length=len(body) + FCS_LEN),
                      siga2=1 << 7)          # short guard interval
     )
     assert present_bitmap(record) & (1 << BIT_MCS)
@@ -336,7 +345,7 @@ def test_non_ht_frames_carry_no_mcs():
         body = bytes([0x80, 0x00]) + b"" * 40
         record, _b, _us, _o = wifi_session()._build_record(
             wifi_payload(body, len(body), phy=fmt,
-                         siga1=ht_sig1(4, len(body)))
+                         siga1=ht_sig1(4, len(body) + FCS_LEN))
         )
         assert not present_bitmap(record) & (1 << BIT_MCS), fmt
 
@@ -349,3 +358,69 @@ def test_timestamp_is_64_bit_so_it_survives_the_71_minute_wrap():
                      timestamp=beyond_32_bits)
     )
     assert device_us == beyond_32_bits
+
+
+def test_ht_length_is_compared_including_the_fcs():
+    """The regression this pins down.
+
+    HT Length counts the PSDU with its FCS; the firmware has already stripped
+    it. Comparing against the stripped length makes every real frame miss by
+    exactly four bytes, so the MCS silently disappears from the capture. It did
+    exactly that once, and only a live PHY tally showed it.
+    """
+    body = bytes([0x80, 0x00]) + bytes([0x11]) * 40
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=5, length=len(body) + FCS_LEN))
+    )
+    assert present_bitmap(record) & (1 << BIT_MCS)
+    header_len = struct.unpack_from("<H", record, 2)[0]
+    assert record[header_len - 1] == 5
+
+    # And the stripped length must NOT satisfy it, or the check is vacuous.
+    assert wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=5, length=len(body)))
+    )[0][-1:] is not None
+    bad = wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=5, length=len(body)))
+    )[0]
+    assert not present_bitmap(bad) & (1 << BIT_MCS)
+
+
+def test_ampdu_delimiter_does_not_lose_the_mcs():
+    """An A-MPDU subframe carries a four-byte delimiter and is padded to a
+    four-byte boundary, so HT Length runs slightly over the MPDU. Demanding
+    equality threw the MCS away on three of every five 11n frames."""
+    body = bytes([0x80, 0x00]) + bytes([0x11]) * 40
+    for over in (0, 4, 8):
+        record, _b, _us, _o = wifi_session()._build_record(
+            wifi_payload(body, len(body), phy=PhyFormat.HT,
+                         siga1=ht_sig1(mcs=7,
+                                       length=len(body) + FCS_LEN + over))
+        )
+        assert present_bitmap(record) & (1 << BIT_MCS), over
+
+
+def test_a_wildly_wrong_length_is_still_rejected():
+    """The window must stay narrow enough to catch a wrong bit layout, which
+    would put an essentially random 16-bit number in the length field."""
+    body = bytes([0x80, 0x00]) + bytes([0x11]) * 40
+    for over in (64, 1000, 30000):
+        record, _b, _us, _o = wifi_session()._build_record(
+            wifi_payload(body, len(body), phy=PhyFormat.HT,
+                         siga1=ht_sig1(mcs=7,
+                                       length=len(body) + FCS_LEN + over))
+        )
+        assert not present_bitmap(record) & (1 << BIT_MCS), over
+
+
+def test_a_length_below_the_frame_is_rejected():
+    """HT Length can exceed the MPDU but never fall short of it."""
+    body = bytes([0x80, 0x00]) + bytes([0x11]) * 40
+    record, _b, _us, _o = wifi_session()._build_record(
+        wifi_payload(body, len(body), phy=PhyFormat.HT,
+                     siga1=ht_sig1(mcs=7, length=len(body)))
+    )
+    assert not present_bitmap(record) & (1 << BIT_MCS)

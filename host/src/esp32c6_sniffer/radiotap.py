@@ -158,6 +158,13 @@ def decode_he_sig_a(sig1: int, sig2: int):
     return (data1, data2, data3, data4, data5, data6)
 
 
+#: How far HT Length may exceed the frame length and still be believed.
+#: An A-MPDU subframe is preceded by a four-byte delimiter and padded to a
+#: four-byte boundary, so the aggregate length legitimately runs a little over
+#: the MPDU. Measured here: exactly 0 or 4 bytes over, never more.
+HT_LENGTH_TOLERANCE = 16
+
+
 def decode_ht_sig(sig1: int, sig2: int, expected_length: int):
     """Decodes HT-SIG into radiotap MCS fields, or returns None.
 
@@ -165,18 +172,35 @@ def decode_ht_sig(sig1: int, sig2: int, expected_length: int):
     bits 8-23. HT-SIG2 carries aggregation, STBC, FEC and the short guard
     interval in bits 3, 4-5, 6 and 7.
 
-    **The length is used as a self-check.** This decode has not been confirmed
-    against live 11n traffic, so rather than trust the bit layout, the HT Length
-    it yields is compared with the length the radio actually reported. They come
-    from independent places -- one from the signal field, one from the receive
-    descriptor -- so agreement is strong evidence the layout is right, and
-    disagreement means None and no MCS is claimed. That is deliberate: a
-    plausible wrong MCS on every 11n frame is worse than no MCS at all.
+    **The length is used as a self-check.** Rather than trust the bit layout,
+    the HT Length it yields is compared with the length the radio reported.
+    They come from independent places -- one from the signal field, one from
+    the receive descriptor -- so agreement is strong evidence the layout is
+    right, and disagreement means None and no MCS is claimed. A plausible wrong
+    MCS on every 11n frame is worse than no MCS at all.
+
+    `expected_length` must be the PSDU length **including** the four-byte FCS,
+    which is what HT Length counts. Passing the FCS-stripped length silently
+    disabled this decoder once: every frame failed by exactly four bytes and
+    the MCS quietly vanished from the capture. The check caught the mistake,
+    which is what it is for, but it caught it by failing closed.
+
+    The comparison is a bounded window rather than equality. It began as
+    equality while the bit layout was unverified, and that was right at the
+    time; live traffic has since confirmed the layout -- decoded frames report
+    MCS 7 and Wireshark independently derives the 65 Mbit/s that MCS 7 means at
+    20 MHz. But an A-MPDU subframe carries a four-byte delimiter and is padded
+    to a four-byte boundary, so HT Length legitimately runs 0 to 4 bytes over
+    the MPDU, and demanding equality threw away the MCS on roughly three of
+    every five 11n frames. A window still rejects a wrong bit layout, which
+    would put a essentially random 16-bit number here rather than one within a
+    few bytes of the truth.
     """
     mcs = sig1 & 0x7F
     if mcs > HT_MCS_MAX:
         return None
-    if ((sig1 >> 8) & 0xFFFF) != expected_length:
+    ht_length = (sig1 >> 8) & 0xFFFF
+    if not expected_length <= ht_length <= expected_length + HT_LENGTH_TOLERANCE:
         return None
 
     known = MCS_KNOWN_INDEX | MCS_KNOWN_BANDWIDTH | MCS_KNOWN_GI

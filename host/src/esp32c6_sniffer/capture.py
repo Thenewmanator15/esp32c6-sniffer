@@ -78,6 +78,10 @@ WIFI_FLAG_TRUNCATED = 0x01
 WIFI_FLAG_RX_ERROR = 0x02
 WIFI_FLAG_AMPDU = 0x04
 
+#: The 802.11 frame check sequence the firmware strips. Some signalling fields
+#: count it and some do not, so it has to be added back deliberately.
+FCS_LEN = 4
+
 
 # The capture build emits this once a second: sn_link_stats_t (5 x uint32),
 # then sn_154_stats_t (3), then sn_80211_stats_t (8). Older firmware sent only
@@ -525,7 +529,9 @@ class CaptureSession:
             phy_format = phy & 0x0F
             secondary = (phy >> 4) & 0x0F
             mcs = (
-                decode_ht_sig(siga1, siga2, on_air_len)
+                # HT Length counts the PSDU including its FCS, which the
+                # firmware has already removed, so it goes back on here.
+                decode_ht_sig(siga1, siga2, on_air_len + FCS_LEN)
                 if phy_format == PhyFormat.HT
                 else None
             )
