@@ -1,0 +1,9 @@
+# Colouring for 802.15.4 captures. Ordered most specific first, since Wireshark
+# applies the first match.
+@Encrypted payload@wpan.security == 1@[54227,50629,65535][0,0,0]
+@Thread (MLE)@mle@[52428,61680,52428][0,0,0]
+@Zigbee@zbee_nwk@[52685,58853,65535][0,0,0]
+@Beacon@wpan.frame_type == 0x0000@[65535,60652,53456][0,0,0]
+@MAC command@wpan.frame_type == 0x0003@[65535,58596,45746][0,0,0]
+@Acknowledgement@wpan.frame_type == 0x0002@[61680,61680,61680][25000,25000,25000]
+@Weak signal (below -95 dBm)@wpan-tap.rss < -95@[65535,65535,65535][45000,45000,45000]
