@@ -1,0 +1,6 @@
+# Diagnostic build: Wi-Fi capture with the 802.15.4 stack excluded entirely.
+# Tests whether coexistence between the two radios is what stops Wi-Fi
+# delivering frames (ESP-IDF issue #18838, "Wifi stuck when coexisting with
+# 15.4"). Our own instrumentation showed the promiscuous callback firing
+# exactly zero times with both compiled in.
+CONFIG_IEEE802154_ENABLED=n

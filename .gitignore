@@ -24,3 +24,4 @@ venv/
 .idea/
 Thumbs.db
 desktop.ini
+build-wifionly/

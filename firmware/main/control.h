@@ -18,6 +18,7 @@ typedef enum {
     SN_CMD_STOP = 4,
     SN_CMD_GET_INFO = 5,
     SN_CMD_ENERGY_DETECT = 6,
+    SN_CMD_SET_RADIO = 7,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

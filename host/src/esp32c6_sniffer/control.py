@@ -42,6 +42,19 @@ class Command(IntEnum):
     STOP = 4
     GET_INFO = 5
     ENERGY_DETECT = 6
+    SET_RADIO = 7
+
+
+class Radio(IntEnum):
+    """Which radio the capture build should use.
+
+    One at a time, always. The C6 has a single 2.4 GHz front end shared by all
+    three radios, and Espressif's coexistence matrix lists the combinations we
+    would want as unsupported or unstable.
+    """
+
+    IEEE802154 = 0
+    WIFI = 1
 
 
 class Antenna(IntEnum):
@@ -53,19 +66,36 @@ class ControlError(Exception):
     """Raised for a malformed command or reply."""
 
 
-def encode_command(command: Command, value: int = 0) -> bytes:
+# The two radios have different channel numbering, and they overlap
+# confusingly: 802.15.4 channel 11 and Wi-Fi channel 11 are different
+# frequencies entirely. Validating against the wrong one silently accepts a
+# number that will fail on the board, so the caller says which radio it means.
+WIFI_CHANNEL_MIN = 1
+WIFI_CHANNEL_MAX = 14
+
+_CHANNEL_RANGE = {
+    Radio.IEEE802154: (CHANNEL_MIN, CHANNEL_MAX),
+    Radio.WIFI: (WIFI_CHANNEL_MIN, WIFI_CHANNEL_MAX),
+}
+
+
+def encode_command(
+    command: Command,
+    value: int = 0,
+    radio: Radio = Radio.IEEE802154,
+) -> bytes:
     """Build a complete framed command ready to write to the serial port.
 
     Range checking happens here rather than only on the board, so a bad channel
-    fails immediately and visibly instead of arriving as a remote error.
+    fails immediately and visibly instead of arriving as a remote error. It
+    needs `radio` because the two use different channel numbering.
     """
-    if command is Command.SET_CHANNEL and not (
-        CHANNEL_MIN <= value <= CHANNEL_MAX
-    ):
-        raise ValueError(
-            f"channel {value} outside the radio's range "
-            f"{CHANNEL_MIN}-{CHANNEL_MAX}"
-        )
+    if command is Command.SET_CHANNEL:
+        low, high = _CHANNEL_RANGE[radio]
+        if not low <= value <= high:
+            raise ValueError(
+                f"channel {value} outside the {radio.name} range {low}-{high}"
+            )
     if command is Command.SET_ANTENNA and value not in tuple(Antenna):
         raise ValueError(f"antenna {value} is not 0 (internal) or 1 (external)")
     if not 0 <= value <= 0xFFFFFFFF:

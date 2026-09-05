@@ -2,13 +2,15 @@
 
 #include <string.h>
 
-#include "esp_ieee802154.h"
 #include "esp_log.h"
 #include "frame.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "usb_link.h"
+
+#if CONFIG_IEEE802154_ENABLED
+#include "esp_ieee802154.h"
 
 static const char *TAG = "radio154";
 
@@ -280,3 +282,29 @@ restore:
     }
     return err;
 }
+
+#else /* !CONFIG_IEEE802154_ENABLED */
+
+/* Built without the 802.15.4 component. The stubs keep main.c compiling and
+ * report failure honestly rather than pretending a radio is present. */
+esp_err_t sn_radio154_start(uint8_t channel)
+{
+    (void)channel;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+esp_err_t sn_radio154_set_channel(uint8_t channel)
+{
+    (void)channel;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+void sn_radio154_stop(void) {}
+uint8_t sn_radio154_channel(void) { return 0; }
+void sn_radio154_get_stats(sn_154_stats_t *out) { memset(out, 0, sizeof(*out)); }
+esp_err_t sn_radio154_energy_detect(uint8_t channel, uint32_t duration_symbols,
+                                    int8_t *out_dbm)
+{
+    (void)channel; (void)duration_symbols; (void)out_dbm;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+
+#endif /* CONFIG_IEEE802154_ENABLED */

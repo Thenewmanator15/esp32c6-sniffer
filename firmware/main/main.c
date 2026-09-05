@@ -31,6 +31,18 @@
 
 #if SN_MODE == SN_MODE_CAPTURE
 #include "radio154.h"
+#include "radio80211.h"
+
+/* One radio at a time, always. The C6 has a single 2.4 GHz front end shared by
+ * all three radios, and Espressif's coexistence matrix lists the pairs we would
+ * want as unsupported or unstable. Selecting a radio stops the other. */
+typedef enum { SN_RADIO_154 = 0, SN_RADIO_WIFI = 1 } sn_radio_t;
+static sn_radio_t s_radio = SN_RADIO_154;
+
+/* A busy 802.11 channel produces roughly 25x what the USB link carries, so
+ * truncation is mandatory rather than a tuning choice. What is discarded is
+ * encrypted payload; the headers worth having are at the front. */
+#define SN_WIFI_SNAPLEN 256
 #endif
 
 #if SN_MODE == 1
@@ -67,8 +79,30 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         return SN_STATUS_OK;
 
 #if SN_MODE == SN_MODE_CAPTURE
+    case SN_CMD_SET_RADIO:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        /* Stop whichever is running before switching; they share the radio. */
+        sn_radio154_stop();
+        sn_radio80211_stop();
+        s_radio = (value == 1u) ? SN_RADIO_WIFI : SN_RADIO_154;
+        *out_value = value;
+        return SN_STATUS_OK;
+
     case SN_CMD_SET_CHANNEL:
     case SN_CMD_START:
+        if (s_radio == SN_RADIO_WIFI) {
+            if (value < SN_80211_CHANNEL_MIN || value > SN_80211_CHANNEL_MAX) {
+                return SN_STATUS_BAD_VALUE;
+            }
+            if (sn_radio80211_start((uint8_t)value, SN_WIFI_SNAPLEN,
+                                    SN_80211_FILTER_ALL) != ESP_OK) {
+                return SN_STATUS_FAILED;
+            }
+            *out_value = sn_radio80211_channel();
+            return SN_STATUS_OK;
+        }
         if (value < SN_154_CHANNEL_MIN || value > SN_154_CHANNEL_MAX) {
             return SN_STATUS_BAD_VALUE;
         }
@@ -80,6 +114,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
 
     case SN_CMD_STOP:
         sn_radio154_stop();
+        sn_radio80211_stop();
         return SN_STATUS_OK;
 
     case SN_CMD_ENERGY_DETECT: {
@@ -104,6 +139,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_START:
     case SN_CMD_STOP:
     case SN_CMD_ENERGY_DETECT:
+    case SN_CMD_SET_RADIO:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -177,6 +213,17 @@ void app_main(void)
         sn_radio154_get_stats(&combined.radio);
         sn_usb_link_send(SN_FRAME_STATS, (const uint8_t *)&combined,
                          sizeof(combined));
+
+        if (s_radio == SN_RADIO_WIFI) {
+            sn_80211_stats_t w;
+            sn_radio80211_get_stats(&w);
+            ESP_LOGI(TAG, "wifi: cb=%u misc=%u zerolen=%u sent=%u trunc=%u "
+                          "qfull=%u rej=%u",
+                     (unsigned)w.callbacks, (unsigned)w.skipped_misc,
+                     (unsigned)w.skipped_zero_len, (unsigned)w.frames_captured,
+                     (unsigned)w.frames_truncated, (unsigned)w.isr_queue_full,
+                     (unsigned)w.link_rejected);
+        }
 
         if (combined.radio.isr_queue_full || combined.radio.link_rejected) {
             ESP_LOGW(TAG, "dropped frames: isr=%u link=%u",
