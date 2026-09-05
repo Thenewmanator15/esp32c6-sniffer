@@ -1,4 +1,5 @@
 #include "board.h"
+#include "control.h"
 #include "frame.h"
 #include "log_sink.h"
 #include "usb_link.h"
@@ -17,7 +18,6 @@
  * They cannot share a build: the benchmark saturates the link, which would
  * swamp the conformance burst. Override from the command line with
  *   idf.py build -DSN_MODE=1
- * or edit the default here.
  */
 #ifndef SN_MODE
 #define SN_MODE 0
@@ -30,7 +30,44 @@
 #endif
 #endif
 
+/* Reported by GET_INFO so the host can check it is talking to what it expects. */
+#define SN_FIRMWARE_VERSION 1u
+
 static const char *TAG = "main";
+
+static sn_antenna_t s_antenna = SN_ANTENNA_INTERNAL;
+
+static sn_status_t on_command(sn_command_t cmd, uint32_t value,
+                              uint32_t *out_value)
+{
+    switch (cmd) {
+    case SN_CMD_GET_INFO:
+        *out_value = SN_FIRMWARE_VERSION;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_ANTENNA:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        s_antenna = (value == 1u) ? SN_ANTENNA_EXTERNAL : SN_ANTENNA_INTERNAL;
+        if (sn_board_init(s_antenna) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_CHANNEL:
+    case SN_CMD_START:
+    case SN_CMD_STOP:
+        /* Arrive with the 802.15.4 radio, which is not built yet. Reporting
+         * failure is honest; silently accepting would let the host believe a
+         * channel had been set. */
+        return SN_STATUS_FAILED;
+
+    default:
+        return SN_STATUS_UNKNOWN_COMMAND;
+    }
+}
 
 /* Mirrors host/tests/vectors/golden.json in payload and type. Sequence numbers
  * are assigned by the link, so the host test compares payloads and types
@@ -56,9 +93,12 @@ static void emit_conformance_vectors(void)
 
 void app_main(void)
 {
-    ESP_ERROR_CHECK(sn_board_init(SN_ANTENNA_INTERNAL));
+    ESP_ERROR_CHECK(sn_board_init(s_antenna));
     ESP_ERROR_CHECK(sn_usb_link_init());
     sn_log_sink_install();
+
+    sn_control_set_handler(on_command);
+    ESP_ERROR_CHECK(sn_control_start());
 
     ESP_LOGI(TAG, "link up, mode=%d", SN_MODE);
 
