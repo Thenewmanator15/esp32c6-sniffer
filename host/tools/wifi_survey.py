@@ -12,10 +12,13 @@ which channel is worth sitting on. The 802.15.4 overlap is printed alongside,
 since one Wi-Fi network covers roughly four 802.15.4 channels and is the usual
 reason a mesh performs badly.
 
-A note specific to this board: its Wi-Fi receiver goes deaf for minutes at a
-time (see docs/2026-09-05-wifi-investigation-postmortem.md). An empty result is
-therefore not evidence of an empty band. Use --repeat, and believe a zero only
-after several attempts.
+A note specific to this board: its Wi-Fi receiver latches deaf, for anything
+from minutes to hours (see docs/2026-09-05-wifi-investigation-postmortem.md).
+An empty result is therefore not evidence of an empty band.
+
+--recover fixes it. It power-gates the radio domain with a deep-sleep reset,
+which is the only thing found to clear the latch: no driver rebuild, reflash or
+erase-flash ever has. Measured going in: 0 access points before, 12 after.
 """
 
 from __future__ import annotations
@@ -84,12 +87,50 @@ def scan_once(ser: serial.Serial, parser: StreamParser,
     raise TimeoutError("no scan reply within the timeout")
 
 
+def recover_and_rescan(port: str) -> list:
+    """Power-gates the radio domain, waits for the board, and scans again.
+
+    A deep-sleep reset is the only thing found to clear this board's latched
+    deafness. It drops the USB link and the device re-enumerates, so the port
+    is reopened rather than reused.
+    """
+    ser = serial.Serial(port, 115200, timeout=0.05)
+    ser.write(encode_command(Command.RADIO_POWER_CYCLE, 0, radio=Radio.WIFI))
+    ser.flush()
+    time.sleep(2.0)
+    ser.close()
+
+    deadline = time.monotonic() + 30.0
+    last = None
+    ser = None
+    while time.monotonic() < deadline:
+        try:
+            ser = serial.Serial(port, 115200, timeout=0.05)
+            break
+        except (OSError, serial.SerialException) as exc:
+            last = exc
+            time.sleep(0.5)
+    if ser is None:
+        raise RuntimeError(f"board did not come back on {port}: {last}")
+
+    try:
+        ser.reset_input_buffer()
+        time.sleep(2.0)
+        return scan_once(ser, StreamParser())
+    finally:
+        ser.close()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", default="COM3")
     ap.add_argument("--repeat", type=int, default=1,
                     help="scan this many times and merge, keeping the "
                          "strongest sighting of each access point")
+    ap.add_argument("--recover", action="store_true",
+                    help="if nothing is found, power-cycle the radio domain "
+                         "and scan once more. Resets the board, so do not use "
+                         "it while a capture is running")
     args = ap.parse_args()
 
     ser = serial.Serial(args.port, 115200, timeout=0.05)
@@ -116,13 +157,23 @@ def main() -> int:
     finally:
         ser.close()
 
+    if not best and args.recover:
+        print()
+        print("Nothing found. Power-cycling the radio domain and retrying.")
+        recovered = recover_and_rescan(args.port)
+        best = {record.bssid: record for record in recovered}
+        if best:
+            print("The power cycle cleared it: the receiver was latched deaf.")
+
     if not best:
         print("\nNo access points found.")
-        if empty_scans:
-            print("On this board that is not proof of an empty band: the "
-                  "Wi-Fi receiver goes deaf for minutes at a time.")
-            print("Try again, or run tools/spectrum.py, which uses the "
-                  "802.15.4 radio and keeps working when Wi-Fi does not.")
+        print("On this board that is not proof of an empty band: the Wi-Fi "
+              "receiver latches deaf for minutes to hours.")
+        if not args.recover:
+            print("Try --recover, which power-cycles the radio domain and is "
+                  "the only thing known to clear it.")
+        print("tools/spectrum.py uses the 802.15.4 radio and keeps working "
+              "when Wi-Fi does not, so it is a useful second opinion.")
         return 0
 
     rows = sorted(best.values(), key=lambda a: -a.rssi_dbm)

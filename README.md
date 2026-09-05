@@ -27,11 +27,17 @@ it too -- 9, 8, 8 access points, then zero on five consecutive boots -- while
 802.15.4 on the same antenna never fails. A capture that returns nothing is
 worth retrying before it means anything.
 
-Nothing in software clears it: not a driver rebuild, not a reflash, not a full
-`erase-flash`. Note that every reset tried so far has been a soft one, which
-does not remove power from the RF section, so **unplugging the board for a few
-seconds is the first thing to try** and has not yet been tested. Not
-characterised, so nothing has been reported upstream.
+**The fix is a power cycle, and it is one command:**
+
+```powershell
+.\.venv\Scripts\python.exe tools\wifi_survey.py --port COM3 --recover
+```
+
+It is a latch in a power domain. No soft reset clears it -- not a driver
+rebuild, not a reflash, not a full `erase-flash` -- because none of those
+removes power from the RF section. A deep-sleep reset does power-gate it, and
+does: measured at the end of an hour-long deaf period, 0 access points before
+and 12 after. What sets the latch is still unknown.
 
 Getting here took several confident wrong conclusions, including "the radio is
 faulty, claim warranty". Written up in

@@ -453,7 +453,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             extra += (f", receiver rebuilt {s.fw_recoveries}x "
                                       f"after going deaf")
                         if s.fw_stalled_seconds:
-                            extra += f", no frames for {s.fw_stalled_seconds}s"
+                            extra += (f", no frames for {s.fw_stalled_seconds}s"
+                                      f" -- if this persists the receiver has "
+                                      f"latched deaf; stop the capture and run "
+                                      f"tools/wifi_survey.py --recover")
                         if s.fw_frames_truncated:
                             # Not loss: the snapshot length is deliberate, and
                             # what it cuts is encrypted payload.

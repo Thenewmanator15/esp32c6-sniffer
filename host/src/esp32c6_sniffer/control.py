@@ -50,6 +50,7 @@ class Command(IntEnum):
     WIFI_SCAN = 8
     SET_SNAPLEN = 9
     SET_FILTER = 10
+    RADIO_POWER_CYCLE = 11
 
 
 class FrameFilter(IntFlag):

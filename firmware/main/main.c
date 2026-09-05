@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_sleep.h"
 #include "nvs_flash.h"
 
 /* Build-time mode.
@@ -66,6 +67,10 @@ static sn_radio_t s_radio = SN_RADIO_154;
 static const char *TAG = "main";
 
 static sn_antenna_t s_antenna = SN_ANTENNA_INTERNAL;
+
+/* Set by SN_CMD_RADIO_POWER_CYCLE and acted on by the main loop, so the reply
+ * reaches the host before the chip goes down. */
+static volatile bool s_power_cycle_requested;
 
 static sn_status_t on_command(sn_command_t cmd, uint32_t value,
                               uint32_t *out_value)
@@ -140,6 +145,28 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         *out_value = value;
         return SN_STATUS_OK;
 
+    case SN_CMD_RADIO_POWER_CYCLE:
+        /* The strongest reset available without touching the hardware.
+         *
+         * Every reset used while chasing this board's deaf Wi-Fi receiver has
+         * been a soft one: esptool's reset line, or a reflash. Neither removes
+         * power from the radio, and neither has ever cleared the fault. Deep
+         * sleep does power-gate the modem and RF domains and returns through a
+         * full chip reset, so it is a real test of whether the fault is a latch
+         * in a domain that can be power-cycled.
+         *
+         * It is NOT equivalent to unplugging: the chip's supply rail stays
+         * energised and the board's RF switch keeps its own. If deep sleep
+         * does not clear it but a physical unplug does, the fault lives outside
+         * the gated domains.
+         *
+         * Deliberately a command rather than part of the automatic stall
+         * recovery, because it drops the USB link and would end a running
+         * capture without warning. */
+        s_power_cycle_requested = true;
+        *out_value = 1;
+        return SN_STATUS_OK;
+
     case SN_CMD_WIFI_SCAN: {
         uint16_t aps = 0;
         /* One 2.4 GHz front end, shared. A scan issued without a preceding
@@ -178,6 +205,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_WIFI_SCAN:
     case SN_CMD_SET_SNAPLEN:
     case SN_CMD_SET_FILTER:
+    case SN_CMD_RADIO_POWER_CYCLE:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -254,6 +282,17 @@ void app_main(void)
      * data when nothing drains it. */
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+        if (s_power_cycle_requested) {
+            ESP_LOGW(TAG, "power-cycling the radio domain via deep sleep");
+            /* Let the reply and log drain: the link is a ring the sender task
+             * empties, and deep sleep discards whatever is still queued. */
+            vTaskDelay(pdMS_TO_TICKS(300));
+            sn_radio154_stop();
+            sn_radio80211_stop();
+            esp_sleep_enable_timer_wakeup(1000000ull); /* one second */
+            esp_deep_sleep_start();                    /* does not return */
+        }
 
         /* Publish both counter sets once a second so the host can prove a
          * capture was lossless rather than assume it. Nothing below us

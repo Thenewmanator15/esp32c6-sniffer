@@ -22,6 +22,9 @@ typedef enum {
     SN_CMD_WIFI_SCAN = 8,
     SN_CMD_SET_SNAPLEN = 9,
     SN_CMD_SET_FILTER = 10,
+    /* Power-gates the radio domain by way of a deep-sleep reset. See the
+     * handler in main.c for why this exists and what it does not prove. */
+    SN_CMD_RADIO_POWER_CYCLE = 11,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

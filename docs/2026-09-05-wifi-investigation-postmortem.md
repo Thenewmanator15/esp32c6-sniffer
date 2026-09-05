@@ -1,11 +1,12 @@
 # Post-mortem: "the Wi-Fi radio is dead" — it was not, twice over
 
-**Outcome: Wi-Fi works, and the receiver is also intermittently deaf.**
-Promiscuous capture on channel 6 yields ~50 frames/s, management and data,
-RSSI −50 to −96 dBm, no drops, decoding correctly in Wireshark. Two real
-defects were ours and are fixed. Separately, and not our doing, the Wi-Fi
-receiver stops hearing anything for minutes at a time — see "The intermittency"
-below, which is the reason single readings kept contradicting each other.
+**Outcome: Wi-Fi works, and the deafness has a root cause and a one-command
+fix.** Promiscuous capture on channel 6 yields ~55 frames/s, management and
+data, RSSI −50 to −96 dBm, correct rates and modulation, 6 malformed frames in
+1100. Two real defects were ours and are fixed. The third problem was not ours:
+the receiver latches deaf, and **only power-gating the RF domain clears it** —
+0 access points before a deep-sleep reset, 12 after. See "Root cause" below.
+That latch is why single readings kept contradicting each other all day.
 
 This is kept because the investigation produced several confident wrong
 conclusions in a row, and the pattern that produced them is worth not
@@ -71,6 +72,7 @@ minutes, across power cycles, with **no software change between states**:
 | Espressif's `wifi/scan`, unmodified binary | 9, 8, 8 APs — then 0, 0, 0, 0, 0 on five consecutive boots |
 | our firmware, same binary | 665 frames one minute, 0 the next |
 | 802.15.4, same board, same antenna, interleaved | worked **every** time |
+| after a deep-sleep power cycle | **0 access points before, 12 after** |
 
 It is not the band going quiet: during a failing stretch the host still saw a
 strong AP on channel 6 at 82 % signal, which is the channel being captured. It
@@ -79,21 +81,45 @@ which is explicitly powered and logged, and which 802.15.4 shares. It is not
 NVS calibration: a full `erase-flash` does not clear it, and both a
 freshly-calibrated and a stored-calibration boot appear in both states.
 
+### Root cause: it is a latch in a power domain
+
+**Found, and it is fixable in software.** A deep-sleep reset power-gates the
+modem and RF domains and comes back through a full chip reset. Measured
+immediately after nine failed surveys across five minutes, at the end of a deaf
+period more than an hour long:
+
+```
+before power cycle: access points = 0
+sending RADIO_POWER_CYCLE (deep sleep, 1 s)...
+after power cycle:  access points = 12
+```
+
+That explains everything that did not add up. Every reset tried during the
+investigation was a **soft** one -- esptool's reset line, a reflash, a full
+`erase-flash`, `esp_wifi_deinit()` and rebuild -- and none of them removes power
+from the RF domain. The fault was never in flash, never in NVS calibration,
+never in the driver, and never in our code. It sat in analog state that only a
+power-gate clears.
+
+It also explains why the "recoveries" counter climbed while frames stayed at
+zero: rebuilding the driver cannot clear a latch below it.
+
+The workaround is `SN_CMD_RADIO_POWER_CYCLE`, exposed as
+`tools/wifi_survey.py --recover`. It is a command rather than part of the
+automatic stall recovery because it resets the board, which would end a running
+Wireshark capture without warning; the capture log says what to run instead.
+
+Still unknown: what sets the latch. Continuous hours of powered operation is
+the obvious suspect and matches when the deaf stretches got longer, but that is
+a hypothesis, not a measurement. Characterising it properly needs a scripted
+trial that records uptime, temperature and time-to-deafness.
+
 **The stretches got longer.** Early on it alternated within minutes, which is
 where the "minutes at a time" description came from. Later the same day it went
 deaf and stayed deaf for over an hour: nine surveys across five minutes found
 nothing while the host saw seven 2.4 GHz access points, and that was at the end
 of a long unbroken deaf period, not the start of one. So the honest range is
 minutes to hours, and the earlier wording understated it.
-
-**One thing has never been tried: removing power.** Every reset in this
-investigation has been a soft one -- esptool's `--after hard-reset` toggles the
-chip's reset line over USB, and a reflash does the same. Neither drops the
-supply to the RF analog domain. The board has also been powered continuously
-for many hours, so a thermal or analog-domain latch is consistent with what has
-been seen and would not be cleared by anything tried so far. Physically
-unplugging the USB-C for a few seconds is the obvious next experiment and costs
-nothing.
 
 Two more things it is not, established by the recovery code added afterwards:
 a **full driver teardown and rebuild does not clear it** (three consecutive
@@ -102,10 +128,10 @@ rebuilds left the callback count at exactly 0), and neither does a full
 kept anyway, with backoff, because it fixes an ordinary driver-level stall and
 because the attempt is what makes the condition visible in the counters.
 
-What has not been done is characterising it properly — a scripted N-boot trial
-recording calibration mode, temperature and outcome, rather than the ad-hoc
-runs that produced this table. Until that exists, "intermittent" is the honest
-description and nothing should be reported upstream.
+What has still not been done is characterising what *sets* the latch — a
+scripted trial recording uptime, temperature and time-to-deafness, rather than
+the ad-hoc runs that produced this table. The clearing mechanism is now known;
+the triggering one is not, so nothing has been reported upstream yet.
 
 **Practical consequence:** any Wi-Fi test must be repeated before it means
 anything, and no offline test may depend on live Wi-Fi traffic. The
