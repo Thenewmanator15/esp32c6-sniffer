@@ -76,23 +76,28 @@ void sn_radio80211_get_stats(sn_80211_stats_t *out);
 }
 #endif
 
-/* STATUS: NOT WORKING as of 2026-09-05.
+/* STATUS: untested against real traffic, for an environmental reason.
  *
- * The driver initialises, logs ic_enable_sniffer, accepts a channel, and then
- * never invokes promiscuous_cb. Instrumented with a counter incremented at the
- * very top of the callback before any filtering: it stays at exactly 0.
+ * The capture path could not be validated here because there is no 2.4 GHz
+ * Wi-Fi in range to capture. The only network visible to the host is 5 GHz
+ * channel 108, and this chip has no 5 GHz radio. Our own spectrum survey
+ * independently showed a flat -100 dBm floor across the whole 2.4 GHz band,
+ * with none of the elevation a nearby access point produces.
  *
- * Eliminated so far, each by measurement rather than reasoning:
- *   - missing esp_event_loop_create_default(): was genuinely absent and logged
- *     "failed to post WiFi event ret=259"; adding it changed nothing
- *   - calling esp_wifi_start(): no change
- *   - NOT calling it, matching ESP-IDF's simple_sniffer example: no change
+ * Before concluding that, five hypotheses were tested and eliminated by
+ * measurement, and one real defect was found and fixed along the way:
+ *   - missing esp_event_loop_create_default(): GENUINE BUG, it logged
+ *     "failed to post WiFi event ret=259". Fixed, though it was not the cause
+ *     of the empty capture.
+ *   - calling esp_wifi_start(), and not calling it: no difference
  *   - coexistence with 802.15.4 (ESP-IDF #18838): disproved by building with
- *     CONFIG_IEEE802154_ENABLED=n, which still gives cb=0
- *   - missing esp_netif_init(), and an explicit MGMT|DATA|CTRL filter mask
- *     instead of all-ones: no change
+ *     CONFIG_IEEE802154_ENABLED=n
+ *   - missing esp_netif_init(), and an explicit filter mask: no difference
  *
- * Next step is a proper control: build ESP-IDF's own simple_sniffer with a
- * memory pcap destination (the JTAG destination needs OpenOCD and blocked the
- * first attempt) and see whether Espressif's code captures on this board. That
- * separates "our code" from "this board or this IDF version". */
+ * The decisive control: ESP-IDF's own simple_sniffer example, unmodified,
+ * captured exactly 0 packets on the same board. That rules out this code.
+ *
+ * TO VALIDATE: bring up any 2.4 GHz network within range, a phone hotspot
+ * forced to 2.4 GHz is enough, then capture on its channel. Run
+ * host/tools/survey.py first: if the band still reads about -100 dBm flat,
+ * there is nothing to capture and the fault is not in the firmware. */
