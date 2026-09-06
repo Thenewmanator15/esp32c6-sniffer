@@ -28,7 +28,7 @@ use it for three things:
   is coherent for us specifically because we emit IEEE802_15_4_TAP, where the
   channel is a per-packet field, so a retuned capture stays self-describing.
   A sniffer whose channel lived in a file-level header could not do this.
-* An antenna toggle, which makes the measured +6.0 dB difference between the
+* An antenna toggle, which makes the measured difference between the
   onboard and external antennas a live A/B on the same traffic rather than a
   comparison across two runs where the traffic itself has changed.
 * A log window showing frame counts and the board's own drop counters, so
@@ -333,7 +333,7 @@ def print_interfaces(selected: str | None = None) -> None:
                       f"{{display={band}{channel_label(name, channel)}}}")
     print(f"control {{number={CTRL_ARG_ANTENNA}}}{{type=boolean}}"
           f"{{display=External antenna}}{{default=false}}"
-          f"{{tooltip=Switch antenna without restarting. Measured +6.0 dB for "
+          f"{{tooltip=Switch antenna without restarting. Measured +13 to +14 dB "
           f"external on this board, so this is a live A/B on the same traffic}}")
     print(f"control {{number={CTRL_ARG_LOGGER}}}{{type=button}}{{role=logger}}"
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
@@ -429,7 +429,7 @@ def print_config(interface: str, reload_option: str | None = None,
                   f"{scanned.get(channel, '')}}}")
     print("arg {number=2}{call=--antenna}{display=Antenna}"
           "{type=selector}{default=0}"
-          "{tooltip=External needs a U.FL antenna fitted. Measured +6.0 dB "
+          "{tooltip=External needs a U.FL antenna fitted. Measured +13 to +14 dB "
           "over the onboard one on this board}")
     print("value {arg=2}{value=0}{display=Onboard ceramic}")
     print("value {arg=2}{value=1}{display=External U.FL}")

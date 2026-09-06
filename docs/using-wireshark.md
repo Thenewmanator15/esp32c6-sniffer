@@ -64,7 +64,7 @@ Click the **gear icon** beside an interface before starting, or use
 | Option | What it does |
 |---|---|
 | **Serial port** | Filled in for you. The board is found by its USB id (`303A:1001`), so this is right even if it is not COM3. Change it only if you have more than one board. |
-| **Antenna** | Onboard ceramic, or external U.FL if you have fitted one. Measured **+6.0 dB** on this board. |
+| **Antenna** | Onboard ceramic, or external U.FL if you have fitted one. Measured **+13 to +14 dB** on this board, across two runs. |
 
 ### IEEE 802.15.4
 
@@ -105,7 +105,7 @@ Turn it on with **View → Interface Toolbars → ESP32-C6**. It gives you:
 
 - a **channel selector that retunes the radio mid-capture**, with no restart
   and no new file;
-- an **antenna toggle**, making the +6 dB difference a live A/B on the same
+- an **antenna toggle**, making the difference a live A/B on the same
   traffic rather than a comparison across two runs;
 - a **log window** showing frame counts and the board's own drop counters.
 

@@ -26,7 +26,7 @@ when nothing arrives.
 
 | | |
 |---|---|
-| Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +6.0 dB better. |
+| Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +13 to +14 dB better. |
 | Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
 | Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards. |
 | Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. |

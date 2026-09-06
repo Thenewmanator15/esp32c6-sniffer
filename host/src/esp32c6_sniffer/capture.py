@@ -558,7 +558,7 @@ class CaptureSession:
         """Switch antenna mid-capture, from another thread.
 
         Useful as a live A/B on the same traffic: the external antenna measured
-        +6.0 dB over the onboard one on this board, and toggling during a
+        +13 to +14 dB over the onboard one on this board, and toggling during a
         capture shows that on frames you can compare directly, rather than
         across two separate runs where the traffic itself has changed.
         """
