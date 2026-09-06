@@ -344,3 +344,35 @@ def test_ble_channel_selection_is_rejected():
     )
     # It must not silently accept a channel it cannot honour.
     assert r.returncode != 0
+
+
+def test_ble_toolbar_has_no_empty_channel_control():
+    """BLE has no channel: the controller rotates the three advertising
+    channels itself. Declaring the control anyway gave a BLE capture an empty
+    Channel dropdown in the toolbar, contradicting the refusal the config path
+    already makes."""
+    out = _run("--extcap-interfaces", "--extcap-interface", BLE_INTERFACE)
+    assert "display=Channel}" not in out
+    assert "value {control=0}" not in out
+
+
+def test_the_other_radios_still_offer_channels():
+    for interface, count in ((INTERFACE, 16), (WIFI_INTERFACE, 14)):
+        out = _run("--extcap-interfaces", "--extcap-interface", interface)
+        assert "display=Channel}" in out, interface
+        assert out.count("value {control=0}") == count, interface
+
+
+def test_a_capture_filter_is_refused_rather_than_ignored():
+    """Wireshark shows a capture-filter box for extcap interfaces and passes
+    whatever is typed. It used to be swallowed, so the capture ran unfiltered
+    and looked fine -- the worst way to handle an instruction."""
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture", "--fifo", "unused",
+         "--extcap-interface", BLE_INTERFACE,
+         "--extcap-capture-filter", "type mgt"],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    assert "capture filter cannot be applied" in result.stderr
+    # It must say what to use instead, not merely refuse.
+    assert "Frame types" in result.stderr or "display filter" in result.stderr

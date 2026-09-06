@@ -271,22 +271,27 @@ def print_interfaces(selected: str | None = None) -> None:
     for name, spec in INTERFACES.items():
         print(f"interface {{value={name}}}{{display={spec['display']}}}"
               f"{{control={CONTROL_BITS}}}")
-    print(f"control {{number={CTRL_ARG_CHANNEL}}}{{type=selector}}"
-          f"{{display=Channel}}"
-          f"{{tooltip=Retunes the radio without restarting the capture}}")
     # When Wireshark names the interface, offer only that radio's channels.
     # Otherwise offer both, which is why the values are prefixed: 11 to 14
     # exist in both radios and mean different frequencies.
     shown = [selected] if selected in INTERFACES else list(INTERFACES)
-    for name in shown:
-        spec = INTERFACES[name]
-        if spec["min"] is None:
-            continue        # nothing to tune on this radio
-        band = "" if len(shown) == 1 else f"{spec['band']} "
-        for channel in range(spec["min"], spec["max"] + 1):
-            print(f"value {{control={CTRL_ARG_CHANNEL}}}"
-                  f"{{value={channel_token(name, channel)}}}"
-                  f"{{display={band}{channel_label(name, channel)}}}")
+    tunable = [name for name in shown if INTERFACES[name]["min"] is not None]
+
+    # Declared only when there is something to put in it. BLE has no channel --
+    # the controller rotates the three advertising channels itself -- and
+    # declaring the control anyway gave a BLE capture an empty Channel dropdown
+    # in the toolbar, contradicting the refusal the config path already makes.
+    if tunable:
+        print(f"control {{number={CTRL_ARG_CHANNEL}}}{{type=selector}}"
+              f"{{display=Channel}}"
+              f"{{tooltip=Retunes the radio without restarting the capture}}")
+        for name in tunable:
+            spec = INTERFACES[name]
+            band = "" if len(tunable) == 1 else f"{spec['band']} "
+            for channel in range(spec["min"], spec["max"] + 1):
+                print(f"value {{control={CTRL_ARG_CHANNEL}}}"
+                      f"{{value={channel_token(name, channel)}}}"
+                      f"{{display={band}{channel_label(name, channel)}}}")
     print(f"control {{number={CTRL_ARG_ANTENNA}}}{{type=boolean}}"
           f"{{display=External antenna}}{{default=false}}"
           f"{{tooltip=Switch antenna without restarting. Measured +6.0 dB for "
@@ -843,7 +848,20 @@ def main(argv: list[str] | None = None) -> int:
                         default=0)
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
-    args, _unknown = parser.parse_known_args(argv)
+    args, unknown = parser.parse_known_args(argv)
+
+    # Wireshark shows a capture-filter box for extcap interfaces and passes
+    # whatever is typed there. parse_known_args swallowed it, so a filter was
+    # accepted and then silently ignored -- the capture ran unfiltered and
+    # looked fine, which is the worst way to handle an instruction.
+    if "--extcap-capture-filter" in unknown:
+        sys.stderr.write(
+            "a capture filter cannot be applied here: filtering happens on "
+            "the board, before the USB link, and it does not speak BPF. Use "
+            "the interface options instead -- Frame types and Channel for "
+            "Wi-Fi, Channel for 802.15.4 -- or filter after capture with a "
+            "display filter." + os.linesep)
+        return 1
     if args.port is None:
         args.port = default_port()
 
