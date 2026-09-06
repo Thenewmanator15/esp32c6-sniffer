@@ -17,6 +17,11 @@ networks and devices you own or are authorised to test.
 [What it will not do](#honest-capability-ceilings) · [Testing](#testing) ·
 [Licence](#licence)
 
+**New here?** The full walkthrough is
+[docs/using-wireshark.md](docs/using-wireshark.md): first capture, every
+option and when to change it, the toolbar, reading the results, and what to do
+when nothing arrives.
+
 ## What you need
 
 | | |
@@ -107,6 +112,10 @@ channels 11–14 exist in both radios and mean different frequencies.
 status bar and choose *ESP32-C6 Sniffer*. Without it frames still dissect
 correctly, but channel and signal strength are only visible by clicking into
 each one.
+
+A task-by-task walkthrough of all of this, including every option and what
+to do when a capture comes back empty, is in
+**[docs/using-wireshark.md](docs/using-wireshark.md)**.
 
 `tshark` works too, with no toolbar:
 
