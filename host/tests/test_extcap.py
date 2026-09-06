@@ -235,11 +235,27 @@ def test_wifi_offers_channel_hopping():
 
 def test_802154_does_not_offer_wifi_only_options():
     """Offering a control the board would silently ignore is worse than not
-    offering it."""
+    offering it.
+
+    Channel hopping used to be on this list and no longer is: it works on both
+    radios now, and 802.15.4 is the one that needs it, having sixteen channels
+    and nothing that announces itself. Verified live -- a 40 s hopping capture
+    visited channels 11, 15 and 25 in one file.
+    """
     out = _run("--extcap-config", "--extcap-interface", INTERFACE)
     assert "{call=--snaplen}" not in out
     assert "{call=--filter}" not in out
-    assert "{call=--hop}" not in out
+    # Genuinely Wi-Fi-only: an 802.11 concept with no 802.15.4 counterpart.
+    assert "{call=--bandwidth}" not in out
+    assert "{call=--drop-acks}" not in out
+
+
+def test_802154_offers_channel_hopping():
+    out = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    assert "{call=--hop}" in out
+    assert "{call=--hop-dwell}" in out
+    # Its own channel numbers, not Wi-Fi's.
+    assert "{value=1}{display=11, 15, 20, 25 (Zigbee preferred)}" in out
 
 
 def test_out_of_range_snaplen_is_rejected():

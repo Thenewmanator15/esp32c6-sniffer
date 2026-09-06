@@ -97,10 +97,24 @@ WIFI_MAX_SNAPLEN = 512
 HOP_DWELL_MIN_MS = 100
 HOP_DWELL_MAX_MS = 10000
 
+#: Per radio, because the channel numbers mean different frequencies and
+#: the useful subsets are different. 802.15.4 got none of this until now, and
+#: it is the radio that needs it most: sixteen channels, no beacons to sweep
+#: for, and no way to tell which one a network is on without looking.
 HOP_SETS = {
-    0: None,
-    1: (1, 6, 11),
-    2: tuple(range(1, 14)),
+    WIFI_INTERFACE: {
+        0: None,
+        1: (1, 6, 11),
+        2: tuple(range(1, 14)),
+    },
+    INTERFACE: {
+        0: None,
+        # The four Zigbee "preferred" channels, which is where a Zigbee
+        # network almost always sits, so this finds one in a quarter of the
+        # time a full sweep takes.
+        1: (11, 15, 20, 25),
+        2: tuple(range(11, 27)),
+    },
 }
 
 DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
@@ -441,6 +455,28 @@ def print_config(interface: str, reload_option: str | None = None,
               "decrypts on any machine without the recipient pasting a key "
               "into their own Wireshark. One key per line, 32 hex digits, "
               "optionally prefixed nwk or aps. For a network you own}")
+        # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
+        # 100 ms on a handful of channels, so a survey finds the traffic in
+        # seconds. Here there are sixteen channels, nothing announces itself,
+        # and a quiet capture is indistinguishable from the wrong channel:
+        # measured on this bench, channel 11 gave 2 frames in 15 s while 25
+        # gave 135.
+        print("arg {number=5}{call=--hop}{display=Channel hop}"
+              "{type=selector}{default=0}"
+              "{tooltip=Sweeps channels during the capture. The channel is a "
+              "per-frame field in this link type, so a hopped capture stays "
+              "self-describing. You will miss whatever lands while the radio "
+              "is elsewhere}")
+        print("value {arg=5}{value=0}{display=Off, stay on one channel}")
+        print("value {arg=5}{value=1}"
+              "{display=11, 15, 20, 25 (Zigbee preferred)}")
+        print("value {arg=5}{value=2}{display=All channels, 11-26}")
+        print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
+              f"{{type=integer}}{{range={HOP_DWELL_MIN_MS},{HOP_DWELL_MAX_MS}}}"
+              f"{{default=2000}}"
+              "{tooltip=Time on each channel. Longer than the Wi-Fi default: "
+              "there are no beacons to catch, so the dwell has to be long "
+              "enough for ordinary traffic to happen}")
 
     if interface == BLE_INTERFACE:
         print("arg {number=3}{call=--ble-interval}{display=Scan interval (ms)}"
@@ -482,7 +518,7 @@ def print_config(interface: str, reload_option: str | None = None,
     print("arg {number=5}{call=--hop}{display=Channel hop}"
           "{type=selector}{default=0}"
           "{tooltip=Sweeps channels during the capture. Each frame carries its "
-          "own channel in radiotap, so a hopped capture stays self-describing. "
+          "own channel, so a hopped capture stays self-describing. "
           "You will miss whatever lands while the radio is elsewhere}")
     print("value {arg=5}{value=0}{display=Off, stay on one channel}")
     print("value {arg=5}{value=1}{display=1, 6, 11 (non-overlapping)}")
@@ -634,7 +670,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     session_filter = (
         FrameFilter(frame_filter) if wifi and frame_filter else None
     )
-    hop_channels = HOP_SETS.get(hop) if wifi else None
+    hop_channels = HOP_SETS.get(interface, {}).get(hop)
     session_bandwidth = Bandwidth(bandwidth) if wifi else None
     session_ctrl = CtrlFilter.NO_ACK if (wifi and drop_acks) else None
 
@@ -1067,8 +1103,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"BLE PHY selection {args.ble_phys} is not one of 0 (legacy), "
                 f"1 (1M), 4 (Coded) or 5 (both)" + os.linesep)
             return 1
-        if args.hop not in HOP_SETS:
-            sys.stderr.write(f"unknown hop set {args.hop}" + os.linesep)
+        # Validated against THIS radio's sets. BLE has none -- the
+        # controller rotates the advertising channels itself -- so asking for
+        # one there is refused rather than silently ignored.
+        if args.hop not in HOP_SETS.get(interface, {0: None}):
+            sys.stderr.write(
+                f"hop set {args.hop} is not offered for {interface}"
+                + os.linesep)
             return 1
         # A dwell outside this range is not merely odd: a negative one reaches
         # time.sleep() on the hop thread, which raises there and kills hopping
