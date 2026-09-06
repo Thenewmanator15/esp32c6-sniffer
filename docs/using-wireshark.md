@@ -16,10 +16,12 @@ Everything here is passive. The sniffer transmits nothing.
    - **ESP32-C6 Wi-Fi 2.4 GHz (802.11)**
    - **ESP32-C6 Bluetooth LE (advertisements)**
 
-2. Pick the profile: right-click the profile name at the **bottom-right** of
-   the status bar and choose **ESP32-C6 Sniffer**. Without it the capture is
-   dissected correctly but channel and signal strength are only visible by
-   clicking into each frame.
+2. The **ESP32-C6 Sniffer** profile should select itself. Captures from this
+   board name their interface, and the profile carries a filter matching on
+   it. If it does not, right-click the profile name at the **bottom-right** of
+   the status bar and choose it. Without the profile a capture is dissected
+   correctly, but channel and signal strength are only visible by clicking
+   into each frame.
 
 3. Double-click **Bluetooth LE**. It needs no configuration and there is
    almost always something advertising, so it is the quickest proof that
@@ -122,7 +124,29 @@ silently retune to the wrong band.
 
 The profile adds columns that work on all three radios: **Ch**, **RSSI**,
 **LQI** (802.15.4 only), **Rate** (Wi-Fi only) and **Iface**, which matters if
-you ever run two boards at once.
+you ever run two boards at once. On an 802.15.4 capture that turns
+
+```
+1  0.000000  0x5f4a -> Broadcast  ZigBee 79 Command
+```
+
+into
+
+```
+1  0.000000  25  -88 dBm  8  esp32c6-802154  0x5f4a -> Broadcast  ZigBee 79 Command
+```
+
+— channel, signal strength and link quality, which are captured either way but
+otherwise need a click per frame to see.
+
+It also colours the packet list, first match winning. On a 135-frame 802.15.4
+capture the rules accounted for every frame: 68 as Zigbee, 67 as
+acknowledgements, with a separate shade for anything below −95 dBm so a weak
+transmitter shows without reading the column. Encrypted payloads, Thread MLE,
+beacons and MAC commands have their own colours above those.
+
+And it sets one dissector preference: Thread works out its own key sequence
+counter once it has seen enough traffic, so you do not have to supply it.
 
 The filter buttons above the packet list cover the common questions:
 

@@ -76,6 +76,7 @@ Write-Host "Installed. Verify with:" -ForegroundColor Green
 Write-Host '  & "C:\Program Files\Wireshark\tshark.exe" -D'
 Write-Host "Then restart Wireshark; the interface appears on the welcome screen."
 Write-Host ""
-Write-Host "Select the profile: right-click the profile area at the bottom-right"
-Write-Host "of Wireshark's status bar, then choose 'ESP32-C6 Sniffer'."
+Write-Host "The 'ESP32-C6 Sniffer' profile selects itself for captures from this"
+Write-Host "board. If it does not, right-click the profile area at the bottom-right"
+Write-Host "of Wireshark's status bar and choose it."
 Write-Host "Enable the toolbar: View menu, Interface Toolbars."
