@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS "main.c" "board.c" "frame.c" "usb_link.c" "log_sink.c"
          "bench.c" "control.c" "radio154.c" "radio80211.c" "radio_ble.c"
+           "trace.c"
     INCLUDE_DIRS "."
     REQUIRES esp_driver_gpio esp_driver_usb_serial_jtag esp_ringbuf esp_timer ieee802154
              esp_wifi nvs_flash esp_event esp_netif bt

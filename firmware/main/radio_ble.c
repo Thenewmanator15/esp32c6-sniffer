@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "frame.h"
+#include "trace.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -372,7 +373,8 @@ static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
     return send_command(OPCODE_LE_SET_SCAN_ENABLE, enable, sizeof(enable));
 }
 
-esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
+static esp_err_t sn_radio_ble_start_inner(uint16_t interval_ms,
+                                          uint16_t window_ms)
 {
     if (s_running) {
         return ESP_OK;
@@ -438,9 +440,19 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
     return ESP_OK;
 }
 
+esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
+{
+    sn_trace(SN_TRACE_BLE_START_IN, s_running ? 2u : 1u, interval_ms);
+    const esp_err_t err = sn_radio_ble_start_inner(interval_ms, window_ms);
+    sn_trace(SN_TRACE_BLE_START_OUT, s_running ? 2u : 1u, (uint16_t)err);
+    return err;
+}
+
 void sn_radio_ble_stop(void)
 {
+    sn_trace(SN_TRACE_BLE_STOP_IN, s_controller_up ? 1 : 0, 0);
     if (!s_controller_up) {
+        sn_trace(SN_TRACE_BLE_STOP_OUT, 0, 0);
         return;
     }
     if (s_running) {
@@ -466,9 +478,14 @@ void sn_radio_ble_stop(void)
      * controller owning the radio, and the 802.15.4 radio has already shown
      * what that costs: the Wi-Fi receiver stays deaf until the RF domain is
      * power-gated. */
+    sn_trace(SN_TRACE_BLE_STOP_IN, 2, 0);     /* 2 = controller disable */
     esp_bt_controller_disable();
+    sn_trace(SN_TRACE_BLE_STOP_OUT, 2, 0);
+    sn_trace(SN_TRACE_BLE_STOP_IN, 3, 0);     /* 3 = controller deinit */
     esp_bt_controller_deinit();
+    sn_trace(SN_TRACE_BLE_STOP_OUT, 3, 0);
     s_controller_up = false;
+    sn_trace(SN_TRACE_BLE_STOP_OUT, 1, 0);
     ESP_LOGI(TAG, "scan stopped, controller released");
 }
 

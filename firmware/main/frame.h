@@ -44,6 +44,11 @@ typedef enum {
      * logged; the Wi-Fi driver is already configured for RAM storage so it
      * never reaches flash either. */
     SN_FRAME_WIFI_CREDENTIALS = 9,
+
+    /* A batch of sn_trace_entry_t, oldest first. Its own type rather than
+     * a LOG line because it is binary and because formatting it on the
+     * board would perturb the timing it reports. */
+    SN_FRAME_TRACE = 10,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

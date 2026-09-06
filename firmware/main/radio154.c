@@ -5,6 +5,7 @@
 #include "esp_attr.h"
 #include "esp_log.h"
 #include "frame.h"
+#include "trace.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -148,7 +149,7 @@ static void rx_task(void *arg)
     }
 }
 
-esp_err_t sn_radio154_start(uint8_t channel)
+static esp_err_t sn_radio154_start_inner(uint8_t channel)
 {
     if (channel < SN_154_CHANNEL_MIN || channel > SN_154_CHANNEL_MAX) {
         return ESP_ERR_INVALID_ARG;
@@ -226,9 +227,23 @@ esp_err_t sn_radio154_set_channel(uint8_t channel)
     return err;
 }
 
+esp_err_t sn_radio154_start(uint8_t channel)
+{
+    /* arg8 distinguishes a cold start from a retune: the toolbar retunes
+     * mid-capture, and one costing as much as a start would be worth
+     * knowing. arg16 carries the channel. */
+    const uint8_t kind = s_running ? 2u : 1u;
+    sn_trace(SN_TRACE_154_START_IN, kind, channel);
+    const esp_err_t err = sn_radio154_start_inner(channel);
+    sn_trace(SN_TRACE_154_START_OUT, kind, (uint16_t)err);
+    return err;
+}
+
 void sn_radio154_stop(void)
 {
+    sn_trace(SN_TRACE_154_STOP_IN, s_running ? 1 : 0, 0);
     if (!s_running) {
+        sn_trace(SN_TRACE_154_STOP_OUT, 0, 0);
         return;
     }
     /* Sleep before deinit.
@@ -244,6 +259,7 @@ void sn_radio154_stop(void)
     s_running = false;
     /* The front end is handed back, so the next boot has nothing to undo. */
     set_front_end_dirty(false);
+    sn_trace(SN_TRACE_154_STOP_OUT, 1, 0);
     ESP_LOGI(TAG, "capture stopped");
 }
 

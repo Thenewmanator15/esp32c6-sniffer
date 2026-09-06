@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "frame.h"
+#include "trace.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -195,7 +196,7 @@ static void rx_task(void *arg)
  * call. The scan reported zero access points, and zero was read as "the radio
  * heard nothing" rather than "the radio was never switched on". That mistake
  * cost a long detour into imagined hardware faults. */
-static esp_err_t wifi_init_once(void)
+static esp_err_t wifi_init_once_inner(void)
 {
     if (s_wifi_inited) {
         return ESP_OK;
@@ -238,6 +239,19 @@ static esp_err_t wifi_init_once(void)
 
     s_wifi_inited = true;
     return ESP_OK;
+}
+
+static esp_err_t wifi_init_once(void)
+{
+    /* Untraced once it is done: after the first call this is a flag test, and
+     * an event per call would bury the one that matters. */
+    if (s_wifi_inited) {
+        return ESP_OK;
+    }
+    sn_trace(SN_TRACE_WIFI_INIT_IN, 0, 0);
+    const esp_err_t err = wifi_init_once_inner();
+    sn_trace(SN_TRACE_WIFI_INIT_OUT, 0, (uint16_t)err);
+    return err;
 }
 
 /* An explicit union rather than all-ones. ALL is documented as 0xFFFFFFFF, but
@@ -687,8 +701,8 @@ esp_err_t sn_radio80211_set_filter(uint32_t filter_mask)
     return err;
 }
 
-esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
-                              uint32_t filter_mask)
+static esp_err_t sn_radio80211_start_inner(uint8_t channel, uint16_t snaplen,
+                                           uint32_t filter_mask)
 {
     if (channel < SN_80211_CHANNEL_MIN || channel > SN_80211_CHANNEL_MAX) {
         return ESP_ERR_INVALID_ARG;
@@ -781,14 +795,31 @@ esp_err_t sn_radio80211_set_channel(uint8_t channel)
     return err;
 }
 
+esp_err_t sn_radio80211_start(uint8_t channel, uint16_t snaplen,
+                              uint32_t filter_mask)
+{
+    /* arg8: 1 for a cold start, 2 for a retune of a running capture. The
+     * toolbar retunes without restarting, and the two costing the same would
+     * mean the retune is not the cheap operation it is sold as. */
+    const uint8_t kind = s_running ? 2u : 1u;
+    sn_trace(SN_TRACE_WIFI_START_IN, kind, channel);
+    const esp_err_t err = sn_radio80211_start_inner(channel, snaplen,
+                                                    filter_mask);
+    sn_trace(SN_TRACE_WIFI_START_OUT, kind, (uint16_t)err);
+    return err;
+}
+
 void sn_radio80211_stop(void)
 {
+    sn_trace(SN_TRACE_WIFI_STOP_IN, s_running ? 1 : 0, 0);
     if (!s_running) {
+        sn_trace(SN_TRACE_WIFI_STOP_OUT, 0, 0);
         return;
     }
     esp_wifi_set_promiscuous(false);
     s_running = false;
     s_stats.stalled_seconds = 0;
+    sn_trace(SN_TRACE_WIFI_STOP_OUT, 1, 0);
     ESP_LOGI(TAG, "capture stopped");
 }
 

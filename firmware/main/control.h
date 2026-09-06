@@ -46,6 +46,12 @@ typedef enum {
     SN_CMD_WIFI_DISCONNECT = 20,
     SN_CMD_SET_BLE_PERIODIC = 21, /* follow periodic advertising trains */
     SN_CMD_WIFI_TRAFFIC = 22,     /* pull downlink data while associated */
+
+    /* Diagnostics. Off by default: the trace costs a timer read and four
+     * stores per event, which is small but not nothing, and a sniffer
+     * should not pay it unless somebody is looking. */
+    SN_CMD_TRACE_ENABLE = 23,     /* 0 = off, 1 = on and cleared */
+    SN_CMD_TRACE_DUMP = 24,       /* emits SN_FRAME_TRACE, replies count */
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

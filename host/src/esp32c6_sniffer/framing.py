@@ -47,6 +47,8 @@ class FrameType(IntEnum):
     AP_RECORD = 7
     CSI = 8
     WIFI_CREDENTIALS = 9
+    #: A batch of trace entries, oldest first. See esp32c6_sniffer.trace.
+    TRACE = 10
 
 
 @dataclass(frozen=True)

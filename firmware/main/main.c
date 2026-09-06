@@ -1,5 +1,6 @@
 #include "board.h"
 #include "control.h"
+#include "trace.h"
 #include "frame.h"
 #include "log_sink.h"
 #include "usb_link.h"
@@ -263,6 +264,32 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_RADIO_DIRTY:
         *out_value = sn_radio154_used_since_boot() ? 1u : 0u;
         return SN_STATUS_OK;
+
+    case SN_CMD_TRACE_ENABLE:
+        sn_trace_enable(value != 0u);
+        *out_value = sn_trace_enabled() ? 1u : 0u;
+        return SN_STATUS_OK;
+
+    case SN_CMD_TRACE_DUMP: {
+        /* Emitted in batches rather than one frame per entry: 512 frames
+         * would cost more link time than the whole thing being measured, and
+         * the trace is read after the fact so latency does not matter. */
+        static sn_trace_entry_t batch[SN_TRACE_BATCH];
+        uint32_t total = 0;
+        size_t have = sn_trace_read(batch, SN_TRACE_BATCH, &total);
+        for (size_t sent = 0; sent < have; sent += SN_TRACE_PER_FRAME) {
+            size_t count = have - sent;
+            if (count > SN_TRACE_PER_FRAME) {
+                count = SN_TRACE_PER_FRAME;
+            }
+            sn_usb_link_send(SN_FRAME_TRACE, (const uint8_t *)&batch[sent],
+                             count * sizeof(sn_trace_entry_t));
+        }
+        /* The reply carries the TOTAL, not the number sent, so the host can
+         * tell a short trace from one that wrapped and lost its beginning. */
+        *out_value = total;
+        return SN_STATUS_OK;
+    }
 
     case SN_CMD_RADIO_POWER_CYCLE:
         /* The strongest reset available without touching the hardware.

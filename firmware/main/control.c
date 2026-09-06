@@ -5,6 +5,7 @@
 #include "driver/usb_serial_jtag.h"
 #include "esp_log.h"
 #include "frame.h"
+#include "trace.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "usb_link.h"
@@ -53,9 +54,14 @@ static void dispatch(const uint8_t *payload, size_t len)
 
     uint32_t out_value = 0;
     sn_status_t status = SN_STATUS_UNKNOWN_COMMAND;
+    /* Bracketed, so the trace shows how long a command took rather than only
+     * when it arrived. A command that blocks for a second is invisible from
+     * the host, which sees one round trip and cannot say which side spent it. */
+    sn_trace(SN_TRACE_CMD_IN, cmd, 0);
     if (s_handler != NULL) {
         status = s_handler((sn_command_t)cmd, value, &out_value);
     }
+    sn_trace(SN_TRACE_CMD_OUT, cmd, (uint16_t)status);
     send_reply(cmd, (uint8_t)status, out_value);
 }
 

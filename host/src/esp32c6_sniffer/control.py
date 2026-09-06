@@ -62,6 +62,10 @@ class Command(IntEnum):
     WIFI_DISCONNECT = 20
     SET_BLE_PERIODIC = 21
     WIFI_TRAFFIC = 22
+    #: Diagnostics. Off by default: the board's trace costs a timer read
+    #: and four stores per event, small but not free.
+    TRACE_ENABLE = 23
+    TRACE_DUMP = 24
 
 
 class FrameFilter(IntFlag):
