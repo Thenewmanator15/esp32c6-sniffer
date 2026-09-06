@@ -362,8 +362,19 @@ class CaptureSession:
             self._command(Command.SET_SNAPLEN, self._snaplen)
         if self._frame_filter is not None:
             self._command(Command.SET_FILTER, int(self._frame_filter))
-        if self._ctrl_filter is not None:
-            self._command(Command.SET_CTRL_FILTER, int(self._ctrl_filter))
+        ctrl_filter = self._ctrl_filter
+        if (ctrl_filter is None and self._frame_filter is not None
+                and self._frame_filter & FrameFilter.CTRL):
+            # Asking for control frames and not saying which subtypes must
+            # mean all of them. Leaving the driver's default alone instead
+            # delivered NONE: "Everything, including control" produced zero
+            # control frames, while ticking "Drop acknowledgements" -- which
+            # sets this explicitly -- made them appear. The option that was
+            # meant to add frames only worked in combination with the one
+            # meant to remove them.
+            ctrl_filter = CtrlFilter.ALL
+        if ctrl_filter is not None:
+            self._command(Command.SET_CTRL_FILTER, int(ctrl_filter))
         if self._bandwidth is not None:
             self._command(Command.SET_BANDWIDTH, int(self._bandwidth))
         if self._csi_sink is not None:
