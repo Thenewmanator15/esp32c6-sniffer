@@ -1,0 +1,7 @@
+"TRUE","Zigbee","zbee_nwk","Zigbee network-layer frames"
+"TRUE","Thread","mle or 6lowpan","Thread: MLE and 6LoWPAN"
+"TRUE","Data","wpan.frame_type == 0x0001","Data frames only: hides acknowledgements, beacons and MAC commands"
+"TRUE","No acks","not (wpan.frame_type == 0x0002)","Everything except acknowledgements, which are usually about half the frames"
+"TRUE","Beacons","wpan.frame_type == 0x0000","Beacons: which networks are here and on what PAN"
+"TRUE","Encrypted","wpan.security == 1","Frames with MAC-layer security set"
+"TRUE","Strong","wpan-tap.rss > -85","Nearby transmitters only"

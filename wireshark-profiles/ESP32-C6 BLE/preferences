@@ -1,0 +1,24 @@
+# Wireshark profile for the ESP32-C6 Bluetooth LE interface.
+#
+# One profile per radio: a filter button belongs to the profile, not to the
+# interface, so a shared profile shows buttons that cannot match. This one
+# switches itself in on the BLE interface -- see profile_settings.
+#
+# The default Source and Destination columns are useless here: every frame is
+# "controller -> host", because this is an HCI capture and the transport is
+# always the same pair. The advertiser's address is the thing worth seeing, so
+# it takes their place.
+#
+# No channel column: the controller rotates the three advertising channels
+# itself and does not report which one a report came from.
+
+gui.column.format:
+	"No.", "%m",
+	"Time", "%t",
+	"RSSI", "%Cus:bthci_evt.rssi:0:R",
+	"Advertiser", "%Cus:bthci_evt.bd_addr:0:R",
+	"Name", "%Cus:btcommon.eir_ad.entry.device_name:0:R",
+	"Iface", "%Cus:frame.interface_name:0:R",
+	"Protocol", "%p",
+	"Len", "%L",
+	"Info", "%i"

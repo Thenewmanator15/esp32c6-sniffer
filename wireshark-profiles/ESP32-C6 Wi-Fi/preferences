@@ -1,0 +1,21 @@
+# Wireshark profile for the ESP32-C6 Wi-Fi interface.
+#
+# One profile per radio: a filter button belongs to the profile, not to the
+# interface, so a shared profile shows buttons that cannot match. This one
+# switches itself in on the Wi-Fi interface -- see profile_settings.
+#
+# LQI is omitted because 802.11 has no such field; a column that is always
+# empty reads as missing data rather than as an inapplicable one.
+
+gui.column.format:
+	"No.", "%m",
+	"Time", "%t",
+	"Ch", "%Cus:wlan_radio.channel:0:R",
+	"RSSI", "%Cus:radiotap.dbm_antsignal:0:R",
+	"Rate", "%Cus:wlan_radio.data_rate:0:R",
+	"Iface", "%Cus:frame.interface_name:0:R",
+	"Source", "%s",
+	"Destination", "%d",
+	"Protocol", "%p",
+	"Len", "%L",
+	"Info", "%i"

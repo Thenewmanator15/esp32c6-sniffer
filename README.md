@@ -108,10 +108,13 @@ toggle, and a log window showing frame counts and the board's own drop
 counters. Toolbar channel values carry a radio prefix (`z25`, `w6`) because
 channels 11–14 exist in both radios and mean different frequencies.
 
-**Select the profile**: right-click the profile area at the bottom-right of the
-status bar and choose *ESP32-C6 Sniffer*. Without it frames still dissect
-correctly, but channel and signal strength are only visible by clicking into
-each one.
+**The profile selects itself**: one is installed per radio — *ESP32-C6
+802.15.4*, *ESP32-C6 Wi-Fi*, *ESP32-C6 BLE* — each carrying a filter matching
+its own interface, so the columns, colouring and filter buttons you get are
+the ones that apply to what you are capturing. A filter button belongs to a
+profile rather than an interface, which is why one shared profile put Zigbee
+and 11ax buttons on a BLE capture. If none selects itself, right-click the
+profile area at the bottom-right of the status bar and choose it.
 
 A task-by-task walkthrough of all of this, including every option and what
 to do when a capture comes back empty, is in

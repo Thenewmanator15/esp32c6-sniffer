@@ -1,0 +1,14 @@
+# "ESP32-C6 802.15.4" profile settings file for Wireshark.
+#
+# Selects this profile automatically for an 802.15.4 capture from this
+# sniffer, so its columns, colouring and filter buttons are right without
+# anyone remembering to right-click the status bar first.
+#
+# The filter matches on the interface NAME rather than on a dissector, so it
+# works from the first frame and cannot claim another radio's capture. It
+# works at all because our captures name their interface: the pcapng writer
+# puts if_name in the interface header. A classic pcap has nowhere to put it,
+# which is why a file from anywhere else matches none of these profiles.
+
+# Automatically switch to this profile if this display filter matches
+auto_switch_filter: frame.interface_name == "esp32c6-802154"

@@ -1,0 +1,14 @@
+# Colouring for Wi-Fi captures. Ordered most specific first, since Wireshark
+# applies the first match.
+#
+# Beacons dominate a quiet channel and management dominates a busy one, so the
+# point of these is to make the frames you are actually looking for stand out
+# from a list that is mostly housekeeping.
+@11ax (HE)@radiotap.he.data_3.data_mcs@[52428,65535,58853][0,0,0]
+@Encrypted data@wlan.fc.protected == 1@[54227,50629,65535][0,0,0]
+@Data@wlan.fc.type == 2@[52685,58853,65535][0,0,0]
+@Beacon@wlan.fc.type_subtype == 0x08@[65535,60652,53456][0,0,0]
+@Probe@wlan.fc.type_subtype == 0x04 or wlan.fc.type_subtype == 0x05@[65535,58596,45746][0,0,0]
+@Acknowledgement@wlan.fc.type_subtype == 0x1d@[61680,61680,61680][25000,25000,25000]
+@Control@wlan.fc.type == 1@[59110,59110,59110][20000,20000,20000]
+@Weak signal (below -90 dBm)@radiotap.dbm_antsignal < -90@[65535,65535,65535][45000,45000,45000]

@@ -1,0 +1,8 @@
+# "ESP32-C6 BLE" profile settings file for Wireshark.
+#
+# Selects this profile automatically for a Bluetooth LE capture from this
+# sniffer. Matching on the interface name rather than a dissector means it
+# works from the first frame and cannot claim another radio's capture.
+
+# Automatically switch to this profile if this display filter matches
+auto_switch_filter: frame.interface_name == "esp32c6-ble"
