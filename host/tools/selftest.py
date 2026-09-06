@@ -197,26 +197,16 @@ def check_802154(port: str, channel: int) -> None:
             record(f"802.15.4 capture, ch {channel}", PASS,
                    f"{frames} frames in 12 s")
             stats = session.stats
-            # A resync means the parser threw bytes away, which happens once
-            # when attaching to a stream already in flight: the board emits a
-            # stats frame every second from boot, so the first read can land
-            # mid-frame. That costs one sequence gap and is not capture loss.
-            # Gaps beyond the resyncs are, so they still fail.
-            attributable = stats.sequence_gaps <= stats.resyncs
-            clean = (stats.fw_isr_queue_full == 0
-                     and stats.fw_link_rejected == 0
-                     and stats.fw_frames_dropped_ringfull == 0)
+            # Strict: zero gaps, not "few enough". It was lenient once, to
+            # excuse a gap blamed on attaching to a running stream, and that
+            # leniency was hiding 914 phantom gaps caused by counting from
+            # before the board's reset instead of from the capture.
             detail = (f"gaps={stats.sequence_gaps} resyncs={stats.resyncs} "
                       f"discarded={stats.bytes_discarded} B "
                       f"isr={stats.fw_isr_queue_full} "
                       f"link={stats.fw_link_rejected}")
-            if clean and stats.sequence_gaps == 0:
-                record("802.15.4 drop counters", PASS, detail)
-            elif clean and attributable:
-                record("802.15.4 drop counters", PASS,
-                       detail + " (gap explained by attaching mid-stream)")
-            else:
-                record("802.15.4 drop counters", FAIL, detail)
+            record("802.15.4 drop counters",
+                   PASS if stats.lossless else FAIL, detail)
     except Exception as exc:
         record(f"802.15.4 capture, ch {channel}", FAIL, repr(exc))
 

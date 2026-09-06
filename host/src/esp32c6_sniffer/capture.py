@@ -357,6 +357,23 @@ class CaptureSession:
             self._command(Command.SET_CSI, 1)
         self._command(Command.SET_CHANNEL, self._channel)
 
+        # Start counting from here, not from whatever was in the buffer when
+        # the port opened.
+        #
+        # Opening the port resets the board, so the first bytes read can be
+        # the tail of the previous session at a high sequence number, followed
+        # by the new session starting again at zero. The tracker cannot tell
+        # that from loss and called it 914 dropped frames in one measurement,
+        # which made stats.lossless report False on a capture that had not
+        # lost anything at all.
+        #
+        # Nothing capturable is discarded: the radio does not start until the
+        # SET_CHANNEL above, so anything deferred before this point is a log,
+        # a stats frame or a command reply, none of which records() yields.
+        self._tracker = SequenceTracker()
+        self._deferred = []
+        self.stats.sequence_gaps = 0
+
     def request_stop(self) -> None:
         """Asks records() to finish, safely from another thread.
 
