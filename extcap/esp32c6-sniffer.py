@@ -339,13 +339,46 @@ def print_interfaces(selected: str | None = None) -> None:
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
 
 
+def scanned_channel_labels(interface: str, port: str) -> dict[int, str]:
+    """Channel -> suffix describing what a scan just heard there.
+
+    Wireshark asks for this when the reload button beside the Channel option
+    is pressed. Annotating each channel with the access points found there
+    turns a list of numbers into the actual question -- where is the traffic
+    -- without leaving the dialog.
+
+    A scan needs the port to itself and takes several seconds. If it cannot
+    run, every channel gets the reason rather than the list coming back empty:
+    a dropdown that empties itself because the board was busy would be a worse
+    failure than one that is merely not annotated.
+    """
+    spec = INTERFACES[interface]
+    channels = range(spec["min"], spec["max"] + 1)
+    try:
+        from esp32c6_sniffer.scan import busiest_channels, scan_access_points
+
+        counts = busiest_channels(scan_access_points(port))
+    except Exception as exc:
+        note = f"  [scan failed: {type(exc).__name__}]"
+        return {channel: note for channel in channels}
+
+    labels = {}
+    for channel in channels:
+        found = counts.get(channel, 0)
+        labels[channel] = (
+            f"  [{found} network{'s' if found > 1 else ''}]" if found
+            else "  [quiet]")
+    return labels
+
+
 def print_dlts(interface: str) -> None:
     spec = INTERFACES[interface]
     print(f"dlt {{number={spec['dlt']}}}{{name={spec['dlt_name']}}}"
           f"{{display={spec['dlt_display']}}}")
 
 
-def print_config(interface: str) -> None:
+def print_config(interface: str, reload_option: str | None = None,
+                 port: str | None = None) -> None:
     spec = INTERFACES[interface]
     # No baud rate option. This is a USB CDC virtual port with no physical line
     # rate, so the setting is discarded; other projects expose one inherited
@@ -370,13 +403,30 @@ def print_config(interface: str) -> None:
             if interface == WIFI_INTERFACE
             else "Zigbee commonly uses 11, 15, 20 and 25"
         )
+        # Reloadable on Wi-Fi only, where a scan can say which channels have
+        # networks on them. On 802.15.4 the radio has no equivalent -- it can
+        # measure energy, but that is the spectrum tool's job and it does not
+        # belong behind a dropdown that blocks the dialog while it runs.
+        reload_note = ""
+        if interface == WIFI_INTERFACE:
+            reload_note = ("{reload=true}{placeholder=Reload to scan for "
+                           "networks}")
         print(f"arg {{number=1}}{{call=--channel}}{{display=Channel}}"
-              f"{{type=selector}}{{default={spec['default']}}}"
+              f"{{type=selector}}{{default={spec['default']}}}{reload_note}"
               f"{{tooltip=Starting channel. Also changeable mid-capture from "
               f"the toolbar. {hint}}}")
+        # Wireshark asks for a reload by calling --extcap-config WITH
+        # --extcap-reload-option, naming the option without its dashes, and
+        # expects the whole configuration back with that one refreshed. It is
+        # not a separate mode; treating it as one printed a bare value list
+        # that Wireshark had not asked for.
+        scanned = {}
+        if reload_option == "channel" and interface == WIFI_INTERFACE:
+            scanned = scanned_channel_labels(interface, port or default_port())
         for channel in range(spec["min"], spec["max"] + 1):
             print(f"value {{arg=1}}{{value={channel}}}"
-                  f"{{display={channel_label(interface, channel)}}}")
+                  f"{{display={channel_label(interface, channel)}"
+                  f"{scanned.get(channel, '')}}}")
     print("arg {number=2}{call=--antenna}{display=Antenna}"
           "{type=selector}{default=0}"
           "{tooltip=External needs a U.FL antenna fitted. Measured +6.0 dB "
@@ -939,7 +989,7 @@ def main(argv: list[str] | None = None) -> int:
         print_dlts(interface)
         return 0
     if args.extcap_config:
-        print_config(interface)
+        print_config(interface, args.extcap_reload_option, args.port)
         return 0
     if args.capture:
         if not args.fifo:
