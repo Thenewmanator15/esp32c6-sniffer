@@ -6,6 +6,7 @@ A plugin that works when imported but fails when executed is still broken.
 
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -152,7 +153,7 @@ def test_wifi_channel_out_of_range_is_rejected():
     result = subprocess.run(
         [sys.executable, str(PLUGIN), "--capture",
          "--extcap-interface", WIFI_INTERFACE,
-         "--fifo", "unused", "--channel", "26"],
+         "--fifo", _throwaway_fifo(), "--channel", "26"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode != 0
@@ -242,7 +243,7 @@ def test_out_of_range_snaplen_is_rejected():
     result = subprocess.run(
         [sys.executable, str(PLUGIN), "--capture",
          "--extcap-interface", WIFI_INTERFACE,
-         "--fifo", "unused", "--channel", "6", "--snaplen", "9000"],
+         "--fifo", _throwaway_fifo(), "--channel", "6", "--snaplen", "9000"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode != 0
@@ -253,11 +254,21 @@ def test_unknown_hop_set_is_rejected():
     result = subprocess.run(
         [sys.executable, str(PLUGIN), "--capture",
          "--extcap-interface", WIFI_INTERFACE,
-         "--fifo", "unused", "--channel", "6", "--hop", "99"],
+         "--fifo", _throwaway_fifo(), "--channel", "6", "--hop", "99"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode != 0
     assert "hop" in result.stderr.lower()
+
+
+def _throwaway_fifo() -> str:
+    """A path inside pytest's temp area.
+
+    These cases are meant to fail before the pipe is ever opened, but a bare
+    relative name means that when one does not, the plugin creates a file in
+    whatever directory the tests were run from. One escaped and was committed.
+    """
+    return str(Path(tempfile.gettempdir()) / "esp32c6-selftest-fifo")
 
 
 def _run_expect_failure(*args: str):
@@ -270,7 +281,7 @@ def _run_expect_failure(*args: str):
 
 def test_negative_snaplen_is_rejected():
     r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
-                            "--fifo", "unused", "--channel", "6",
+                            "--fifo", _throwaway_fifo(), "--channel", "6",
                             "--snaplen", "-1")
     assert r.returncode != 0
 
@@ -279,7 +290,7 @@ def test_negative_hop_dwell_does_not_spin():
     """A negative dwell would make the hop thread never sleep, pinning a core
     and flooding the board with retunes."""
     r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
-                            "--fifo", "unused", "--channel", "6",
+                            "--fifo", _throwaway_fifo(), "--channel", "6",
                             "--hop", "1", "--hop-dwell", "-5")
     assert r.returncode != 0, "a negative dwell was accepted"
 
@@ -288,7 +299,7 @@ def test_unwritable_csi_path_fails_before_the_capture_starts():
     """Failing after Wireshark has started showing packets is much worse than
     failing immediately."""
     r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
-                            "--fifo", "unused", "--channel", "6",
+                            "--fifo", _throwaway_fifo(), "--channel", "6",
                             "--csi", "/nonexistent-directory/x.csv")
     assert r.returncode != 0
 
