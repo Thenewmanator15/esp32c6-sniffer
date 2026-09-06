@@ -77,6 +77,21 @@ void sn_radio_ble_stop(void);
 bool sn_radio_ble_running(void);
 void sn_radio_ble_get_stats(sn_ble_stats_t *out);
 
+/* Primary advertising PHYs a scan may use. 2M is deliberately absent: primary
+ * advertising never uses it, and including it makes the controller reject the
+ * whole scan configuration. */
+#define SN_BLE_PHY_LEGACY_ONLY 0x00
+#define SN_BLE_PHY_1M    0x01
+#define SN_BLE_PHY_CODED 0x04
+
+/* True if the running scan is the extended kind, which is the only one that
+ * reports BLE 5 extended advertisements. */
+bool sn_radio_ble_extended(void);
+
+/* Selects which primary PHYs to scan. Adding Coded (long range) costs 1M
+ * coverage, because the controller time-shares between them. */
+esp_err_t sn_radio_ble_set_phys(uint8_t phys);
+
 #define SN_BLE_DEFAULT_INTERVAL_MS 60
 #define SN_BLE_DEFAULT_WINDOW_MS   60
 

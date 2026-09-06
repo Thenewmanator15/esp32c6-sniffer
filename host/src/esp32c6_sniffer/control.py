@@ -56,6 +56,7 @@ class Command(IntEnum):
     SET_CSI = 14
     RADIO_DIRTY = 15
     SET_BLE_SCAN = 16
+    SET_BLE_PHYS = 17
 
 
 class FrameFilter(IntFlag):

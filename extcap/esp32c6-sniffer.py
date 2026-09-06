@@ -293,6 +293,16 @@ def print_config(interface: str) -> None:
               "{type=integer}{range=10,10240}{default=60}"
               "{tooltip=How long it listens each time. Equal to the interval "
               "means continuous listening, which is what a sniffer wants}")
+        print("arg {number=5}{call=--ble-phys}{display=Advertising PHYs}"
+              "{type=selector}{default=1}"
+              "{tooltip=Extended scanning reports both legacy and BLE 5 "
+              "extended advertisements. Legacy-only cannot see the latter at "
+              "all, and is here so the difference can be measured}")
+        print("value {arg=5}{value=1}{display=Extended, 1M (recommended)}")
+        print("value {arg=5}{value=5}{display=Extended, 1M and Coded (long "
+              "range, at the cost of 1M coverage)}")
+        print("value {arg=5}{value=0}{display=Legacy only, no BLE 5 "
+              "extended advertisements}")
         return
 
     if interface != WIFI_INTERFACE:
@@ -382,7 +392,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                frame_filter: int | None = None, hop: int = 0,
                hop_dwell_ms: int = 500, bandwidth: int = 0,
                drop_acks: bool = False, csi_path: str | None = None,
-               ble_interval: int = 0, ble_window: int = 0) -> int:
+               ble_interval: int = 0, ble_window: int = 0,
+               ble_phys: int | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -500,6 +511,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ctrl_filter=session_ctrl,
                             ble_interval_ms=ble_interval,
                             ble_window_ms=ble_window,
+                            ble_phys=ble_phys,
                             csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:
@@ -609,6 +621,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ble-interval", dest="ble_interval", type=int,
                         default=0)
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
+    parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
     args, _unknown = parser.parse_known_args(argv)
 
     if args.extcap_interfaces:
@@ -656,6 +669,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"snaplen {args.snaplen} outside 1-{WIFI_MAX_SNAPLEN}" + os.linesep
             )
             return 1
+        # 2 is the 2M PHY bit, which primary advertising never uses; the
+        # controller rejects a bitmap containing it and the whole scan setup
+        # fails, so it is refused here where the reason can be given.
+        if args.ble_phys is not None and args.ble_phys not in (0, 1, 4, 5):
+            sys.stderr.write(
+                f"BLE PHY selection {args.ble_phys} is not one of 0 (legacy), "
+                f"1 (1M), 4 (Coded) or 5 (both)" + os.linesep)
+            return 1
         if args.hop not in HOP_SETS:
             sys.stderr.write(f"unknown hop set {args.hop}" + os.linesep)
             return 1
@@ -672,7 +693,7 @@ def main(argv: list[str] | None = None) -> int:
                           interface, args.snaplen, args.frame_filter,
                           args.hop, args.hop_dwell, args.bandwidth,
                           args.drop_acks, args.csi_path,
-                          args.ble_interval, args.ble_window)
+                          args.ble_interval, args.ble_window, args.ble_phys)
 
     print_interfaces(args.extcap_interface)
     return 0

@@ -208,6 +208,7 @@ class CaptureSession:
         bandwidth: Bandwidth | None = None,
         ble_interval_ms: int = 0,
         ble_window_ms: int = 0,
+        ble_phys: int | None = None,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
     ) -> None:
@@ -238,6 +239,9 @@ class CaptureSession:
         self._bandwidth = bandwidth
         self._ble_interval_ms = ble_interval_ms
         self._ble_window_ms = ble_window_ms
+        # None leaves the board's default (extended, 1M). 0 forces legacy
+        # scanning, which is how the two are compared.
+        self._ble_phys = ble_phys
         self._ctrl_filter = ctrl_filter
         # Called for each CSI record. CSI has no place in a pcap, so it leaves
         # by a different door rather than being forced into one.
@@ -366,6 +370,8 @@ class CaptureSession:
         if self._radio is Radio.BLE:
             # No channel: the controller rotates the advertising channels
             # itself, so START is what begins a capture here.
+            if self._ble_phys is not None:
+                self._command(Command.SET_BLE_PHYS, self._ble_phys)
             if self._ble_interval_ms or self._ble_window_ms:
                 self._command(
                     Command.SET_BLE_SCAN,

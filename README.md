@@ -189,10 +189,35 @@ Scanning is passive: the controller never sends a scan request, so the sniffer
 stays silent. Scan responses appear only when some other device solicits them,
 which is the trade for not announcing yourself.
 
+Scanning is **extended** by default, which is what BLE 5 needs. Legacy
+scanning reports only legacy advertisements -- 31 bytes on the 1M PHY -- and
+silently omits every extended advertisement, of which there can be up to 1650
+bytes. Extended scanning reports both, so nothing is lost by preferring it, and
+a controller without BLE 5 falls back with a warning rather than failing.
+
+The Coded (long range) PHY is available too, and off by default: the controller
+time-shares between the PHYs it scans, so adding Coded costs 1M coverage. There
+is also a legacy-only setting, which exists so the difference can be measured
+rather than asserted.
+
 Measured: 446 HCI packets in 20 s, every one dissected as an LE Advertising
-Report, five distinct advertisers. Unlike 802.15.4, leaving BLE running does
-not poison the shared front end -- Wi-Fi kept working afterwards in both arms
-of the test, so that fault really is specific to the 802.15.4 driver.
+Report, five distinct advertisers.
+
+**Measured, and worth stating because it is a negative result:** extended
+scanning found nothing here that legacy did not. Two alternating rounds, 20 s
+each, gave 1379 reports and 8 advertisers on legacy against 1368 and 7 on
+extended, with no device seen only by extended. The board's log confirms
+extended scanning really was running (`extended scanning, PHYs 0x01`), so this
+is an empty room for BLE 5 rather than a feature that does not work. The
+capability is there for a room that has some.
+
+Unlike 802.15.4, leaving BLE running does not poison the shared front end --
+Wi-Fi kept working afterwards in both arms of the test, so that fault really is
+specific to the 802.15.4 driver.
+
+The C6 is Bluetooth 5.0 LE, certified to 5.3. Bluetooth 6.0 features such as
+Channel Sounding are not present in this silicon: its `soc_caps.h` defines
+`SOC_BLE_50_SUPPORTED` and no BLE 6 capability at all.
 
 ## What you will and will not see
 

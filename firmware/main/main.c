@@ -112,6 +112,13 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         *out_value = value;
         return SN_STATUS_OK;
 
+    case SN_CMD_SET_BLE_PHYS:
+        if (sn_radio_ble_set_phys((uint8_t)value) != ESP_OK) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
     case SN_CMD_SET_BLE_SCAN:
         s_ble_interval_ms = (uint16_t)(value & 0xFFFFu);
         s_ble_window_ms = (uint16_t)(value >> 16);
@@ -275,6 +282,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_SET_CSI:
     case SN_CMD_RADIO_DIRTY:
     case SN_CMD_SET_BLE_SCAN:
+    case SN_CMD_SET_BLE_PHYS:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;

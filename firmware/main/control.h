@@ -34,6 +34,9 @@ typedef enum {
     /* BLE scan window and interval, in milliseconds: interval in the low 16
      * bits, window in the high 16. Zero for either uses the default. */
     SN_CMD_SET_BLE_SCAN = 16,
+    /* Primary advertising PHYs to scan: 0 forces legacy scanning, 1 is the
+     * 1M PHY, 4 adds Coded (long range). */
+    SN_CMD_SET_BLE_PHYS = 17,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

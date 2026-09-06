@@ -27,6 +27,8 @@ static const char *TAG = "radio_ble";
 #define OPCODE_LE_SET_EVENT_MASK     0x2001
 #define OPCODE_LE_SET_SCAN_PARAMS    0x200B
 #define OPCODE_LE_SET_SCAN_ENABLE    0x200C
+#define OPCODE_LE_SET_EXT_SCAN_PARAMS 0x2041
+#define OPCODE_LE_SET_EXT_SCAN_ENABLE 0x2042
 
 #define EVENT_COMMAND_COMPLETE 0x0E
 #define EVENT_LE_META          0x3E
@@ -52,6 +54,8 @@ static volatile uint16_t s_pending_opcode;
 static volatile uint8_t s_pending_status;
 static volatile bool s_running;
 static bool s_controller_up;
+static bool s_extended;          /* true once extended scanning is running */
+static uint8_t s_phys = SN_BLE_PHY_1M;
 static sn_ble_stats_t s_stats;
 
 static uint8_t s_out[sizeof(sn_ble_meta_t) + SN_BLE_MAX_PACKET];
@@ -186,6 +190,53 @@ static esp_err_t send_command(uint16_t opcode, const uint8_t *params,
     return ESP_OK;
 }
 
+/* Extended scanning, which is what BLE 5 advertisements need.
+ *
+ * Legacy scanning reports only legacy advertisements: 31 bytes of payload on
+ * the 1M PHY. Everything a BLE 5 device puts in an extended advertisement --
+ * up to 1650 bytes, and anything sent on the Coded (long range) PHY -- is
+ * simply not reported, and the capture looks quiet rather than incomplete.
+ *
+ * Extended scanning reports BOTH kinds, legacy ones arriving as extended
+ * reports with a legacy flag, so nothing is lost by preferring it.
+ *
+ * The PHY bitmap only accepts 1M and Coded: primary advertising never uses the
+ * 2M PHY, so a bit for it would be rejected. Each selected PHY gets its own
+ * interval and window, and the controller time-shares between them -- adding
+ * Coded therefore costs 1M coverage, which is why it is opt-in.
+ */
+static esp_err_t configure_extended_scan(uint16_t interval_ms,
+                                         uint16_t window_ms)
+{
+    const uint16_t interval = (uint16_t)(interval_ms * SCAN_UNITS_PER_MS);
+    const uint16_t window = (uint16_t)(window_ms * SCAN_UNITS_PER_MS);
+    const uint8_t phys = (uint8_t)(s_phys & (SN_BLE_PHY_1M | SN_BLE_PHY_CODED));
+
+    uint8_t params[3 + 2 * 5];
+    uint8_t n = 0;
+    params[n++] = 0x00;      /* own address type, public */
+    params[n++] = 0x00;      /* accept everything */
+    params[n++] = phys;
+    for (uint8_t bit = 0; bit < 8; bit++) {
+        if (!(phys & (1u << bit))) {
+            continue;
+        }
+        params[n++] = 0x00;  /* passive: never transmit */
+        params[n++] = (uint8_t)(interval & 0xFF);
+        params[n++] = (uint8_t)(interval >> 8);
+        params[n++] = (uint8_t)(window & 0xFF);
+        params[n++] = (uint8_t)(window >> 8);
+    }
+
+    esp_err_t err = send_command(OPCODE_LE_SET_EXT_SCAN_PARAMS, params, n);
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* enable, no duplicate filtering, no duration or period limit */
+    const uint8_t enable[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    return send_command(OPCODE_LE_SET_EXT_SCAN_ENABLE, enable, sizeof(enable));
+}
+
 static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
 {
     static const uint8_t all_events[8] = {
@@ -209,6 +260,28 @@ static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
     if (err != ESP_OK) {
         return err;
     }
+
+    /* Prefer extended unless legacy was asked for explicitly. Falling back
+     * rather than failing means a controller without BLE 5 still captures
+     * legacy advertisements, and the log says which happened rather than
+     * leaving it to be guessed. */
+    err = (s_phys == SN_BLE_PHY_LEGACY_ONLY)
+              ? ESP_ERR_NOT_SUPPORTED
+              : configure_extended_scan(interval_ms, window_ms);
+    if (err == ESP_OK) {
+        s_extended = true;
+        ESP_LOGI(TAG, "extended scanning, PHYs 0x%02x", (unsigned)s_phys);
+        return ESP_OK;
+    }
+    if (s_phys == SN_BLE_PHY_LEGACY_ONLY) {
+        ESP_LOGI(TAG, "legacy scanning as requested; BLE 5 extended "
+                      "advertisements will not be reported");
+    } else {
+        ESP_LOGW(TAG, "extended scanning unavailable (%s); falling back to "
+                      "legacy, which cannot see BLE 5 extended advertisements",
+                 esp_err_to_name(err));
+    }
+    s_extended = false;
 
     const uint16_t interval = (uint16_t)(interval_ms * SCAN_UNITS_PER_MS);
     const uint16_t window = (uint16_t)(window_ms * SCAN_UNITS_PER_MS);
@@ -302,8 +375,14 @@ void sn_radio_ble_stop(void)
         return;
     }
     if (s_running) {
-        const uint8_t disable[2] = {0x00, 0x00};
-        send_command(OPCODE_LE_SET_SCAN_ENABLE, disable, sizeof(disable));
+        if (s_extended) {
+            const uint8_t disable[6] = {0, 0, 0, 0, 0, 0};
+            send_command(OPCODE_LE_SET_EXT_SCAN_ENABLE, disable,
+                         sizeof(disable));
+        } else {
+            const uint8_t disable[2] = {0x00, 0x00};
+            send_command(OPCODE_LE_SET_SCAN_ENABLE, disable, sizeof(disable));
+        }
         s_running = false;
     }
 
@@ -322,6 +401,27 @@ bool sn_radio_ble_running(void)
     return s_running;
 }
 
+bool sn_radio_ble_extended(void)
+{
+    return s_extended;
+}
+
+esp_err_t sn_radio_ble_set_phys(uint8_t phys)
+{
+    /* 2M is not a primary advertising PHY, so the controller rejects a bitmap
+     * containing it and the whole scan setup fails. Refuse it here, where the
+     * reason can be given. */
+    /* Zero means legacy scanning on purpose, which is worth having: it is
+     * what makes "how much does extended actually add here" a measurement
+     * rather than a claim. */
+    if (phys != SN_BLE_PHY_LEGACY_ONLY &&
+        (phys & ~(SN_BLE_PHY_1M | SN_BLE_PHY_CODED)) != 0u) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_phys = phys;
+    return ESP_OK;
+}
+
 void sn_radio_ble_get_stats(sn_ble_stats_t *out)
 {
     *out = s_stats;
@@ -338,6 +438,12 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
 }
 void sn_radio_ble_stop(void) {}
 bool sn_radio_ble_running(void) { return false; }
+bool sn_radio_ble_extended(void) { return false; }
+esp_err_t sn_radio_ble_set_phys(uint8_t phys)
+{
+    (void)phys;
+    return ESP_ERR_NOT_SUPPORTED;
+}
 void sn_radio_ble_get_stats(sn_ble_stats_t *out) { memset(out, 0, sizeof(*out)); }
 
 #endif /* CONFIG_BT_ENABLED */
