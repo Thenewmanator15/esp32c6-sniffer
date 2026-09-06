@@ -5,6 +5,8 @@
 
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "lwip/sockets.h"
+#include "lwip/inet.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
 #include "frame.h"
@@ -435,6 +437,12 @@ static esp_err_t apply_filter(uint32_t filter_mask)
 
 static volatile uint8_t s_connected_channel;
 static SemaphoreHandle_t s_connected;
+static SemaphoreHandle_t s_got_ip;
+static esp_netif_t *s_sta_netif;
+static TaskHandle_t s_traffic_task;
+static volatile bool s_traffic_wanted;
+static volatile uint32_t s_gateway;
+static volatile uint32_t s_traffic_bytes;
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
                        void *data)
@@ -447,6 +455,14 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
         ESP_LOGI(TAG, "associated on channel %u", (unsigned)ev->channel);
         if (s_connected != NULL) {
             xSemaphoreGive(s_connected);
+        }
+    } else if (id == IP_EVENT_STA_GOT_IP) {
+        const ip_event_got_ip_t *ev = (const ip_event_got_ip_t *)data;
+        s_gateway = ev->ip_info.gw.addr;
+        ESP_LOGI(TAG, "address " IPSTR ", gateway " IPSTR,
+                 IP2STR(&ev->ip_info.ip), IP2STR(&ev->ip_info.gw));
+        if (s_got_ip != NULL) {
+            xSemaphoreGive(s_got_ip);
         }
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *ev =
@@ -474,8 +490,23 @@ esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase)
         if (s_connected == NULL) {
             return ESP_ERR_NO_MEM;
         }
+        s_got_ip = xSemaphoreCreateBinary();
         esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                             wifi_event, NULL, NULL);
+        esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP,
+                                            wifi_event, NULL, NULL);
+    }
+
+    /* A network interface, so DHCP runs and the link carries actual traffic.
+     * Without one the association completes and then nothing happens: an idle
+     * link gives the access point nothing to send, and HE is only used for
+     * data frames, so the capture stays legacy and the exercise proves
+     * nothing. */
+    if (s_sta_netif == NULL) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+        if (s_sta_netif == NULL) {
+            return ESP_FAIL;
+        }
     }
 
     err = esp_wifi_set_mode(WIFI_MODE_STA);
@@ -508,6 +539,12 @@ esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase)
         ESP_LOGE(TAG, "association timed out");
         return ESP_ERR_TIMEOUT;
     }
+    /* Associated is not the same as usable: DHCP has to finish before there
+     * is anywhere to send traffic. Not fatal if it does not -- the capture is
+     * still running -- so this warns rather than failing. */
+    if (xSemaphoreTake(s_got_ip, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        ESP_LOGW(TAG, "no address from DHCP; the link will stay idle");
+    }
 
     /* Capture on whatever channel the association landed on; anything else
      * would be watching a channel this radio is not on. */
@@ -522,8 +559,80 @@ esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase)
     return ESP_OK;
 }
 
+/* Pulls data down from the gateway so the access point has something to send.
+ *
+ * 802.11ax is used for data frames, not for beacons or management, so an
+ * associated but idle client never sees a single HE frame. Repeated small
+ * fetches from the gateway's own web interface produce a steady stream of
+ * downlink frames, and every home router has one. Failures are ignored on
+ * purpose: this is a load generator, not a client, and a refused connection
+ * still costs the access point a few frames to say so. */
+static void traffic_task(void *arg)
+{
+    (void)arg;
+    /* Escapes written explicitly: a carriage return and line feed pair,
+     * twice, ending the request line and the header block. */
+    const char *request = "GET / HTTP/1.0\r\n\r\n";
+    uint8_t scratch[512];
+
+    while (true) {
+        if (!s_traffic_wanted || s_gateway == 0) {
+            vTaskDelay(pdMS_TO_TICKS(200));
+            continue;
+        }
+
+        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock < 0) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        struct timeval tv = {.tv_sec = 2, .tv_usec = 0};
+        setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+
+        struct sockaddr_in to = {
+            .sin_family = AF_INET,
+            .sin_port = htons(80),
+            .sin_addr.s_addr = s_gateway,
+        };
+        if (connect(sock, (struct sockaddr *)&to, sizeof(to)) == 0) {
+            send(sock, request, strlen(request), 0);
+            int n;
+            while ((n = recv(sock, scratch, sizeof(scratch), 0)) > 0) {
+                s_traffic_bytes += (uint32_t)n;
+            }
+        }
+        close(sock);
+        /* A brief pause so this is a steady trickle rather than a flood of
+         * connections the router may start refusing. */
+        vTaskDelay(pdMS_TO_TICKS(150));
+    }
+}
+
+esp_err_t sn_radio80211_set_traffic(bool enable)
+{
+    if (enable && s_traffic_task == NULL) {
+        /* Below the USB sender and the capture task: generating load must
+         * never come at the cost of the capture it exists to feed. */
+        if (xTaskCreate(traffic_task, "sn_traffic", 4096, NULL, 5,
+                        &s_traffic_task) != pdPASS) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+    s_traffic_wanted = enable;
+    ESP_LOGI(TAG, "downlink traffic generation %s",
+             enable ? "on" : "off");
+    return ESP_OK;
+}
+
+uint32_t sn_radio80211_traffic_bytes(void)
+{
+    return s_traffic_bytes;
+}
+
 void sn_radio80211_disconnect(void)
 {
+    s_traffic_wanted = false;
     esp_wifi_disconnect();
     s_connected_channel = 0;
 }

@@ -273,6 +273,29 @@ associate and whether the two coexist is documented nowhere: promiscuous
 capture keeps working in station mode, 630 frames in 10 s against 486 in 8 s
 before the switch.
 
+**It works, and the HE decoder is now verified against real traffic.** The
+first attempt associated cleanly and still saw no 11ax at all -- 915 frames,
+none of them HE -- because the board had no address and an idle link gives an
+access point nothing to send. With DHCP and a trickle of fetches from the
+gateway to pull data down:
+
+```
+address 192.0.2.238, gateway 192.0.2.1
+111410 bytes pulled from the gateway
+
+1321 frames on channel 6
+  HE SU, 11ax         599   45.3%
+  11g/a (OFDM)        402   30.4%
+  11b (CCK)           230   17.4%
+  HT, 11n              90    6.8%
+
+599 11ax frames: 599 decoded, 0 rejected by the decoder's own checks
+```
+
+And in Wireshark, `radiotap.he.data_3.data_mcs` reads 6 and 7 across 1274
+frames with zero malformed in 2395. The HE-SIG-A bit layout this project
+assumed is correct.
+
 The passphrase is read interactively and never accepted as an argument, so it
 stays out of shell history and process lists. The board holds it in RAM and its
 Wi-Fi driver is set to RAM storage, so nothing reaches flash.

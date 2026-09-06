@@ -129,6 +129,16 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         *out_value = sn_radio80211_connected_channel();
         return SN_STATUS_OK;
 
+    case SN_CMD_WIFI_TRAFFIC:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        if (sn_radio80211_set_traffic(value == 1u) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = sn_radio80211_traffic_bytes();
+        return SN_STATUS_OK;
+
     case SN_CMD_WIFI_DISCONNECT:
         sn_radio80211_disconnect();
         return SN_STATUS_OK;
@@ -328,6 +338,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_WIFI_STA_MODE:
     case SN_CMD_WIFI_CONNECT:
     case SN_CMD_WIFI_DISCONNECT:
+    case SN_CMD_WIFI_TRAFFIC:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;

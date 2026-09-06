@@ -139,11 +139,26 @@ def main() -> int:
     channel = reply["value"]
     print(f"associated on channel {channel}", flush=True)
 
-    print(f"\ncapturing {args.seconds:.0f} s. Generating traffic on the "
-          f"network now will produce far more 11ax frames than an idle link.",
-          flush=True)
+    # Associated is not enough. 802.11ax is used for data frames, so an idle
+    # link produces none however long it is watched: the first run of this
+    # tool associated cleanly and saw 915 frames without a single HE one,
+    # because the board had no address and nothing to say.
+    traffic = command(Command.WIFI_TRAFFIC, 1, wait=5.0)
+    if traffic is None or not traffic["ok"]:
+        print("could not start traffic generation; the link will stay idle "
+              "and 11ax frames are unlikely", flush=True)
+    else:
+        print("pulling data from the gateway, to give the access point "
+              "something to send", flush=True)
+
+    print(f"\ncapturing {args.seconds:.0f} s", flush=True)
     pump(args.seconds, collect=True)
 
+    pulled = command(Command.WIFI_TRAFFIC, 1, wait=5.0)
+    if pulled is not None and pulled["ok"]:
+        print(f"\n{pulled['value']} bytes pulled from the gateway")
+
+    command(Command.WIFI_TRAFFIC, 0, wait=3.0)
     command(Command.WIFI_DISCONNECT, wait=3.0)
     command(Command.STOP, wait=3.0)
     ser.close()
@@ -157,10 +172,11 @@ def main() -> int:
     he_total = sum(formats[f] for f in HE_FORMATS)
     print()
     if he_total == 0:
-        print("No 11ax frames. The access point associated this client but "
-              "did not use HE on 2.4 GHz, or the link was too idle to carry "
-              "data frames. The HE decoder remains unverified against real "
-              "traffic; it is not evidence that it is broken.")
+        print("No 11ax frames. If bytes were pulled from the gateway above "
+              "then the link was not idle, and this access point simply does "
+              "not use HE on 2.4 GHz for this client. The HE decoder remains "
+              "unverified against real traffic; that is not evidence it is "
+              "broken.")
     else:
         print(f"{he_total} 11ax frames: {he_decoded} decoded, "
               f"{he_rejected} rejected by the decoder's own checks.")

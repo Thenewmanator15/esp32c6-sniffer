@@ -136,6 +136,12 @@ esp_err_t sn_radio80211_station_mode(bool enable);
 esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase);
 void sn_radio80211_disconnect(void);
 
+/* Generates downlink traffic while associated, by fetching repeatedly from the
+ * gateway. 802.11ax is used for data frames only, so an idle association never
+ * produces one however long it is left running. */
+esp_err_t sn_radio80211_set_traffic(bool enable);
+uint32_t sn_radio80211_traffic_bytes(void);
+
 /* Channel the association landed on, or 0 if not associated. Worth having
  * because the access point chooses it, not us. */
 uint8_t sn_radio80211_connected_channel(void);

@@ -45,6 +45,7 @@ typedef enum {
     SN_CMD_WIFI_CONNECT = 19,    /* associate using the credentials sent */
     SN_CMD_WIFI_DISCONNECT = 20,
     SN_CMD_SET_BLE_PERIODIC = 21, /* follow periodic advertising trains */
+    SN_CMD_WIFI_TRAFFIC = 22,     /* pull downlink data while associated */
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */

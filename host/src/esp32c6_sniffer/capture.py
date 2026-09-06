@@ -23,6 +23,7 @@ from .control import (
     Antenna,
     Bandwidth,
     Command,
+    encode_credentials,
     CtrlFilter,
     FrameFilter,
     Radio,
@@ -398,6 +399,39 @@ class CaptureSession:
         self._tracker = SequenceTracker()
         self._deferred = []
         self.stats.sequence_gaps = 0
+
+    def associate(self, ssid: str, passphrase: str) -> int:
+        """Associates with an access point, returning the channel.
+
+        Only reason this exists: 802.11ax is used for data frames, and a
+        network's 11ax clients are steered to 5 GHz where this radio cannot
+        follow. Associating puts an 11ax client on 2.4 GHz -- this board --
+        so the access point has someone to speak HE to. Promiscuous capture
+        keeps running throughout, which was measured rather than assumed.
+
+        The passphrase is sent and not stored. The board keeps it in RAM and
+        its driver is configured for RAM storage, so nothing reaches flash.
+        """
+        assert self._serial is not None, "call open() first"
+        self._serial.write(encode_credentials(ssid, passphrase))
+        self._serial.flush()
+        reply = self._command(Command.WIFI_CONNECT, timeout=40.0)
+        return reply["value"]
+
+    def set_traffic(self, enable: bool) -> int:
+        """Pulls data from the gateway while associated, returning the bytes
+        pulled so far.
+
+        An associated but idle link produces no data frames at all, and
+        therefore no 11ax: the first association test saw 915 frames without
+        a single HE one for exactly that reason.
+        """
+        reply = self._command(Command.WIFI_TRAFFIC, 1 if enable else 0,
+                              timeout=10.0)
+        return reply["value"]
+
+    def disconnect(self) -> None:
+        self._command(Command.WIFI_DISCONNECT, timeout=10.0)
 
     def request_stop(self) -> None:
         """Asks records() to finish, safely from another thread.

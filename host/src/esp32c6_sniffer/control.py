@@ -61,6 +61,7 @@ class Command(IntEnum):
     WIFI_CONNECT = 19
     WIFI_DISCONNECT = 20
     SET_BLE_PERIODIC = 21
+    WIFI_TRAFFIC = 22
 
 
 class FrameFilter(IntFlag):
