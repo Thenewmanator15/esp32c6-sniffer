@@ -149,6 +149,29 @@ a time, so an empty result is not evidence of an empty band. `spectrum.py` uses
 the 802.15.4 radio and keeps working when Wi-Fi does not, which makes it a
 useful second opinion.
 
+For BLE, `tools/ble_survey.py` summarises what is advertising nearby:
+
+```powershell
+.\.venv\Scripts\python.exe toolsle_survey.py --port COM3 --seconds 60
+```
+
+It separates **stable addresses** from **rotating** ones, and that separation is
+the point. Most modern phones and watches rotate a resolvable private address
+every fifteen minutes or so, so a count of addresses counts one phone many times
+over; the rotating total is an upper bound on devices, not a device count. Each
+entry shows signal, advertising rate, vendor from the manufacturer data, and the
+name where one is advertised.
+
+A sample run: 868 reports from 7 addresses, 2 stable and 5 rotating, split
+three resolvable private, two non-resolvable private and two random static.
+
+It also reports how many advertisers used a genuine BLE 5 extended PDU. That
+number is deliberately not "how many arrived through the extended report path",
+which under extended scanning is all of them: extended scanning reports legacy
+advertisements too, with an event-type bit saying so. Reading the report format
+instead of that bit made every device look like a BLE 5 device, which is a
+statistic about nothing.
+
 ### Channel state information
 
 Every frame's radiotap header carries an RSSI: one number for the whole
