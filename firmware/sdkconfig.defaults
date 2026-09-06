@@ -26,3 +26,15 @@ CONFIG_IEEE802154_DEBUG=y
 # esp_wifi_set_csi_config() returns a bare ESP_FAIL: the API is present, the
 # driver support is not compiled in. Costs a 512-byte static receive buffer.
 CONFIG_ESP_WIFI_CSI_ENABLED=y
+
+# Bluetooth: controller only, no host stack. The sniffer drives HCI directly,
+# so what reaches Wireshark is the controller's own events byte for byte and
+# a host stack would only get in the way (and cost tens of kilobytes).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_ONLY=y
+CONFIG_BT_BLE_ENABLED=y
+
+# The Bluetooth controller pushes the binary past the default 1 MB app
+# partition, so the layout is ours: see partitions.csv.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"

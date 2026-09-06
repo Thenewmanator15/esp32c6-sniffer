@@ -24,6 +24,11 @@ import time
 import serial
 
 from esp32c6_sniffer.apscan import parse_ap_record
+from esp32c6_sniffer.ble import (
+    LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR,
+    advertiser_address,
+    is_advertising_report,
+)
 from esp32c6_sniffer.capture import CaptureSession, EXPECTED_FIRMWARE_VERSION
 from esp32c6_sniffer.control import (
     Bandwidth,
@@ -359,6 +364,48 @@ def check_csi(port: str, channel: int) -> None:
            f"{session.stats.csi_malformed} malformed")
 
 
+def check_ble(port: str) -> None:
+    """Observer mode: advertisements, never connections."""
+    try:
+        with CaptureSession(port, channel=0, radio=Radio.BLE) as session:
+            if session.linktype != LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR:
+                record("BLE link type", FAIL, str(session.linktype))
+            else:
+                record("BLE link type", PASS,
+                       "BLUETOOTH_HCI_H4_WITH_PHDR (201)")
+            frames = drain(session, 15)
+            if frames == 0:
+                record("BLE capture", SKIP,
+                       "nothing advertising within range right now")
+                return
+            record("BLE capture", PASS, f"{frames} HCI packets in 15 s")
+            record("BLE decode integrity",
+                   PASS if session.stats.malformed_metadata == 0 else FAIL,
+                   f"{session.stats.malformed_metadata} malformed")
+    except Exception as exc:
+        record("BLE capture", FAIL, repr(exc))
+
+
+def check_ble_leaves_the_front_end_alone(port: str) -> None:
+    """802.15.4 poisons the shared front end if left enabled; BLE must not.
+
+    Measured when BLE landed: Wi-Fi kept working after BLE was left running
+    and after it was stopped properly, so the fault really is specific to the
+    802.15.4 driver rather than a property of sharing one radio.
+    """
+    try:
+        with CaptureSession(port, channel=6, radio=Radio.WIFI) as session:
+            frames = drain(session, 8)
+    except Exception as exc:
+        record("Wi-Fi survives a BLE capture", FAIL, repr(exc))
+        return
+    if frames == 0:
+        record("Wi-Fi survives a BLE capture", FAIL,
+               "Wi-Fi is deaf after BLE ran")
+    else:
+        record("Wi-Fi survives a BLE capture", PASS, f"{frames} frames")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", default="COM3")
@@ -408,6 +455,11 @@ def main() -> int:
         for name in ("Wi-Fi snapshot length", "Wi-Fi frame filter",
                      "control-subtype filter", "channel width", "CSI"):
             record(name, SKIP, "Wi-Fi receiver not delivering frames")
+
+    print()
+    print("Bluetooth LE")
+    check_ble(args.port)
+    check_ble_leaves_the_front_end_alone(args.port)
 
     passed = sum(1 for _n, o, _d in results if o == PASS)
     failed = sum(1 for _n, o, _d in results if o == FAIL)

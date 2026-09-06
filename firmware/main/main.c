@@ -34,12 +34,19 @@
 #if SN_MODE == SN_MODE_CAPTURE
 #include "radio154.h"
 #include "radio80211.h"
+#include "radio_ble.h"
 
 /* One radio at a time, always. The C6 has a single 2.4 GHz front end shared by
  * all three radios, and Espressif's coexistence matrix lists the pairs we would
  * want as unsupported or unstable. Selecting a radio stops the other. */
-typedef enum { SN_RADIO_154 = 0, SN_RADIO_WIFI = 1 } sn_radio_t;
+typedef enum {
+    SN_RADIO_154 = 0,
+    SN_RADIO_WIFI = 1,
+    SN_RADIO_BLE = 2,
+} sn_radio_t;
 static sn_radio_t s_radio = SN_RADIO_154;
+static uint16_t s_ble_interval_ms;   /* 0 means the driver default */
+static uint16_t s_ble_window_ms;
 
 #endif
 
@@ -59,8 +66,9 @@ static sn_radio_t s_radio = SN_RADIO_154;
  *      field; AP_RECORD frames added
  *   4: A-MPDU flag, CSI frames, bandwidth and control-subtype commands
  *   5: RADIO_DIRTY, so the host can power-cycle before a Wi-Fi capture
+ *   6: BLE observer, its stats block, and SET_BLE_SCAN
  */
-#define SN_FIRMWARE_VERSION 5u
+#define SN_FIRMWARE_VERSION 6u
 
 static const char *TAG = "main";
 
@@ -91,18 +99,42 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
 
 #if SN_MODE == SN_MODE_CAPTURE
     case SN_CMD_SET_RADIO:
-        if (value > 1u) {
+        if (value > 2u) {
             return SN_STATUS_BAD_VALUE;
         }
-        /* Stop whichever is running before switching; they share the radio. */
+        /* Stop every radio before switching. They share one 2.4 GHz front
+         * end, and leaving one enabled is what left the Wi-Fi receiver deaf
+         * until a power cycle. */
         sn_radio154_stop();
         sn_radio80211_stop();
-        s_radio = (value == 1u) ? SN_RADIO_WIFI : SN_RADIO_154;
+        sn_radio_ble_stop();
+        s_radio = (sn_radio_t)value;
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_BLE_SCAN:
+        s_ble_interval_ms = (uint16_t)(value & 0xFFFFu);
+        s_ble_window_ms = (uint16_t)(value >> 16);
         *out_value = value;
         return SN_STATUS_OK;
 
     case SN_CMD_SET_CHANNEL:
     case SN_CMD_START:
+        if (s_radio == SN_RADIO_BLE) {
+            /* BLE has no channel to select: the controller rotates the three
+             * advertising channels itself, so accepting one would be a lie. */
+            if (cmd == SN_CMD_SET_CHANNEL) {
+                return SN_STATUS_BAD_VALUE;
+            }
+            sn_radio154_stop();
+            sn_radio80211_stop();
+            if (sn_radio_ble_start(s_ble_interval_ms, s_ble_window_ms)
+                    != ESP_OK) {
+                return SN_STATUS_FAILED;
+            }
+            *out_value = s_ble_interval_ms;
+            return SN_STATUS_OK;
+        }
         if (s_radio == SN_RADIO_WIFI) {
             if (value < SN_80211_CHANNEL_MIN || value > SN_80211_CHANNEL_MAX) {
                 return SN_STATUS_BAD_VALUE;
@@ -129,6 +161,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_STOP:
         sn_radio154_stop();
         sn_radio80211_stop();
+        sn_radio_ble_stop();
         return SN_STATUS_OK;
 
     case SN_CMD_SET_SNAPLEN:
@@ -241,6 +274,7 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_SET_CTRL_FILTER:
     case SN_CMD_SET_CSI:
     case SN_CMD_RADIO_DIRTY:
+    case SN_CMD_SET_BLE_SCAN:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -364,6 +398,7 @@ void app_main(void)
             sn_link_stats_t link;
             sn_154_stats_t radio;
             sn_80211_stats_t wifi;
+            sn_ble_stats_t ble;
         } combined;
         /* Before reading the counters, so a rebuild is reflected in the same
          * frame that reports the stall which caused it. */
@@ -374,6 +409,7 @@ void app_main(void)
         sn_usb_link_get_stats(&combined.link);
         sn_radio154_get_stats(&combined.radio);
         sn_radio80211_get_stats(&combined.wifi);
+        sn_radio_ble_get_stats(&combined.ble);
         sn_usb_link_send(SN_FRAME_STATS, (const uint8_t *)&combined,
                          sizeof(combined));
 

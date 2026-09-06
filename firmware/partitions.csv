@@ -1,0 +1,12 @@
+# Custom partition table.
+#
+# The default single-app layout gives the application 1 MB, and adding the
+# Bluetooth controller pushed the binary past it: "app partition is too small
+# for binary, size 0x11f140". The board has 4 MB of flash and this firmware
+# will never need over-the-air update slots, so the app gets 3 MB and the rest
+# is left unallocated rather than carved into partitions nothing uses.
+#
+# Name,     Type, SubType, Offset,   Size
+nvs,        data, nvs,     ,         0x6000
+phy_init,   data, phy,     ,         0x1000
+factory,    app,  factory, ,         0x300000

@@ -31,6 +31,7 @@ from .control import (
 )
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
+from .ble import LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record
 from .csi import parse_csi_record
 from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
@@ -63,7 +64,7 @@ MAX_CLOCK_SKEW_S = 60.0
 #: firmware/main/main.c. Checked at open() because the failure it prevents is
 #: silent: an older board packs its metadata differently, so every field would
 #: decode to a confident wrong number rather than an error.
-EXPECTED_FIRMWARE_VERSION = 5
+EXPECTED_FIRMWARE_VERSION = 6
 
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
@@ -205,16 +206,20 @@ class CaptureSession:
         snaplen: int | None = None,
         frame_filter: FrameFilter | None = None,
         bandwidth: Bandwidth | None = None,
+        ble_interval_ms: int = 0,
+        ble_window_ms: int = 0,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
     ) -> None:
         self._port_name = port
         self._radio = radio
-        low, high = channel_range(radio)
-        if not low <= channel <= high:
-            raise ValueError(
-                f"channel {channel} outside the {radio.name} range {low}-{high}"
-            )
+        if radio is not Radio.BLE:
+            low, high = channel_range(radio)
+            if not low <= channel <= high:
+                raise ValueError(
+                    f"channel {channel} outside the {radio.name} range "
+                    f"{low}-{high}"
+                )
         self._channel = channel
         self._antenna = antenna
         self._timeout = timeout
@@ -231,6 +236,8 @@ class CaptureSession:
         self._snaplen = snaplen
         self._frame_filter = frame_filter
         self._bandwidth = bandwidth
+        self._ble_interval_ms = ble_interval_ms
+        self._ble_window_ms = ble_window_ms
         self._ctrl_filter = ctrl_filter
         # Called for each CSI record. CSI has no place in a pcap, so it leaves
         # by a different door rather than being forced into one.
@@ -266,11 +273,11 @@ class CaptureSession:
         Exposed so a caller opens its PcapWriter with the right one rather than
         hard-coding a link type that only suits one radio.
         """
-        return (
-            LINKTYPE_IEEE802_11_RADIOTAP
-            if self._radio is Radio.WIFI
-            else LINKTYPE_IEEE802_15_4_TAP
-        )
+        if self._radio is Radio.WIFI:
+            return LINKTYPE_IEEE802_11_RADIOTAP
+        if self._radio is Radio.BLE:
+            return LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR
+        return LINKTYPE_IEEE802_15_4_TAP
 
     def __enter__(self) -> "CaptureSession":
         self.open()
@@ -355,7 +362,19 @@ class CaptureSession:
             self._command(Command.SET_BANDWIDTH, int(self._bandwidth))
         if self._csi_sink is not None:
             self._command(Command.SET_CSI, 1)
-        self._command(Command.SET_CHANNEL, self._channel)
+
+        if self._radio is Radio.BLE:
+            # No channel: the controller rotates the advertising channels
+            # itself, so START is what begins a capture here.
+            if self._ble_interval_ms or self._ble_window_ms:
+                self._command(
+                    Command.SET_BLE_SCAN,
+                    (self._ble_interval_ms & 0xFFFF)
+                    | ((self._ble_window_ms & 0xFFFF) << 16),
+                )
+            self._command(Command.START)
+        else:
+            self._command(Command.SET_CHANNEL, self._channel)
 
         # Start counting from here, not from whatever was in the buffer when
         # the port opened.
@@ -642,6 +661,12 @@ class CaptureSession:
             return None
 
     def _build_record_inner(self, payload: bytes):
+        if self._radio is Radio.BLE:
+            record, hci_len, device_us = build_ble_record(payload)
+            # Never truncated by us: the firmware forwards the whole HCI
+            # packet unless it exceeds its own maximum, and says so if it did.
+            return record, hci_len, device_us, len(record)
+
         if self._radio is Radio.WIFI:
             if len(payload) <= WIFI_META_LEN:
                 return None

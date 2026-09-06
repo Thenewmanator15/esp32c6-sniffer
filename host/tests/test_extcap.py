@@ -14,6 +14,7 @@ import pytest
 PLUGIN = Path(__file__).resolve().parents[2] / "extcap" / "esp32c6-sniffer.py"
 INTERFACE = "esp32c6-802154"
 WIFI_INTERFACE = "esp32c6-wifi"
+BLE_INTERFACE = "esp32c6-ble"
 
 
 def _run(*args: str) -> str:
@@ -53,7 +54,9 @@ def test_does_not_advertise_unimplemented_radios():
     so it is asserted present instead.
     """
     out = _run("--extcap-interfaces")
-    assert "esp32c6-ble" not in out
+    # BLE has since landed and is asserted present below; nothing is left on
+    # the not-yet list, so this now guards against inventing one.
+    assert "esp32c6-thread" not in out
 
 
 def test_lists_the_wifi_interface():
@@ -141,7 +144,7 @@ def test_both_antennas_are_selectable():
 def test_unknown_interface_is_rejected():
     result = subprocess.run(
         [sys.executable, str(PLUGIN), "--extcap-dlts",
-         "--extcap-interface", "esp32c6-ble"],
+         "--extcap-interface", "esp32c6-thread"],
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode != 0
@@ -309,3 +312,35 @@ def test_unknown_arguments_are_ignored_not_fatal():
     would make the interface unusable."""
     out = _run("--extcap-interfaces", "--some-future-option", "value")
     assert "interface {value=" in out
+
+
+def test_every_interface_declares_a_distinct_link_type():
+    """The pcap header and the DLT Wireshark is told must agree, and each
+    radio needs its own. A hard-coded two-way choice silently wrote BLE
+    records labelled as 802.15.4 and Wireshark dissected none of them."""
+    seen = {}
+    for name in ("esp32c6-802154", WIFI_INTERFACE, BLE_INTERFACE):
+        out = _run("--extcap-dlts", "--extcap-interface", name)
+        number = out.split("{number=")[1].split("}")[0]
+        assert number not in seen, f"{name} reuses DLT {number} from {seen[number]}"
+        seen[number] = name
+    assert set(seen) == {"283", "127", "201"}
+
+
+def test_ble_interface_offers_no_channel():
+    """The controller rotates the advertising channels itself, so offering a
+    channel would be a promise the toolbar could not keep."""
+    out = _run("--extcap-config", "--extcap-interface", BLE_INTERFACE)
+    assert "{call=--channel}" not in out
+    assert "{call=--ble-interval}" in out
+
+
+def test_ble_channel_selection_is_rejected():
+    r = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture",
+         "--extcap-interface", BLE_INTERFACE, "--fifo", _throwaway_fifo(),
+         "--channel", "6", "--port", "COM_UNUSED"],
+        capture_output=True, text=True, timeout=30,
+    )
+    # It must not silently accept a channel it cannot honour.
+    assert r.returncode != 0

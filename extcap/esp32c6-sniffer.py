@@ -5,13 +5,14 @@ Wireshark drives an extcap program through query modes and one capture mode.
 It asks what interfaces exist, what link types and options each supports, then
 runs it with a named pipe to write a pcap stream into.
 
-Two interfaces are advertised, one per radio: IEEE 802.15.4 for Zigbee and
-Thread, and 2.4 GHz Wi-Fi. They cannot run at once -- the C6 has a single
-2.4 GHz front end -- but Wireshark treats them as separate interfaces, so
-starting one while the other captures will simply fail to open the port. BLE
-comes in a later milestone and is deliberately absent rather than
-present-and-broken: an interface that appears in Wireshark and then fails is
-worse than one that is not there yet.
+Three interfaces are advertised, one per radio: IEEE 802.15.4 for Zigbee and
+Thread, 2.4 GHz Wi-Fi, and Bluetooth LE advertisements. They cannot run at once
+-- the C6 has a single 2.4 GHz front end -- but Wireshark treats them as
+separate interfaces, so starting one while the other captures will simply fail
+to open the port.
+
+The BLE interface offers no channel, because the controller rotates the three
+advertising channels itself; asking for one is refused rather than ignored.
 
 Toolbar channel values carry a one-letter radio prefix ("z25", "w6") rather
 than a bare number. Channels 11 to 14 exist in BOTH radios and mean different
@@ -65,6 +66,11 @@ DISPLAY = "ESP32-C6 IEEE 802.15.4 (Zigbee/Thread)"
 DLT_NUMBER = 283
 DLT_NAME = "IEEE802_15_4_TAP"
 
+BLE_INTERFACE = "esp32c6-ble"
+BLE_DISPLAY = "ESP32-C6 Bluetooth LE (advertisements)"
+BLE_DLT_NUMBER = 201
+BLE_DLT_NAME = "BLUETOOTH_HCI_H4_WITH_PHDR"
+
 WIFI_INTERFACE = "esp32c6-wifi"
 WIFI_DISPLAY = "ESP32-C6 Wi-Fi 2.4 GHz (802.11)"
 WIFI_DLT_NUMBER = 127
@@ -109,6 +115,19 @@ INTERFACES = {
         "min": CHANNEL_MIN,
         "max": CHANNEL_MAX,
         "default": DEFAULT_CHANNEL,
+    },
+    BLE_INTERFACE: {
+        "display": BLE_DISPLAY,
+        "dlt": BLE_DLT_NUMBER,
+        "dlt_name": BLE_DLT_NAME,
+        "dlt_display": "Bluetooth HCI H4 with direction",
+        "band": "BLE",
+        "prefix": "b",
+        # No channel: the controller rotates the three advertising channels
+        # itself, so offering one would be a promise the toolbar cannot keep.
+        "min": None,
+        "max": None,
+        "default": 0,
     },
     WIFI_INTERFACE: {
         "display": WIFI_DISPLAY,
@@ -190,6 +209,8 @@ def parse_channel_token(interface: str, text: str) -> int:
         number = text
     channel = int(number)
     spec = INTERFACES[interface]
+    if spec["min"] is None:
+        raise ValueError(f"{spec['display']} has no selectable channel")
     if not spec["min"] <= channel <= spec["max"]:
         raise ValueError(
             f"channel {channel} outside {spec['min']}-{spec['max']}"
@@ -215,6 +236,8 @@ def print_interfaces(selected: str | None = None) -> None:
     shown = [selected] if selected in INTERFACES else list(INTERFACES)
     for name in shown:
         spec = INTERFACES[name]
+        if spec["min"] is None:
+            continue        # nothing to tune on this radio
         band = "" if len(shown) == 1 else f"{spec['band']} "
         for channel in range(spec["min"], spec["max"] + 1):
             print(f"value {{control={CTRL_ARG_CHANNEL}}}"
@@ -242,24 +265,35 @@ def print_config(interface: str) -> None:
     print(f"arg {{number=0}}{{call=--port}}{{display=Serial port}}"
           f"{{type=string}}{{default={DEFAULT_PORT}}}"
           f"{{tooltip=Serial port the board enumerates as}}{{required=true}}")
-    hint = (
-        "Wi-Fi in the UK mostly sits on 1, 6 and 11"
-        if interface == WIFI_INTERFACE
-        else "Zigbee commonly uses 11, 15, 20 and 25"
-    )
-    print(f"arg {{number=1}}{{call=--channel}}{{display=Channel}}"
-          f"{{type=selector}}{{default={spec['default']}}}"
-          f"{{tooltip=Starting channel. Also changeable mid-capture from the "
-          f"toolbar. {hint}}}")
-    for channel in range(spec["min"], spec["max"] + 1):
-        print(f"value {{arg=1}}{{value={channel}}}"
-              f"{{display={channel_label(interface, channel)}}}")
+    if spec["min"] is not None:
+        hint = (
+            "Wi-Fi in the UK mostly sits on 1, 6 and 11"
+            if interface == WIFI_INTERFACE
+            else "Zigbee commonly uses 11, 15, 20 and 25"
+        )
+        print(f"arg {{number=1}}{{call=--channel}}{{display=Channel}}"
+              f"{{type=selector}}{{default={spec['default']}}}"
+              f"{{tooltip=Starting channel. Also changeable mid-capture from "
+              f"the toolbar. {hint}}}")
+        for channel in range(spec["min"], spec["max"] + 1):
+            print(f"value {{arg=1}}{{value={channel}}}"
+                  f"{{display={channel_label(interface, channel)}}}")
     print("arg {number=2}{call=--antenna}{display=Antenna}"
           "{type=selector}{default=0}"
           "{tooltip=External needs a U.FL antenna fitted. Measured +6.0 dB "
           "over the onboard one on this board}")
     print("value {arg=2}{value=0}{display=Onboard ceramic}")
     print("value {arg=2}{value=1}{display=External U.FL}")
+
+    if interface == BLE_INTERFACE:
+        print("arg {number=3}{call=--ble-interval}{display=Scan interval (ms)}"
+              "{type=integer}{range=10,10240}{default=60}"
+              "{tooltip=How often the controller starts a scan window}")
+        print("arg {number=4}{call=--ble-window}{display=Scan window (ms)}"
+              "{type=integer}{range=10,10240}{default=60}"
+              "{tooltip=How long it listens each time. Equal to the interval "
+              "means continuous listening, which is what a sniffer wants}")
+        return
 
     if interface != WIFI_INTERFACE:
         return
@@ -347,7 +381,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                interface: str = INTERFACE, snaplen: int | None = None,
                frame_filter: int | None = None, hop: int = 0,
                hop_dwell_ms: int = 500, bandwidth: int = 0,
-               drop_acks: bool = False, csi_path: str | None = None) -> int:
+               drop_acks: bool = False, csi_path: str | None = None,
+               ble_interval: int = 0, ble_window: int = 0) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -356,7 +391,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
     from esp32c6_sniffer.pcap import PcapWriter
 
-    radio = Radio.WIFI if interface == WIFI_INTERFACE else Radio.IEEE802154
+    if interface == WIFI_INTERFACE:
+        radio = Radio.WIFI
+    elif interface == BLE_INTERFACE:
+        radio = Radio.BLE
+    else:
+        radio = Radio.IEEE802154
     # Snapshot length and frame filter apply to Wi-Fi only; sending them on an
     # 802.15.4 capture would be silently ignored, which is worse than not
     # sending them.
@@ -436,11 +476,14 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             csi_file.flush()
 
     with open(fifo, "wb") as pipe:
-        # Link type follows the radio, so the header matches what records()
-        # actually emits rather than whichever one was written first.
-        session_linktype = (
-            WIFI_DLT_NUMBER if radio is Radio.WIFI else DLT_NUMBER
-        )
+        # The link type comes from the interface table, which is the same
+        # table --extcap-dlts answers from, so the file header and what
+        # Wireshark was told can never disagree.
+        #
+        # This was a hard-coded "Wi-Fi or else 802.15.4" ternary, and adding a
+        # third radio made it silently label BLE records as 802.15.4 TAP: 448
+        # frames captured and not one of them dissected.
+        session_linktype = INTERFACES[interface]["dlt"]
         writer = PcapWriter(pipe, session_linktype)
         writer.flush()
 
@@ -455,6 +498,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             frame_filter=session_filter,
                             bandwidth=session_bandwidth,
                             ctrl_filter=session_ctrl,
+                            ble_interval_ms=ble_interval,
+                            ble_window_ms=ble_window,
                             csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:
@@ -561,6 +606,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bandwidth", type=int, default=0)
     parser.add_argument("--drop-acks", dest="drop_acks", action="store_true")
     parser.add_argument("--csi", dest="csi_path", default=None)
+    parser.add_argument("--ble-interval", dest="ble_interval", type=int,
+                        default=0)
+    parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     args, _unknown = parser.parse_known_args(argv)
 
     if args.extcap_interfaces:
@@ -588,7 +636,17 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("--capture requires --fifo\n")
             return 1
         channel = args.channel if args.channel is not None else spec["default"]
-        if not spec["min"] <= channel <= spec["max"]:
+        # BLE has no channel: the controller rotates the three advertising
+        # channels itself. Asking for one is refused rather than ignored --
+        # silently accepting an option that cannot be honoured is how a user
+        # ends up believing a capture is something it is not.
+        if spec["min"] is None:
+            if args.channel is not None:
+                sys.stderr.write(
+                    f"{spec['display']} has no selectable channel"
+                    + os.linesep)
+                return 1
+        elif not spec["min"] <= channel <= spec["max"]:
             sys.stderr.write(
                 f"channel {channel} outside {spec['min']}-{spec['max']}\n"
             )
@@ -613,7 +671,8 @@ def main(argv: list[str] | None = None) -> int:
                           args.extcap_control_in, args.extcap_control_out,
                           interface, args.snaplen, args.frame_filter,
                           args.hop, args.hop_dwell, args.bandwidth,
-                          args.drop_acks, args.csi_path)
+                          args.drop_acks, args.csi_path,
+                          args.ble_interval, args.ble_window)
 
     print_interfaces(args.extcap_interface)
     return 0

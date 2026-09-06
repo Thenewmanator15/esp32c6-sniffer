@@ -55,6 +55,7 @@ class Command(IntEnum):
     SET_CTRL_FILTER = 13
     SET_CSI = 14
     RADIO_DIRTY = 15
+    SET_BLE_SCAN = 16
 
 
 class FrameFilter(IntFlag):
@@ -131,6 +132,9 @@ class Radio(IntEnum):
 
     IEEE802154 = 0
     WIFI = 1
+    #: Observer only: advertisements and scan responses, never connections.
+    #: A connected device goes quiet the moment it stops advertising.
+    BLE = 2
 
 
 class Antenna(IntEnum):
@@ -167,6 +171,11 @@ def encode_command(
     needs `radio` because the two use different channel numbering.
     """
     if command is Command.SET_CHANNEL:
+        if radio not in _CHANNEL_RANGE:
+            # BLE has no channel to select: the controller rotates the three
+            # advertising channels itself. A KeyError here would be a confusing
+            # way to learn that.
+            raise ValueError(f"{radio.name} has no selectable channel")
         low, high = _CHANNEL_RANGE[radio]
         if not low <= value <= high:
             raise ValueError(

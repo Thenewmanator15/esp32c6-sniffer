@@ -13,8 +13,7 @@ networks and devices you own or are authorised to test.
 ## Status
 
 **802.15.4 capture works.** The board appears in Wireshark's interface list and
-captures live Zigbee and Thread traffic. BLE is not built yet, and is
-deliberately absent from Wireshark rather than present and failing.
+captures live Zigbee and Thread traffic.
 
 **Wi-Fi capture works and appears in Wireshark as a second interface**, with
 its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
@@ -56,7 +55,7 @@ because the way the mistakes were made is more useful than the fix.
 | 1. USB transport and throughput benchmark | Done, measured at ~810 kB/s |
 | 2. IEEE 802.15.4 into Wireshark | Done, all exit criteria met |
 | 3. Wi-Fi | Done, in Wireshark; receiver is intermittently deaf, see above |
-| 4. BLE advertisements | Not started |
+| 4. BLE advertisements | Done, in Wireshark as HCI |
 
 Beyond capture, it also does things other 802.15.4 sniffers do not:
 
@@ -170,6 +169,30 @@ frames and 128 for 11n, with the nulls at the DC and guard subcarriers where
 Values are signed 8-bit pairs, **imaginary first**, which is the opposite of
 what most people assume; `esp32c6_sniffer.csi` swaps them so a phase computed
 downstream has the sign you expect.
+
+### Bluetooth LE
+
+The third interface captures BLE advertisements. The board runs its Bluetooth
+controller with no host stack and drives it over HCI directly, so what reaches
+Wireshark is the controller's own HCI events byte for byte, dissected by
+Wireshark's own HCI dissector. Nothing about the BLE payload is interpreted
+here, which is the point: there is no bespoke format to get wrong.
+
+**It captures advertisements, not connections.** A real BLE sniffer locks onto
+a connection request and hops the data channels with it; that needs raw
+link-layer access the controller does not expose to an application. A device
+that connects goes quiet here the moment it stops advertising. Anyone needing
+connection capture wants a dedicated sniffer, and this is the advertising half
+done honestly rather than a claim to be the whole thing.
+
+Scanning is passive: the controller never sends a scan request, so the sniffer
+stays silent. Scan responses appear only when some other device solicits them,
+which is the trade for not announcing yourself.
+
+Measured: 446 HCI packets in 20 s, every one dissected as an LE Advertising
+Report, five distinct advertisers. Unlike 802.15.4, leaving BLE running does
+not poison the shared front end -- Wi-Fi kept working afterwards in both arms
+of the test, so that fault really is specific to the 802.15.4 driver.
 
 ## What you will and will not see
 

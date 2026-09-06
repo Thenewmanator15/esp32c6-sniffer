@@ -31,6 +31,9 @@ typedef enum {
     /* 1 if 802.15.4 has been used since boot, which leaves Wi-Fi deaf until
      * the radio domain is power-cycled. */
     SN_CMD_RADIO_DIRTY = 15,
+    /* BLE scan window and interval, in milliseconds: interval in the low 16
+     * bits, window in the high 16. Zero for either uses the default. */
+    SN_CMD_SET_BLE_SCAN = 16,
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */
