@@ -39,6 +39,11 @@ typedef enum {
      * channel response, which no pcap link type has a place for, so it travels
      * beside the capture rather than inside it. */
     SN_FRAME_CSI = 8,
+    /* Host to board: a network name and passphrase, for associating so an
+     * access point will speak 11ax to this radio. Kept in RAM only and never
+     * logged; the Wi-Fi driver is already configured for RAM storage so it
+     * never reaches flash either. */
+    SN_FRAME_WIFI_CREDENTIALS = 9,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

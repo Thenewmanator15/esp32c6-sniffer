@@ -19,6 +19,7 @@ static const char *TAG = "control";
 #define REPLY_LEN       6
 
 static sn_control_handler_t s_handler;
+static sn_credentials_handler_t s_credentials_handler;
 static uint8_t s_buf[RX_BUF_LEN];
 static size_t s_len;
 
@@ -96,10 +97,18 @@ static void parse_buffered(void)
 
         if (s_buf[2] == SN_FRAME_CONTROL_CMD) {
             dispatch(s_buf + SN_HEADER_LEN, payload_len);
+        } else if (s_buf[2] == SN_FRAME_WIFI_CREDENTIALS &&
+                   s_credentials_handler != NULL) {
+            s_credentials_handler(s_buf + SN_HEADER_LEN, payload_len);
         }
         memmove(s_buf, s_buf + total, s_len - total);
         s_len -= total;
     }
+}
+
+void sn_control_set_credentials_handler(sn_credentials_handler_t handler)
+{
+    s_credentials_handler = handler;
 }
 
 static void control_task(void *arg)

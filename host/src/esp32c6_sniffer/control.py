@@ -57,6 +57,10 @@ class Command(IntEnum):
     RADIO_DIRTY = 15
     SET_BLE_SCAN = 16
     SET_BLE_PHYS = 17
+    WIFI_STA_MODE = 18
+    WIFI_CONNECT = 19
+    WIFI_DISCONNECT = 20
+    SET_BLE_PERIODIC = 21
 
 
 class FrameFilter(IntFlag):
@@ -193,6 +197,29 @@ def encode_command(
     # The sequence number is irrelevant on this path; the board does not track
     # inbound ordering and replies echo the command instead.
     return encode_frame(FrameType.CONTROL_CMD, 0, payload)
+
+
+def encode_credentials(ssid: str, passphrase: str) -> bytes:
+    """Frames a network name and passphrase for the board.
+
+    Their own frame type rather than a command, because a command carries a
+    single 32-bit value and these do not fit in one.
+
+    The board keeps them in RAM and its Wi-Fi driver is configured for RAM
+    storage, so an association leaves nothing on the device. Nothing is logged
+    here either: the caller should read the passphrase with getpass rather than
+    putting it on a command line, where it would reach shell history.
+    """
+    ssid_bytes = ssid.encode("utf-8")
+    pass_bytes = passphrase.encode("utf-8")
+    if not 1 <= len(ssid_bytes) <= 32:
+        raise ValueError(f"SSID is {len(ssid_bytes)} bytes, must be 1 to 32")
+    if len(pass_bytes) > 64:
+        raise ValueError(
+            f"passphrase is {len(pass_bytes)} bytes, must be 64 or fewer")
+    payload = (bytes([len(ssid_bytes)]) + ssid_bytes
+               + bytes([len(pass_bytes)]) + pass_bytes)
+    return encode_frame(FrameType.WIFI_CREDENTIALS, 0, payload)
 
 
 def decode_reply(payload: bytes) -> dict:

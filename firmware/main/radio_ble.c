@@ -29,11 +29,23 @@ static const char *TAG = "radio_ble";
 #define OPCODE_LE_SET_SCAN_ENABLE    0x200C
 #define OPCODE_LE_SET_EXT_SCAN_PARAMS 0x2041
 #define OPCODE_LE_SET_EXT_SCAN_ENABLE 0x2042
+#define OPCODE_LE_PERIODIC_CREATE_SYNC    0x2044
+#define OPCODE_LE_PERIODIC_CANCEL_SYNC    0x2045
+#define OPCODE_LE_PERIODIC_TERMINATE_SYNC 0x2046
 
 #define EVENT_COMMAND_COMPLETE 0x0E
+#define EVENT_COMMAND_STATUS   0x0F
 #define EVENT_LE_META          0x3E
 #define LE_SUBEVENT_ADV_REPORT          0x02
 #define LE_SUBEVENT_EXT_ADV_REPORT      0x0D
+#define LE_SUBEVENT_SYNC_ESTABLISHED    0x0E
+#define LE_SUBEVENT_PERIODIC_REPORT     0x0F
+#define LE_SUBEVENT_SYNC_LOST           0x10
+
+/* Concurrent periodic syncs. The controller supports a small number and each
+ * costs radio time it would otherwise spend scanning, so this is deliberately
+ * low rather than as many as it will take. */
+#define MAX_PERIODIC_SYNCS 2
 
 /* Scan interval and window are in units of 0.625 ms. */
 #define SCAN_UNITS_PER_MS 8 / 5
@@ -45,6 +57,17 @@ typedef struct {
     uint16_t len;
     uint8_t data[SN_BLE_MAX_PACKET];
 } rx_item_t;
+
+typedef struct {
+    uint8_t sid;
+    uint8_t address_type;
+    uint8_t address[6];
+} sync_request_t;
+
+static QueueHandle_t s_sync_queue;
+static TaskHandle_t s_sync_task;
+static bool s_periodic_enabled;
+static uint8_t s_sync_count;
 
 static QueueHandle_t s_rx_queue;
 static TaskHandle_t s_rx_task;
@@ -86,11 +109,57 @@ static int vhci_receive(uint8_t *data, uint16_t len)
             xSemaphoreGive(s_cmd_done);
         }
     }
+    /* Command Status, not Command Complete. Create Sync answers this way
+     * because it starts something that finishes later, and waiting only for
+     * Complete would have timed out on every attempt. Layout: status,
+     * num_hci_command_packets, opcode. */
+    if (data[0] == H4_EVENT && len >= 7 && data[1] == EVENT_COMMAND_STATUS) {
+        const uint16_t opcode = (uint16_t)(data[5] | (data[6] << 8));
+        if (opcode == s_pending_opcode && s_cmd_done != NULL) {
+            s_pending_status = data[3];
+            xSemaphoreGive(s_cmd_done);
+        }
+    }
 
     if (data[0] == H4_EVENT && len >= 4 && data[1] == EVENT_LE_META &&
         (data[3] == LE_SUBEVENT_ADV_REPORT ||
          data[3] == LE_SUBEVENT_EXT_ADV_REPORT)) {
         s_stats.adv_reports++;
+    }
+
+    /* An extended advertising report whose periodic interval is non-zero is
+     * announcing a periodic advertising train. Syncing to it is the only way
+     * to see the train's contents, and it is how LE Audio broadcasts are
+     * found. The address and SID needed to sync are in this report and
+     * nowhere else, so they are captured here.
+     *
+     * The request is queued rather than acted on: this runs in the
+     * controller's own task, and issuing an HCI command from inside its
+     * receive callback invites a deadlock. */
+    if (s_periodic_enabled && data[0] == H4_EVENT && len >= 21 &&
+        data[1] == EVENT_LE_META && data[3] == LE_SUBEVENT_EXT_ADV_REPORT &&
+        data[4] == 1) {
+        const uint8_t *report = data + 5;
+        const uint16_t periodic_interval =
+            (uint16_t)(report[14] | (report[15] << 8));
+        if (periodic_interval != 0 && s_sync_queue != NULL) {
+            sync_request_t request = {
+                .sid = report[11],
+                .address_type = report[2],
+            };
+            memcpy(request.address, report + 3, 6);
+            s_stats.periodic_seen++;
+            xQueueSend(s_sync_queue, &request, 0);
+        }
+    }
+
+    if (data[0] == H4_EVENT && len >= 4 && data[1] == EVENT_LE_META) {
+        if (data[3] == LE_SUBEVENT_PERIODIC_REPORT) {
+            s_stats.periodic_reports++;
+        } else if (data[3] == LE_SUBEVENT_SYNC_ESTABLISHED && len >= 6 &&
+                   data[4] == 0x00) {
+            s_stats.periodic_synced++;
+        }
     }
 
     if (!s_running) {
@@ -386,6 +455,13 @@ void sn_radio_ble_stop(void)
         s_running = false;
     }
 
+    /* Deinitialising the controller drops any periodic syncs along with it,
+     * so the count is reset rather than left to block future ones. */
+    s_sync_count = 0;
+    if (s_sync_queue != NULL) {
+        xQueueReset(s_sync_queue);
+    }
+
     /* Hand the front end back properly. Disabling the scan alone leaves the
      * controller owning the radio, and the 802.15.4 radio has already shown
      * what that costs: the Wi-Fi receiver stays deaf until the RF domain is
@@ -404,6 +480,70 @@ bool sn_radio_ble_running(void)
 bool sn_radio_ble_extended(void)
 {
     return s_extended;
+}
+
+/* Issues the sync requests the receive callback queued. A task of its own
+ * because HCI commands cannot be sent from inside the controller's callback,
+ * and because Create Sync blocks until the controller answers.
+ *
+ * Create Sync answers with Command Status rather than Command Complete, since
+ * it starts something that finishes later; waiting only for Complete would
+ * have timed out on every attempt. */
+static void sync_task(void *arg)
+{
+    (void)arg;
+    sync_request_t request;
+
+    while (true) {
+        if (xQueueReceive(s_sync_queue, &request, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (!s_periodic_enabled || s_sync_count >= MAX_PERIODIC_SYNCS) {
+            continue;
+        }
+        /* options 0: use the address given rather than the advertiser list,
+         * and report from the start. skip 0, timeout 10 s in 10 ms units. */
+        uint8_t params[14] = {0};
+        params[1] = request.sid;
+        params[2] = request.address_type;
+        memcpy(params + 3, request.address, 6);
+        params[11] = 0xE8; params[12] = 0x03;
+
+        esp_err_t err = send_command(OPCODE_LE_PERIODIC_CREATE_SYNC, params,
+                                     sizeof(params));
+        if (err == ESP_OK) {
+            s_sync_count++;
+            ESP_LOGI(TAG, "syncing to a periodic train, SID %u",
+                     (unsigned)request.sid);
+        } else {
+            /* A refusal is ordinary: the controller rejects a duplicate sync
+             * to an advertiser it already follows, and every repeat of that
+             * advertisement queues another request. */
+            ESP_LOGD(TAG, "periodic sync refused: %s", esp_err_to_name(err));
+        }
+    }
+}
+
+esp_err_t sn_radio_ble_set_periodic(bool enable)
+{
+    if (enable) {
+        if (s_sync_queue == NULL) {
+            s_sync_queue = xQueueCreate(4, sizeof(sync_request_t));
+            if (s_sync_queue == NULL) {
+                return ESP_ERR_NO_MEM;
+            }
+        }
+        if (s_sync_task == NULL) {
+            if (xTaskCreate(sync_task, "sn_ble_sync", 4096, NULL, 8,
+                            &s_sync_task) != pdPASS) {
+                return ESP_ERR_NO_MEM;
+            }
+        }
+    }
+    s_periodic_enabled = enable;
+    ESP_LOGI(TAG, "periodic advertising sync %s",
+             enable ? "enabled" : "disabled");
+    return ESP_OK;
 }
 
 esp_err_t sn_radio_ble_set_phys(uint8_t phys)
@@ -442,6 +582,11 @@ bool sn_radio_ble_extended(void) { return false; }
 esp_err_t sn_radio_ble_set_phys(uint8_t phys)
 {
     (void)phys;
+    return ESP_ERR_NOT_SUPPORTED;
+}
+esp_err_t sn_radio_ble_set_periodic(bool enable)
+{
+    (void)enable;
     return ESP_ERR_NOT_SUPPORTED;
 }
 void sn_radio_ble_get_stats(sn_ble_stats_t *out) { memset(out, 0, sizeof(*out)); }

@@ -431,6 +431,130 @@ static esp_err_t apply_filter(uint32_t filter_mask)
     return esp_wifi_set_promiscuous_filter(&filter);
 }
 
+/* --- Associating, so an access point has an 11ax client to talk to ------- */
+
+static volatile uint8_t s_connected_channel;
+static SemaphoreHandle_t s_connected;
+
+static void wifi_event(void *arg, esp_event_base_t base, int32_t id,
+                       void *data)
+{
+    (void)arg; (void)base;
+    if (id == WIFI_EVENT_STA_CONNECTED) {
+        const wifi_event_sta_connected_t *ev =
+            (const wifi_event_sta_connected_t *)data;
+        s_connected_channel = ev->channel;
+        ESP_LOGI(TAG, "associated on channel %u", (unsigned)ev->channel);
+        if (s_connected != NULL) {
+            xSemaphoreGive(s_connected);
+        }
+    } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *ev =
+            (const wifi_event_sta_disconnected_t *)data;
+        /* The reason code is the useful part: a wrong passphrase and an
+         * absent network look identical without it. */
+        ESP_LOGW(TAG, "disconnected, reason %u", (unsigned)ev->reason);
+        s_connected_channel = 0;
+    }
+}
+
+uint8_t sn_radio80211_connected_channel(void)
+{
+    return s_connected_channel;
+}
+
+esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase)
+{
+    esp_err_t err = wifi_init_once();
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (s_connected == NULL) {
+        s_connected = xSemaphoreCreateBinary();
+        if (s_connected == NULL) {
+            return ESP_ERR_NO_MEM;
+        }
+        esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                            wifi_event, NULL, NULL);
+    }
+
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    wifi_config_t cfg = {0};
+    strncpy((char *)cfg.sta.ssid, ssid, sizeof(cfg.sta.ssid) - 1);
+    strncpy((char *)cfg.sta.password, passphrase,
+            sizeof(cfg.sta.password) - 1);
+    /* Scan every channel rather than trusting a stored one, and pick the
+     * strongest match: the same network name is usually on 2.4 and 5 GHz, and
+     * this radio can only use one of them. */
+    cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+    cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
+    err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    esp_wifi_start();
+    xSemaphoreTake(s_connected, 0);
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "connect: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (xSemaphoreTake(s_connected, pdMS_TO_TICKS(15000)) != pdTRUE) {
+        ESP_LOGE(TAG, "association timed out");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    /* Capture on whatever channel the association landed on; anything else
+     * would be watching a channel this radio is not on. */
+    if (s_running) {
+        esp_wifi_set_promiscuous_rx_cb(promiscuous_cb);
+        esp_wifi_set_promiscuous(true);
+        s_channel = s_connected_channel;
+        esp_wifi_set_channel(s_channel, second_chan());
+        ESP_LOGI(TAG, "capturing on the associated channel %u",
+                 (unsigned)s_channel);
+    }
+    return ESP_OK;
+}
+
+void sn_radio80211_disconnect(void)
+{
+    esp_wifi_disconnect();
+    s_connected_channel = 0;
+}
+
+esp_err_t sn_radio80211_station_mode(bool enable)
+{
+    esp_err_t err = wifi_init_once();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = esp_wifi_set_mode(enable ? WIFI_MODE_STA : WIFI_MODE_NULL);
+    ESP_LOGI(TAG, "mode -> %s: %s", enable ? "STA" : "NULL",
+             esp_err_to_name(err));
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* Re-arm promiscuous after the mode change: a mode switch is exactly the
+     * kind of thing that quietly clears it, and a capture that has stopped
+     * delivering while reporting success is the failure this project keeps
+     * running into. */
+    if (s_running) {
+        esp_wifi_set_promiscuous_rx_cb(promiscuous_cb);
+        err = esp_wifi_set_promiscuous(true);
+        ESP_LOGI(TAG, "promiscuous re-armed: %s", esp_err_to_name(err));
+        if (err == ESP_OK) {
+            err = esp_wifi_set_channel(s_channel, second_chan());
+        }
+    }
+    return err;
+}
+
 esp_err_t sn_radio80211_set_snaplen(uint16_t snaplen)
 {
     if (snaplen == 0u || snaplen > MAX_SNAPLEN) {

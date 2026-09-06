@@ -117,6 +117,29 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count, bool active);
 
 /* Sets the snapshot length for subsequent frames, 1..SN_80211_MAX_SNAPLEN.
  * Takes effect immediately; frames already queued keep the old length. */
+/* Switches the driver between station and NULL mode without disturbing
+ * promiscuous capture. Station mode is a prerequisite for associating, and
+ * associating is the only way to make an access point send this board the
+ * 11ax frames its HE decoder has never been tested against. */
+esp_err_t sn_radio80211_station_mode(bool enable);
+
+/* Associates with an access point, keeping promiscuous capture running.
+ *
+ * The only reason this exists is to make an access point send this radio 11ax
+ * frames. A capture of a 2.4 GHz band whose clients have all been steered to
+ * 5 GHz contains beacons and little else, and beacons are sent at legacy rates
+ * by design, so the HE decoder never sees a real frame. Associating puts an
+ * 11ax client on the channel: this one.
+ *
+ * Credentials are held in RAM only. The driver is configured for RAM storage,
+ * so nothing reaches flash, and the passphrase is never logged. */
+esp_err_t sn_radio80211_connect(const char *ssid, const char *passphrase);
+void sn_radio80211_disconnect(void);
+
+/* Channel the association landed on, or 0 if not associated. Worth having
+ * because the access point chooses it, not us. */
+uint8_t sn_radio80211_connected_channel(void);
+
 esp_err_t sn_radio80211_set_snaplen(uint16_t snaplen);
 
 /* Sets which frame types are delivered, as a wifi_promiscuous_filter_t mask.

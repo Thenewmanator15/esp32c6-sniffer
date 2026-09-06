@@ -45,6 +45,11 @@ typedef enum {
     SN_RADIO_BLE = 2,
 } sn_radio_t;
 static sn_radio_t s_radio = SN_RADIO_154;
+/* Held in RAM only, never logged and never written to flash: the Wi-Fi driver
+ * is configured for RAM storage, so an association leaves nothing behind. */
+static char s_ssid[33];
+static char s_passphrase[65];
+
 static uint16_t s_ble_interval_ms;   /* 0 means the driver default */
 static uint16_t s_ble_window_ms;
 
@@ -109,6 +114,42 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         sn_radio80211_stop();
         sn_radio_ble_stop();
         s_radio = (sn_radio_t)value;
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_WIFI_CONNECT:
+        if (s_ssid[0] == 0) {
+            /* Nothing to connect with. Saying so beats a timeout that
+             * looks like a missing network. */
+            return SN_STATUS_BAD_VALUE;
+        }
+        if (sn_radio80211_connect(s_ssid, s_passphrase) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = sn_radio80211_connected_channel();
+        return SN_STATUS_OK;
+
+    case SN_CMD_WIFI_DISCONNECT:
+        sn_radio80211_disconnect();
+        return SN_STATUS_OK;
+
+    case SN_CMD_WIFI_STA_MODE:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        if (sn_radio80211_station_mode(value == 1u) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
+        *out_value = value;
+        return SN_STATUS_OK;
+
+    case SN_CMD_SET_BLE_PERIODIC:
+        if (value > 1u) {
+            return SN_STATUS_BAD_VALUE;
+        }
+        if (sn_radio_ble_set_periodic(value == 1u) != ESP_OK) {
+            return SN_STATUS_FAILED;
+        }
         *out_value = value;
         return SN_STATUS_OK;
 
@@ -283,6 +324,10 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
     case SN_CMD_RADIO_DIRTY:
     case SN_CMD_SET_BLE_SCAN:
     case SN_CMD_SET_BLE_PHYS:
+    case SN_CMD_SET_BLE_PERIODIC:
+    case SN_CMD_WIFI_STA_MODE:
+    case SN_CMD_WIFI_CONNECT:
+    case SN_CMD_WIFI_DISCONNECT:
         /* Only the capture build has a radio. Reporting failure is honest;
          * silently accepting would let the host believe a channel was set. */
         return SN_STATUS_FAILED;
@@ -313,6 +358,32 @@ static void emit_conformance_vectors(void)
     sn_usb_link_send(SN_FRAME_PACKET, all_bytes, sizeof(all_bytes));
     sn_usb_link_send(SN_FRAME_PACKET, (const uint8_t *)wrap, sizeof(wrap) - 1);
     sn_usb_link_send(SN_FRAME_LOG, (const uint8_t *)logmsg, sizeof(logmsg) - 1);
+}
+
+static void on_credentials(const uint8_t *payload, size_t len)
+{
+    /* ssid_len, ssid, pass_len, passphrase. Bounded at every step: this
+     * arrives over a link that can corrupt a length as easily as a byte. */
+    if (len < 2) {
+        return;
+    }
+    const size_t ssid_len = payload[0];
+    if (ssid_len >= sizeof(s_ssid) || len < 1 + ssid_len + 1) {
+        return;
+    }
+    const size_t pass_len = payload[1 + ssid_len];
+    if (pass_len >= sizeof(s_passphrase) ||
+        len < 1 + ssid_len + 1 + pass_len) {
+        return;
+    }
+    memcpy(s_ssid, payload + 1, ssid_len);
+    s_ssid[ssid_len] = 0;
+    memcpy(s_passphrase, payload + 2 + ssid_len, pass_len);
+    s_passphrase[pass_len] = 0;
+    /* The network name is logged because it is useful and not secret. The
+     * passphrase is not, and only its length is reported. */
+    ESP_LOGI(TAG, "credentials for \"%s\" received, passphrase %u characters",
+             s_ssid, (unsigned)pass_len);
 }
 
 void app_main(void)
@@ -358,6 +429,7 @@ void app_main(void)
     sn_log_sink_install();
 
     sn_control_set_handler(on_command);
+    sn_control_set_credentials_handler(on_credentials);
     ESP_ERROR_CHECK(sn_control_start());
 
     ESP_LOGI(TAG, "link up, mode=%d", SN_MODE);

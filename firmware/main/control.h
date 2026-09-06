@@ -37,6 +37,14 @@ typedef enum {
     /* Primary advertising PHYs to scan: 0 forces legacy scanning, 1 is the
      * 1M PHY, 4 adds Coded (long range). */
     SN_CMD_SET_BLE_PHYS = 17,
+    /* 1 puts the Wi-Fi driver in station mode while promiscuous capture
+     * continues, which is what associating to an access point would need.
+     * Espressif's sniffer examples all use WIFI_MODE_NULL, so whether the two
+     * coexist is not documented anywhere and has to be measured. */
+    SN_CMD_WIFI_STA_MODE = 18,
+    SN_CMD_WIFI_CONNECT = 19,    /* associate using the credentials sent */
+    SN_CMD_WIFI_DISCONNECT = 20,
+    SN_CMD_SET_BLE_PERIODIC = 21, /* follow periodic advertising trains */
 } sn_command_t;
 
 /* Status codes returned in a reply. 0 means success. */
@@ -54,6 +62,11 @@ typedef sn_status_t (*sn_control_handler_t)(sn_command_t cmd, uint32_t value,
                                             uint32_t *out_value);
 
 void sn_control_set_handler(sn_control_handler_t handler);
+
+/* Called for a SN_FRAME_WIFI_CREDENTIALS frame. The payload is
+ * ssid_len(1), ssid, pass_len(1), passphrase -- neither NUL terminated. */
+typedef void (*sn_credentials_handler_t)(const uint8_t *payload, size_t len);
+void sn_control_set_credentials_handler(sn_credentials_handler_t handler);
 
 /* Starts the reader task. Call after sn_usb_link_init(). */
 esp_err_t sn_control_start(void);

@@ -56,6 +56,9 @@ typedef struct {
     uint32_t queue_full;
     uint32_t link_rejected;
     uint32_t command_timeouts; /* HCI setup steps that never completed */
+    uint32_t periodic_seen;     /* advertisers announcing a periodic train */
+    uint32_t periodic_synced;   /* syncs the controller established */
+    uint32_t periodic_reports;  /* periodic advertising reports received */
 } sn_ble_stats_t;
 
 /* Brings up the controller and starts passive scanning.
@@ -91,6 +94,17 @@ bool sn_radio_ble_extended(void);
 /* Selects which primary PHYs to scan. Adding Coded (long range) costs 1M
  * coverage, because the controller time-shares between them. */
 esp_err_t sn_radio_ble_set_phys(uint8_t phys);
+
+/* Follows periodic advertising trains.
+ *
+ * A periodic advertiser announces its train in an extended advertisement, and
+ * the contents are only visible after synchronising to it. This is how LE
+ * Audio and Auracast broadcasts are found: the broadcast audio stream is
+ * carried by a periodic train, not by ordinary advertisements.
+ *
+ * Syncing costs radio time that would otherwise be spent scanning, so it is
+ * off by default and capped at a small number of concurrent syncs. */
+esp_err_t sn_radio_ble_set_periodic(bool enable);
 
 #define SN_BLE_DEFAULT_INTERVAL_MS 60
 #define SN_BLE_DEFAULT_WINDOW_MS   60

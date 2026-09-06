@@ -238,9 +238,44 @@ Unlike 802.15.4, leaving BLE running does not poison the shared front end --
 Wi-Fi kept working afterwards in both arms of the test, so that fault really is
 specific to the 802.15.4 driver.
 
+**Periodic advertising sync** follows the trains that carry LE Audio and
+Auracast broadcasts. A periodic advertiser announces its train in an extended
+advertisement, and the contents are only visible after synchronising to it. It
+is off by default, because syncing costs radio time that would otherwise be
+spent scanning, and capped at two concurrent syncs.
+
+Measured here: 1342 advertising reports processed, and **no periodic
+advertisers at all** -- seen 0, synced 0. Nothing in range broadcasts one. The
+detection path ran on every report without incident; there is simply nothing to
+follow in this room.
+
 The C6 is Bluetooth 5.0 LE, certified to 5.3. Bluetooth 6.0 features such as
 Channel Sounding are not present in this silicon: its `soc_caps.h` defines
 `SOC_BLE_50_SUPPORTED` and no BLE 6 capability at all.
+
+### Verifying the 11ax decoder
+
+The HE decoder has never seen a real 802.11ax frame, and not because it is
+broken. There is nothing to decode: beacons and probe responses go out at
+legacy rates by design, and a network's 11ax clients are steered to 5 GHz,
+which this radio cannot reach. A 2.4 GHz capture is therefore legacy and 11n.
+
+`tools/he_probe.py` closes that by putting an 11ax client on the channel: this
+board. It associates, keeps promiscuous capture running throughout, and reports
+the PHY of every frame it then sees.
+
+```powershell
+.\.venv\Scripts\python.exe tools\he_probe.py --port COM3 --ssid "Your Network"
+```
+
+Measured first, because Espressif's sniffer examples all use a mode that cannot
+associate and whether the two coexist is documented nowhere: promiscuous
+capture keeps working in station mode, 630 frames in 10 s against 486 in 8 s
+before the switch.
+
+The passphrase is read interactively and never accepted as an argument, so it
+stays out of shell history and process lists. The board holds it in RAM and its
+Wi-Fi driver is set to RAM storage, so nothing reaches flash.
 
 ## What you will and will not see
 

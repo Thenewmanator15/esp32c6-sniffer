@@ -46,6 +46,7 @@ class FrameType(IntEnum):
     CONTROL_CMD = 6
     AP_RECORD = 7
     CSI = 8
+    WIFI_CREDENTIALS = 9
 
 
 @dataclass(frozen=True)
