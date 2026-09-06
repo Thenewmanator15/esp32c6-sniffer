@@ -114,10 +114,10 @@ ESP32C6_USB_PID = 0x1001
 
 
 def find_board_ports() -> list[str]:
-    """Serial ports that look like an ESP32-C6, most recent first.
+    """Serial ports that look like an ESP32-C6.
 
-    Returns an empty list rather than raising if pyserial cannot enumerate,
-    because this is only ever used to improve an error message.
+    Returns an empty list rather than raising if pyserial cannot enumerate:
+    this must never be the reason a capture fails.
     """
     try:
         from serial.tools import list_ports
@@ -128,6 +128,24 @@ def find_board_ports() -> list[str]:
                 if p.vid == ESP32C6_USB_VID and p.pid == ESP32C6_USB_PID]
     except Exception:
         return []
+
+
+def default_port() -> str:
+    """The port to offer in the dialog: found, not assumed.
+
+    A hardcoded COM3 is a guess that is wrong as often as it is right. The
+    number depends on whatever else the machine has enumerated -- the
+    development machine has an unrelated USB serial device that takes COM4,
+    and could as easily have taken COM3 -- and on Linux and macOS the name is
+    not a COM port at all.
+
+    Falls back to the platform's usual name when no board is attached, so the
+    dialog shows something sensible rather than an empty required field. The
+    field stays free text: a selector would be empty, and therefore unusable,
+    for anyone configuring the interface before plugging the board in.
+    """
+    found = find_board_ports()
+    return found[0] if found else DEFAULT_PORT
 
 
 INTERFACES = {
@@ -288,9 +306,20 @@ def print_config(interface: str) -> None:
     # No baud rate option. This is a USB CDC virtual port with no physical line
     # rate, so the setting is discarded; other projects expose one inherited
     # from bridge-chip designs, which misleads anyone who tries to tune it.
+    # The default is looked up each time Wireshark opens this dialog, so a
+    # board that moved between runs, or is on a machine that never had a COM3,
+    # still shows the right port without anybody editing anything.
+    detected = find_board_ports()
+    if detected:
+        found_note = f"Found: {', '.join(detected)}. "
+    else:
+        found_note = ("No board found. Check the cable is data-capable: a "
+                      "charge-only one enumerates nothing. ")
     print(f"arg {{number=0}}{{call=--port}}{{display=Serial port}}"
-          f"{{type=string}}{{default={DEFAULT_PORT}}}"
-          f"{{tooltip=Serial port the board enumerates as}}{{required=true}}")
+          f"{{type=string}}{{default={default_port()}}}"
+          f"{{tooltip={found_note}Detected by USB id 303A:1001, so this is "
+          f"filled in for you; change it only if you have more than one "
+          f"board}}{{required=true}}")
     if spec["min"] is not None:
         hint = (
             "Wi-Fi in the UK mostly sits on 1, 6 and 11"
@@ -489,7 +518,6 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                ble_phys: int | None = None,
                key_file: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
-    from esp32c6_sniffer.recovery import ensure_wifi_ready
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
     )
@@ -663,20 +691,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # ordinary path -- capture Zigbee in Wireshark, then switch to Wi-Fi --
         # produced a silently EMPTY capture, with no error anywhere, which is
         # the worst possible way for this to fail.
-        # Held rather than logged: the toolbar is not accepting messages until
-        # Wireshark says it has initialised, which is after the session opens.
+        # The session power-cycles the radio itself when 802.15.4 has left the
+        # shared front end deaf; this only reports it. Held rather than logged
+        # at once, because the toolbar accepts nothing until Wireshark says it
+        # has initialised, which is after the session opens.
         deferred_log: list[str] = []
-        if radio is Radio.WIFI:
-            try:
-                if ensure_wifi_ready(port):
-                    deferred_log.append(
-                        "802.15.4 had been used; power-cycled the radio first")
-            except Exception as exc:
-                # A board too old to answer, or a port that briefly vanished
-                # during the cycle. Capturing anyway beats refusing: what this
-                # guards against shows up as zero frames, which the log makes
-                # visible either way.
-                deferred_log.append(f"could not check the radio state: {exc}")
 
         with CaptureSession(port, channel=channel,
                             antenna=Antenna(antenna),
@@ -697,6 +716,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             else:
                 state["initialized"] = True   # no toolbar; nothing to wait for
 
+            if session.recovered_from_802154:
+                deferred_log.append(
+                    "802.15.4 had been used; power-cycled the radio first")
             for message in deferred_log:
                 log(message)
 
@@ -802,7 +824,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extcap-control-out", default=None)
     parser.add_argument("--capture", action="store_true")
     parser.add_argument("--fifo", default=None)
-    parser.add_argument("--port", default=DEFAULT_PORT)
+    # Resolved lazily rather than here, so listing interfaces does not pay for
+    # a serial enumeration it has no use for.
+    parser.add_argument("--port", default=None)
     # No default here: it depends on which interface was named, and a fixed
     # 802.15.4 default would be an invalid Wi-Fi channel.
     parser.add_argument("--channel", type=int, default=None)
@@ -820,6 +844,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
     args, _unknown = parser.parse_known_args(argv)
+    if args.port is None:
+        args.port = default_port()
 
     if args.extcap_interfaces:
         print_interfaces(args.extcap_interface)

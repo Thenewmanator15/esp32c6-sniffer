@@ -34,6 +34,7 @@ from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
 from .ble import LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record
 from .csi import parse_csi_record
+from .recovery import ensure_wifi_ready
 from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
     MCS_BW_20,
@@ -292,6 +293,22 @@ class CaptureSession:
         self.close()
 
     def open(self) -> None:
+        # Using the 802.15.4 radio leaves the Wi-Fi receiver deaf until the RF
+        # domain is power-gated. Measured: 633 Wi-Fi frames before an 802.15.4
+        # capture and 0 after, while idling the same 30 seconds cost nothing.
+        #
+        # This has to happen BEFORE the port is opened. The same recovery was
+        # once done inline further down, after connecting, and it did not
+        # work: it set recovered_from_802154 correctly and still captured zero
+        # frames, because power-cycling the board from inside an open session
+        # does not give the RF domain the settling time and clean
+        # re-enumeration that doing it around the port does. Two
+        # implementations of one thing, and the one in the library was the
+        # broken one, so every consumer that was not a survey tool got an
+        # empty capture with no error.
+        if self._radio is Radio.WIFI:
+            self.recovered_from_802154 = ensure_wifi_ready(self._port_name)
+
         self._connect()
 
         info = self._command(Command.GET_INFO)
@@ -303,22 +320,6 @@ class CaptureSession:
                 f"Rebuild and reflash: "
                 f"idf.py -DSN_MODE=2 build then .\flash.ps1 -Port <port>"
             )
-
-        # Using the 802.15.4 radio leaves the Wi-Fi receiver deaf until the RF
-        # domain is power-gated. Measured: 633 Wi-Fi frames before an 802.15.4
-        # capture and 0 after, while idling the same 30 seconds cost nothing.
-        # Without this a Wi-Fi capture started after an 802.15.4 one silently
-        # returns nothing at all, which is exactly the failure that cost a day.
-        if self._radio is Radio.WIFI:
-            dirty = self._command(Command.RADIO_DIRTY)
-            if dirty["value"]:
-                self.recovered_from_802154 = True
-                self._command(Command.RADIO_POWER_CYCLE)
-                # The board resets and the USB device re-enumerates.
-                self._serial.close()
-                self._serial = None
-                time.sleep(6.0)
-                self._connect()
 
         self._configure()
 
