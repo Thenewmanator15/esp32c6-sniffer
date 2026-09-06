@@ -165,6 +165,7 @@ class PcapngWriter:
         data: bytes,
         timestamp_s: float,
         original_length: int | None = None,
+        comment: str | None = None,
     ) -> None:
         """Append one packet.
 
@@ -180,6 +181,12 @@ class PcapngWriter:
         high, low = self._timestamp(timestamp_s)
         body = (struct.pack("<IIIII", 0, high, low, len(stored), orig)
                 + _pad(stored))
+        if comment:
+            # Wireshark shows this in the frame tree and exposes it as
+            # pkt_comment, so an annotated frame stays findable in a capture
+            # long after whoever ran it has forgotten what mattered.
+            body += _text_option(OPT_COMMENT, comment)
+            body += _option(OPT_ENDOFOPT, b"")
         self._stream.write(_block(BLOCK_EPB, body))
         self._packets += 1
 

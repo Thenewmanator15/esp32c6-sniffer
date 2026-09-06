@@ -120,10 +120,13 @@ def test_a_complete_handshake_is_reported_once():
     tracker = HandshakeTracker()
     results = [tracker.feed(frame(info, from_ap=info in (M1, M3)))
                for info in (M1, M2, M3, M4)]
-    assert results[:3] == [None, None, None]
-    assert results[3] is not None and results[3].complete
+    # Every one is recognised as a handshake frame, for annotating the file...
+    assert all(r[0] is not None for r in results)
+    # ...but only the last completes a set.
+    assert [r[1] for r in results[:3]] == [None, None, None]
+    assert results[3][1] is not None and results[3][1].complete
     # A re-key sends another; warning every time trains the reader to ignore it.
-    assert tracker.feed(frame(M4, from_ap=False)) is None
+    assert tracker.feed(frame(M4, from_ap=False))[1] is None
 
 
 def test_two_stations_joining_at_once_are_not_confused():
@@ -139,8 +142,8 @@ def test_two_stations_joining_at_once_are_not_confused():
     STA, STA_TEXT = original, original_text
 
     for f in (first[0], second[0], first[1], second[1], second[2]):
-        assert tracker.feed(f) is None
-    done = tracker.feed(second[3])
+        assert tracker.feed(f)[1] is None
+    done = tracker.feed(second[3])[1]
     assert done is not None
     assert done.station == "de:ad:be:ef:00:01"
     assert tracker.complete_count == 1

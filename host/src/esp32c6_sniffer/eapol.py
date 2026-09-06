@@ -166,15 +166,19 @@ class HandshakeTracker:
         self.handshakes: dict[tuple[str, str], Handshake] = {}
         self._reported: set[tuple[str, str]] = set()
 
-    def feed(self, frame: bytes) -> Handshake | None:
-        """Returns the handshake only on the frame that completes it.
+    def feed(self, frame: bytes):
+        """Returns (this frame's message, the handshake it just completed).
 
-        Reported once. A network that re-keys sends another handshake, and a
-        warning per re-key would train the reader to ignore it.
+        Both, because they are wanted for different things: every handshake
+        frame is worth annotating in the capture, while only the one that
+        completes a set is worth interrupting the operator for.
+
+        Completion is reported once. A network that re-keys sends another
+        handshake, and a warning per re-key trains the reader to ignore it.
         """
         found = parse_eapol_key(frame)
         if found is None:
-            return None
+            return None, None
         key = (found.bssid, found.station)
         handshake = self.handshakes.get(key)
         if handshake is None:
@@ -183,8 +187,8 @@ class HandshakeTracker:
         handshake.messages.add(found.message)
         if handshake.complete and key not in self._reported:
             self._reported.add(key)
-            return handshake
-        return None
+            return found, handshake
+        return found, None
 
     @property
     def complete_count(self) -> int:

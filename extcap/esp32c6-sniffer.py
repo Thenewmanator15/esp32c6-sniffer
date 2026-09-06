@@ -463,7 +463,7 @@ def print_config(interface: str, reload_option: str | None = None,
         # gave 135.
         print("arg {number=5}{call=--hop}{display=Channel hop}"
               "{type=selector}{default=0}"
-              "{tooltip=Sweeps channels during the capture. The channel is a "
+              "{group=Sweeping}{tooltip=Sweeps channels during the capture. The channel is a "
               "per-frame field in this link type, so a hopped capture stays "
               "self-describing. You will miss whatever lands while the radio "
               "is elsewhere}")
@@ -474,7 +474,7 @@ def print_config(interface: str, reload_option: str | None = None,
         print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
               f"{{type=integer}}{{range={HOP_DWELL_MIN_MS},{HOP_DWELL_MAX_MS}}}"
               f"{{default=2000}}"
-              "{tooltip=Time on each channel. Longer than the Wi-Fi default: "
+              "{group=Sweeping}{tooltip=Time on each channel. Longer than the Wi-Fi default: "
               "there are no beacons to catch, so the dwell has to be long "
               "enough for ordinary traffic to happen}")
 
@@ -489,6 +489,11 @@ def print_config(interface: str, reload_option: str | None = None,
         print("arg {number=6}{call=--ble-filter}{display=Only these devices}"
               "{type=string}"
               "{placeholder=aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66}"
+              # Checked in the dialog, so a mistyped address is caught before
+              # Wireshark commits to a capture rather than after, when the
+              # message has nowhere useful to appear.
+              r"{validation=^\s*$|^\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
+              r"(\s*[, ]\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})*\s*$}"
               "{tooltip=Restricts scanning to up to eight addresses, filtered "
               "by the controller so the rest never cross the USB link. One "
               "advertiser here produced half of everything a survey heard, so "
@@ -514,18 +519,19 @@ def print_config(interface: str, reload_option: str | None = None,
     print(f"arg {{number=3}}{{call=--snaplen}}{{display=Snapshot length}}"
           f"{{type=integer}}{{range=64,{WIFI_MAX_SNAPLEN}}}"
           f"{{default={WIFI_DEFAULT_SNAPLEN}}}"
+          f"{{group=Throughput}}"
           f"{{tooltip=Bytes kept per frame. What is discarded is encrypted "
           f"payload; the headers worth having are at the front}}")
     print("arg {number=4}{call=--filter}{display=Frame types}"
           "{type=selector}{default=5}"
-          "{tooltip=Control frames are the most numerous and the least "
+          "{group=Throughput}{tooltip=Control frames are the most numerous and the least "
           "informative, so dropping them buys link budget cheaply}")
     print("value {arg=4}{value=5}{display=Management and data (recommended)}")
     print("value {arg=4}{value=15}{display=Everything, including control}")
     print("value {arg=4}{value=1}{display=Management only (beacons, probes)}")
     print("arg {number=5}{call=--hop}{display=Channel hop}"
           "{type=selector}{default=0}"
-          "{tooltip=Sweeps channels during the capture. Each frame carries its "
+          "{group=Sweeping}{tooltip=Sweeps channels during the capture. Each frame carries its "
           "own channel, so a hopped capture stays self-describing. "
           "You will miss whatever lands while the radio is elsewhere}")
     print("value {arg=5}{value=0}{display=Off, stay on one channel}")
@@ -534,7 +540,7 @@ def print_config(interface: str, reload_option: str | None = None,
     print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
           f"{{type=integer}}{{range={HOP_DWELL_MIN_MS},{HOP_DWELL_MAX_MS}}}"
           f"{{default=500}}"
-          "{tooltip=Time on each channel. A beacon interval is about 100 ms, "
+          "{group=Sweeping}{tooltip=Time on each channel. A beacon interval is about 100 ms, "
           "so below roughly 300 ms you will miss beacons}")
     print("arg {number=7}{call=--bandwidth}{display=Channel width}"
           "{type=selector}{default=0}"
@@ -544,6 +550,7 @@ def print_config(interface: str, reload_option: str | None = None,
     print("value {arg=7}{value=1}{display=40 MHz, secondary above}")
     print("value {arg=7}{value=2}{display=40 MHz, secondary below}")
     print("arg {number=8}{call=--drop-acks}{display=Drop acknowledgements}"
+          "{group=Throughput}"
           "{type=boolflag}{default=false}"
           "{tooltip=Acknowledgements dominate control-frame volume and carry "
           "almost nothing. Only applies when control frames are captured}")
@@ -948,24 +955,34 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             next_report = time.monotonic() + 1.0
             try:
                 for record, timestamp, original_len in session.records():
+                    note = None
                     if handshakes is not None:
                         # The 802.11 frame sits after the radiotap header,
                         # whose length is its third and fourth bytes.
                         radiotap_len = int.from_bytes(record[2:4], "little")
-                        found = handshakes.feed(record[radiotap_len:])
-                        if found is not None:
+                        key_frame, done = handshakes.feed(record[radiotap_len:])
+                        if key_frame is not None:
+                            # Annotated in the FILE, not only in the log. The
+                            # log is gone when Wireshark closes; a comment is
+                            # part of the capture and filterable with
+                            # pkt_comment months later.
+                            note = (f"WPA four-way handshake, message "
+                                    f"{key_frame.message} of 4 "
+                                    f"({key_frame.bssid})")
+                        if done is not None:
                             log(f"four-way handshake captured for "
-                                f"{found.bssid} <- {found.station}: with the "
+                                f"{done.bssid} <- {done.station}: with the "
                                 f"passphrase, this session can be decrypted")
                             control_write(
                                 fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
-                                (f"WPA handshake captured for {found.bssid}. "
+                                (f"WPA handshake captured for {done.bssid}. "
                                  f"Add the passphrase under Edit, Preferences, "
                                  f"Protocols, IEEE 802.11 to decrypt this "
-                                 f"capture.").encode())
+                                 f"capture. Filter: pkt_comment").encode())
                     with write_lock:
                         writer.write_packet(record, timestamp,
-                                            original_length=original_len)
+                                            original_length=original_len,
+                                            comment=note)
                         # Flush per packet or Wireshark shows nothing until
                         # the buffer fills, which looks like a broken capture.
                         writer.flush()
