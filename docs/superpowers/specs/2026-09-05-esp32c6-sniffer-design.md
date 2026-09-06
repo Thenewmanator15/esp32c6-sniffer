@@ -35,7 +35,7 @@ Chip type:  ESP32-C6FH4 (QFN32) (revision v0.2)
 Features:   Wi-Fi 6, BT 5 (LE), IEEE802.15.4, Single Core + LP Core,
             160MHz, Embedded Flash 4MB
 USB mode:   USB-Serial/JTAG
-MAC:        aa:bb:cc:dd:ee:ff
+MAC:        <this board's own address>
 ```
 
 512 KB SRAM, no PSRAM. Single high-performance RISC-V core (RV32IMAC) plus an LP

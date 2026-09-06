@@ -16,8 +16,8 @@ def record(ssid: bytes, *, rssi=-55, channel=6, auth=3,
 
 
 def test_decodes_a_record():
-    ap = parse_ap_record(record(b"Example"))
-    assert ap.ssid == "Example"
+    ap = parse_ap_record(record(b"Example Net"))
+    assert ap.ssid == "Example Net"
     assert ap.bssid == "11:22:33:44:55:66"
     assert ap.channel == 6
     assert ap.rssi_dbm == -55
