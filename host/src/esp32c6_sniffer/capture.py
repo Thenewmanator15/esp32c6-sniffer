@@ -57,6 +57,18 @@ from .tap import (
 WIFI_CHANNEL_MIN = 1
 WIFI_CHANNEL_MAX = 14
 
+#: How long to wait on a read while a command reply is outstanding. The board
+#: answers in well under a millisecond -- its own trace puts a STOP at 0.3 ms
+#: -- so this decides when the host LOOKS, not how long the work takes. The
+#: measured round trip tracks it almost exactly: 106 ms at a 100 ms timeout,
+#: 57.6 at 50, 18.7 at 10, 8.1 at 2. Opening a capture issues half a dozen
+#: commands, so this was most of the 589 ms it used to take.
+#:
+#: Used only while awaiting a reply. Leaving it this short for the packet
+#: stream would busy-poll a link carrying up to 810 kB/s and spend the CPU
+#: saved on latency.
+REPLY_POLL_S = 0.01
+
 #: How far the device-derived time may drift from the host clock before the
 #: anchor is reset. Generous against real drift, which is parts per million,
 #: and tight enough to catch a restarted or corrupted counter immediately.
@@ -470,8 +482,38 @@ class CaptureSession:
         self._serial.write(encode_command(command, value, radio=self._radio))
         self._serial.flush()
         deadline = time.monotonic() + timeout
+        return self._await_reply(command, deadline, timeout)
+
+    def _await_reply(self, command: Command, deadline: float,
+                     timeout: float) -> dict:
+        """Waits for one reply, polling in software rather than on the port.
+
+        A reply arrives in well under a millisecond -- the board's own trace
+        puts a STOP at 0.3 ms -- but the port's read timeout decides when the
+        host LOOKS, and at the streaming timeout that made a 0.3 ms command
+        cost 106 ms.
+
+        The obvious fix, shortening serial.timeout while a reply is
+        outstanding, does not work here and is worth recording. Assigning to
+        it makes pyserial reconfigure the port, and on this board that
+        disturbs the USB-Serial-JTAG bridge enough to reset it: the first
+        session succeeded and every session afterwards timed out waiting for
+        GET_INFO, 1 of 8 against 4 of 4 for the unchanged code. It was not the
+        poll value -- 2 ms and 10 ms failed identically.
+
+        So the port is left exactly as it was, and the waiting is done here:
+        read only what has arrived, and sleep between looks.
+        """
         while time.monotonic() < deadline:
-            for frame in self._parser.feed(self._serial.read(4096)):
+            waiting = 0
+            try:
+                waiting = self._serial.in_waiting
+            except (OSError, AttributeError):
+                waiting = 0
+            if not waiting:
+                time.sleep(REPLY_POLL_S)
+                continue
+            for frame in self._parser.feed(self._serial.read(waiting)):
                 # Every frame is deferred, replies included, so records()
                 # observes them all in arrival order. Two rules matter here and
                 # both were learned the hard way. Replies consume a sequence
