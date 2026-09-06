@@ -2,9 +2,15 @@
 
 Matter over Thread is already captured by this sniffer: the frames arrive and
 Wireshark identifies them. What it cannot do without a key is read them, because
-Thread encrypts at the MAC layer. Supply the network key and the whole stack
-opens up: 6LoWPAN, IPv6, UDP, and Matter's own message layer with node
-identifiers, session identifiers, counters and acknowledgements.
+Thread encrypts at the MAC layer. Supply the network key and the stack opens up
+to 6LoWPAN, IPv6 and UDP.
+
+Reaching Matter itself takes one more step, which the ESP32-C6 802.15.4 profile
+ships as a Decode As entry: Wireshark's Matter dissector registers only on
+Bluetooth (service UUID 0xFFF6) and claims no UDP port, so decrypted Matter
+arrives on its operational port 5540 and stops at UDP. With both in place the
+frames dissect as Matter messages carrying session identifiers, message
+counters and acknowledgements.
 
     python tools/thread_key.py --key 00112233445566778899aabbccddeeff
     python tools/thread_key.py --list
@@ -95,24 +101,66 @@ def read_entries(path: Path) -> list[str]:
     ]
 
 
+def key_table_paths() -> list[Path]:
+    """Every key table the key should go into.
+
+    Wireshark keeps decryption keys per configuration profile, and this
+    project installs one profile per radio which an 802.15.4 capture selects
+    automatically. A key written only to the root would therefore be installed
+    and never used, with nothing to say why: the capture would simply stay
+    encrypted, which is what it looks like when the key is wrong.
+
+    Whether a profile inherits the root's table could not be settled by
+    experiment here -- a malformed entry draws no complaint either way, and
+    proving it needs a real key and encrypted traffic to decrypt. Writing to
+    all of them is correct under either answer and costs nothing.
+    """
+    root = wireshark_config_dir()
+    paths = [root / "ieee802154_keys"]
+    profiles = root / "profiles"
+    if profiles.is_dir():
+        for directory in sorted(profiles.iterdir()):
+            if directory.is_dir() and directory.name.startswith("ESP32-C6"):
+                paths.append(directory / "ieee802154_keys")
+    return paths
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Install a Thread network key into Wireshark"
     )
     ap.add_argument("--key", help="Thread network key, 32 hex characters")
+    ap.add_argument("--key-file", dest="key_file",
+                    help="read the key from this file instead, so it does not "
+                         "appear in the process list or shell history")
     ap.add_argument("--index", type=int, default=0, help="key index (default 0)")
     ap.add_argument("--list", action="store_true", help="show installed keys")
     args = ap.parse_args()
 
-    path = wireshark_config_dir() / "ieee802154_keys"
-    entries = read_entries(path)
+    # A path rather than the key itself, for the same reason the Wi-Fi
+    # passphrase and the Zigbee keys take one: a command-line argument reaches
+    # the process list, and on a shared machine that is enough.
+    if args.key_file:
+        if args.key:
+            sys.stderr.write("error: give --key or --key-file, not both\n")
+            return 1
+        try:
+            with open(args.key_file, "r", encoding="utf-8") as handle:
+                args.key = handle.read().strip()
+        except OSError as exc:
+            sys.stderr.write(f"error: cannot read {args.key_file}: {exc}\n")
+            return 1
+
+    paths = key_table_paths()
 
     if args.list or not args.key:
-        print(f"key table: {path}")
-        if not entries:
-            print("  no keys installed")
-        for entry in entries:
-            print(f"  {entry}")
+        for table in paths:
+            print(f"key table: {table}")
+            found = read_entries(table)
+            if not found:
+                print("  no keys installed")
+            for entry in found:
+                print(f"  {entry}")
         if not args.key:
             print()
             print("Pass --key <32 hex chars> to install one. See the module")
@@ -126,23 +174,41 @@ def main() -> int:
         return 1
 
     line = f'"{key}","{args.index}","{HASH_TYPE_THREAD}"'
-    if line in entries:
-        print(f"already installed in {path}")
+
+    written = []
+    for table in paths:
+        found = read_entries(table)
+        if line in found:
+            continue
+        # Keys accumulate rather than replace: several networks can be
+        # decrypted in one capture, and clobbering someone's existing entries
+        # would be rude.
+        found.append(line)
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_text(HEADER + "\n".join(found) + "\n", encoding="utf-8")
+        written.append(table)
+
+    if not written:
+        print("already installed in every key table")
         return 0
-    # Keys accumulate rather than replace: several networks can be decrypted in
-    # one capture, and clobbering someone's existing entries would be rude.
-    entries.append(line)
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(HEADER + "\n".join(entries) + "\n", encoding="utf-8")
-
-    print(f"installed into {path}")
-    print(f"  {line}")
+    print(f"installed {line}")
+    for table in written:
+        print(f"  {table}")
     print()
     print("Restart Wireshark, then reopen any Thread capture. Frames should")
     print("resolve through 6LoWPAN and IPv6 to UDP, and Matter traffic to its")
     print("message layer. The Matter payload itself stays encrypted under")
     print("session keys, which Wireshark has no way to accept.")
+    print()
+    print("Two limits worth knowing, both measured rather than assumed:")
+    print("  * Matter needs the ESP32-C6 802.15.4 profile as well as the key.")
+    print("    The dissector claims no UDP port, so without the profile's")
+    print("    Decode As entry the frames decrypt and then stop at UDP.")
+    print("  * Frames carrying only a short 16-bit source address cannot be")
+    print("    decrypted by anyone: the 64-bit address is part of the CCM*")
+    print("    nonce. In practice these are sleepy-device Data Requests with")
+    print("    no payload, so little is lost.")
     return 0
 
 

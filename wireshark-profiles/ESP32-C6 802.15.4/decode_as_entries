@@ -1,0 +1,23 @@
+# "Decode As" entries file for the ESP32-C6 802.15.4 profile.
+#
+# Wireshark's Matter dissector registers itself on Bluetooth only: the
+# commissioning service UUID 0xFFF6 and its BTP transport. It claims no UDP
+# port, so Matter carried over Thread arrives correctly decrypted and is then
+# shown as plain UDP, with the "Matter" display filter matching nothing. The
+# dissector is present and works -- it is simply never reached.
+#
+# 5540 is Matter's operational port. Pointing the dissector at it turns those
+# frames into Matter messages with session identifiers, counters and
+# acknowledgements. Verified against live Thread traffic: frames that read
+# "56368 -> 5540 Len=42" in the protocol column became "Matter, Unicast
+# Session, Counter=...", with the session and counter values filled in.
+#
+# The last field must be the dissector's DESCRIPTION, "Matter", not its filter
+# name "matter". Measured against Wireshark 4.6.8: "matter" and "MATTER" both
+# yield zero frames and, importantly, no error message of any kind -- a
+# misspelling here is indistinguishable from an absent network key. There is a
+# test guarding this exact string in host/tests/test_profiles.py.
+#
+# This needs the Thread network key installed as well, otherwise the frames
+# never decrypt far enough to become UDP. See host/tools/thread_key.py.
+decode_as_entry: udp.port,5540,(none),Matter

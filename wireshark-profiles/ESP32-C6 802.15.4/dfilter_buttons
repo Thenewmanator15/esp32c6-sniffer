@@ -1,6 +1,6 @@
 "TRUE","Zigbee","zbee_nwk","Zigbee network-layer frames"
 "TRUE","Thread","mle or 6lowpan","Thread: MLE and 6LoWPAN"
-"TRUE","Matter","matter","Matter messages. Needs the Thread network key first: without it these are encrypted at the MAC layer and never reach the dissector"
+"TRUE","Matter","matter","Matter over Thread. Needs two things: the Thread network key (tools/thread_key.py), and the Decode As entry mapping UDP 5540 to Matter that this profile ships, because the dissector claims no UDP port of its own"
 "TRUE","Data","wpan.frame_type == 0x0001","Data frames only: hides acknowledgements, beacons and MAC commands"
 "TRUE","No acks","not (wpan.frame_type == 0x0002)","Everything except acknowledgements, which are usually about half the frames"
 "TRUE","Beacons","wpan.frame_type == 0x0000","Beacons: which networks are here and on what PAN"
