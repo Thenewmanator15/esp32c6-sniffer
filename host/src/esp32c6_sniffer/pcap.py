@@ -75,6 +75,10 @@ class PcapWriter:
         """
         stored = data[: self._snaplen]
         orig = original_length if original_length is not None else len(data)
+        # orig < incl is malformed pcap and readers disagree on what to do with
+        # it, so the file would be subtly wrong rather than obviously broken.
+        # Clamping keeps the file truthful about what it actually contains.
+        orig = max(orig, len(stored))
         ts_sec = int(timestamp_s)
         ts_usec = int(round((timestamp_s - ts_sec) * 1_000_000))
         # Rounding can carry into the next second.

@@ -162,6 +162,10 @@ class CaptureStats:
     fw_csi_records: int = 0
     fw_csi_dropped: int = 0
     csi_malformed: int = 0
+    #: Frames whose metadata could not be turned into a record: an impossible
+    #: channel, a length that cannot be right. Counted rather than raised,
+    #: because one bad frame must not end a capture.
+    malformed_metadata: int = 0
 
     @property
     def lossless(self) -> bool:
@@ -225,6 +229,12 @@ class CaptureSession:
         self._pending_channel: int | None = None
         self._pending_antenna: int | None = None
         self._pending_lock = threading.Lock()
+        # Lets another thread end a capture without closing the port from
+        # under the one doing the reading. Closing a serial port while a
+        # second thread sits inside read() crashes the interpreter outright on
+        # Windows -- an access violation, not an exception -- which is how the
+        # self-test discovered it needed this.
+        self._stop = threading.Event()
         # Frames that arrive while waiting for a command reply. Without this
         # they were parsed and dropped, so every channel change silently lost
         # whatever was in flight, showing up as sequence gaps the board could
@@ -338,7 +348,16 @@ class CaptureSession:
             self._command(Command.SET_CSI, 1)
         self._command(Command.SET_CHANNEL, self._channel)
 
+    def request_stop(self) -> None:
+        """Asks records() to finish, safely from another thread.
+
+        Only sets a flag: the capture loop owns the serial port and closing it
+        from elsewhere is what caused the crash this exists to prevent.
+        """
+        self._stop.set()
+
     def close(self) -> None:
+        self._stop.set()
         if self._serial is None:
             return
         try:
@@ -449,7 +468,7 @@ class CaptureSession:
         marking it sliced.
         """
         assert self._serial is not None, "call open() first"
-        while self._serial is not None:
+        while self._serial is not None and not self._stop.is_set():
             self._apply_pending()
             chunk = self._serial.read(8192)
             frames = self._deferred + self._parser.feed(chunk)
@@ -542,11 +561,27 @@ class CaptureSession:
 
     def _build_record(self, payload: bytes):
         """Turns one PACKET payload into
-        (record, body_len, device_us, original_len).
+        (record, body_len, device_us, original_len), or None.
 
-        Returns None for a payload too short to hold its own metadata, which
-        would otherwise raise inside struct.unpack and kill the capture.
+        Returns None for anything it cannot make sense of: a payload too short
+        to hold its own metadata, or metadata that decodes to an impossible
+        value such as channel 0. Both would otherwise raise -- struct.unpack on
+        the first, the radiotap builder's own range check on the second -- and
+        a raise here ends the capture.
+
+        That matters more than it sounds. The channel field is four bits wide
+        in the radio's receive descriptor, so 0 and 15 are representable and
+        neither is a real 2.4 GHz channel; fuzzing the metadata killed the
+        capture loop outright. A sniffer exists to look at malformed traffic,
+        so dying on a malformed frame is the one thing it must not do.
         """
+        try:
+            return self._build_record_inner(payload)
+        except (ValueError, struct.error):
+            self.stats.malformed_metadata += 1
+            return None
+
+    def _build_record_inner(self, payload: bytes):
         if self._radio is Radio.WIFI:
             if len(payload) <= WIFI_META_LEN:
                 return None

@@ -186,15 +186,27 @@ def encode_command(
 
 
 def decode_reply(payload: bytes) -> dict:
-    """Decode a CONTROL_REPLY frame's payload."""
+    """Decode a CONTROL_REPLY frame's payload.
+
+    An unrecognised command identifier comes back as a plain integer rather
+    than raising. Raising was wrong twice over: the board echoes back whatever
+    it was sent, so anything that puts an unknown command on the wire -- newer
+    firmware, another tool sharing the port, a corrupted byte -- produced a
+    reply that killed the capture loop reading it. And callers compare against
+    `Command` members, so an integer simply fails to match and the reply is
+    ignored, which is the wanted behaviour anyway.
+
+    A payload too short to be a reply at all still raises: that is a framing
+    failure, not an unknown message.
+    """
     if len(payload) < REPLY_PAYLOAD_LEN:
         raise ControlError(
             f"reply is {len(payload)} bytes, expected {REPLY_PAYLOAD_LEN}"
         )
     command, status, value = _REPLY.unpack(payload[:REPLY_PAYLOAD_LEN])
     try:
-        command_enum = Command(command)
-    except ValueError as exc:
-        raise ControlError(f"unknown command {command} in reply") from exc
-    return {"command": command_enum, "ok": status == 0, "status": status,
+        command_field: Command | int = Command(command)
+    except ValueError:
+        command_field = command
+    return {"command": command_field, "ok": status == 0, "status": status,
             "value": value}

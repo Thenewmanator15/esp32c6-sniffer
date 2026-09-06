@@ -75,6 +75,12 @@ def drain(session, seconds: float, on_record=None) -> int:
     thread = threading.Thread(target=pump, daemon=True)
     thread.start()
     thread.join(seconds)
+    # Ask the loop to finish and wait for it to actually leave read() before
+    # the caller closes the session. Closing the port while this thread is
+    # inside read() crashes the interpreter with an access violation rather
+    # than an exception, which is exactly what happened before this line.
+    session.request_stop()
+    thread.join(5.0)
     return count
 
 

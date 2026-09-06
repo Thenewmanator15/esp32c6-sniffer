@@ -277,3 +277,28 @@ cd host
 The hardware tests hold the firmware's C frame encoder to byte-identical output
 with the Python one, using shared vectors in `host/tests/vectors/golden.json`.
 The Python implementation is authoritative; if they disagree, fix the C.
+
+Two more suites run against the board, and they ask different questions.
+
+```powershell
+.\.venv\Scripts\python.exe tools\selftest.py --port COM3   # does each feature work?
+.\.venv\Scripts\python.exe toolsbuse.py    --port COM3   # can it be broken?
+```
+
+`selftest.py` drives every feature and reports PASS, FAIL or SKIP, where SKIP
+means the check could not be run here and is never counted as a pass. Its
+checks are differential where an absolute one would lie: a snapshot length is
+proved by records getting smaller, not by any particular size, because a size
+threshold would only measure how big the frames on air happened to be.
+
+`abuse.py` does the opposite. It sends out-of-range values, unknown command
+identifiers, garbage and truncated frames, floods, retune and radio-switch
+storms, and stops reading mid-capture to apply backpressure. Every check ends
+by asking whether the board is still alive and still capturing. It builds its
+frames by hand, because the host library validates its own commands and would
+otherwise never let the firmware's checking be tested.
+
+Between them they have found more real defects than review did, including two
+that the ordinary tests could not see: a snapshot length that was silently
+discarded on every channel change, and a host crash on a reply the board was
+right to send.

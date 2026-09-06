@@ -78,9 +78,25 @@ def test_reply_shorter_than_expected_is_rejected():
         decode_reply(b"\x01\x00")
 
 
-def test_reply_with_unknown_command_is_rejected():
+def test_reply_with_unknown_command_is_passed_through_not_rejected():
+    """This used to raise, and raising was wrong.
+
+    The board echoes back whatever command it was sent, so anything that puts
+    an unknown identifier on the wire -- newer firmware, another tool sharing
+    the port, a corrupted byte -- produced a reply that killed the capture loop
+    reading it. Abusing the firmware with unknown commands crashed the host,
+    not the board. Callers match against Command members, so a bare integer
+    fails to match and the reply is ignored, which is the wanted behaviour.
+    """
+    reply = decode_reply(struct.pack("<BBI", 99, 0, 0))
+    assert reply["command"] == 99
+    assert reply["command"] not in tuple(Command)
+
+
+def test_reply_shorter_than_the_payload_is_still_rejected():
+    """A runt is a framing failure, which is a different thing entirely."""
     with pytest.raises(ControlError):
-        decode_reply(struct.pack("<BBI", 99, 0, 0))
+        decode_reply(b"\x01\x00")
 
 
 def test_reply_length_constant_matches_the_struct():
