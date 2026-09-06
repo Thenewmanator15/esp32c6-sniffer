@@ -624,6 +624,7 @@ right to send.
 |---|---|
 | No interfaces in Wireshark | The plugin is not installed or Wireshark was not restarted. Check with `tshark -D`. |
 | The board does not appear as a COM port | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
+| `cannot capture on COM3` | The board is on a different port. The message names the one it found; set it in the interface options. The board is the device with USB id `303A:1001`, and a machine can easily have another serial device on COM3. |
 | `could not open port` | Something else holds it: another capture, a serial monitor, or a previous run that has not exited. The three radios cannot capture at once. |
 | Wi-Fi captures nothing, 802.15.4 works | The 802.15.4 radio was left enabled by a crashed host, which leaves the shared front end deaf. The host power-cycles the radio automatically when it sees the flag; if it persists, run `tools\wifi_survey.py --recover`. |
 | Flashing fails | Hold **BOOT**, tap **RESET**, release **BOOT**, retry. `flash.ps1` already retries three times. |

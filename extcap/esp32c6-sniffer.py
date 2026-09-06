@@ -105,6 +105,31 @@ HOP_SETS = {
 
 DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 
+#: The ESP32-C6's built-in USB-Serial-JTAG. Espressif's vendor id and the
+#: product id every C6 presents. Used to find the board rather than assume a
+#: port number: this machine has a second USB serial device on COM4, and a
+#: default of COM3 is a guess that is wrong as often as it is right.
+ESP32C6_USB_VID = 0x303A
+ESP32C6_USB_PID = 0x1001
+
+
+def find_board_ports() -> list[str]:
+    """Serial ports that look like an ESP32-C6, most recent first.
+
+    Returns an empty list rather than raising if pyserial cannot enumerate,
+    because this is only ever used to improve an error message.
+    """
+    try:
+        from serial.tools import list_ports
+    except Exception:
+        return []
+    try:
+        return [p.device for p in list_ports.comports()
+                if p.vid == ESP32C6_USB_VID and p.pid == ESP32C6_USB_PID]
+    except Exception:
+        return []
+
+
 INTERFACES = {
     INTERFACE: {
         "display": DISPLAY,
@@ -860,13 +885,35 @@ def main(argv: list[str] | None = None) -> int:
                 f"hop dwell {args.hop_dwell} outside "
                 f"{HOP_DWELL_MIN_MS}-{HOP_DWELL_MAX_MS} ms" + os.linesep)
             return 1
-        return do_capture(args.fifo, args.port, channel, args.antenna,
-                          args.extcap_control_in, args.extcap_control_out,
-                          interface, args.snaplen, args.frame_filter,
-                          args.hop, args.hop_dwell, args.bandwidth,
-                          args.drop_acks, args.csi_path,
-                          args.ble_interval, args.ble_window, args.ble_phys,
-                          args.key_file)
+        try:
+            return do_capture(args.fifo, args.port, channel, args.antenna,
+                              args.extcap_control_in, args.extcap_control_out,
+                              interface, args.snaplen, args.frame_filter,
+                              args.hop, args.hop_dwell, args.bandwidth,
+                              args.drop_acks, args.csi_path,
+                              args.ble_interval, args.ble_window,
+                              args.ble_phys, args.key_file)
+        except (OSError, RuntimeError) as exc:
+            # Almost always the wrong serial port, which used to reach the
+            # user as a Python traceback in a Wireshark dialog. Name the port
+            # that failed and say which one the board is actually on.
+            #
+            # RuntimeError as well as OSError: the capture library wraps the
+            # serial failure after exhausting its retries, so catching only
+            # OSError here caught nothing and the traceback still escaped.
+            sys.stderr.write(f"cannot capture on {args.port}: {exc}"
+                             + os.linesep)
+            found = find_board_ports()
+            if found:
+                sys.stderr.write(
+                    "the board looks like it is on: "
+                    + ", ".join(found) + os.linesep)
+            else:
+                sys.stderr.write(
+                    "no ESP32-C6 found on any serial port. Check the cable is "
+                    "data-capable: a charge-only one enumerates nothing and "
+                    "looks exactly like a dead board." + os.linesep)
+            return 1
 
     print_interfaces(args.extcap_interface)
     return 0
