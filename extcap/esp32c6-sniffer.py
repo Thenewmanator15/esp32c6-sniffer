@@ -85,6 +85,11 @@ WIFI_DEFAULT_SNAPLEN = 256
 WIFI_MAX_SNAPLEN = 512
 
 # Channel sets for hopping. 1/6/11 are the non-overlapping set in the UK.
+# Below roughly a beacon interval you start missing the beacons that identify
+# the networks; above ten seconds it is barely a sweep.
+HOP_DWELL_MIN_MS = 100
+HOP_DWELL_MAX_MS = 10000
+
 HOP_SETS = {
     0: None,
     1: (1, 6, 11),
@@ -282,7 +287,8 @@ def print_config(interface: str) -> None:
     print("value {arg=5}{value=1}{display=1, 6, 11 (non-overlapping)}")
     print("value {arg=5}{value=2}{display=All channels, 1-13}")
     print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
-          "{type=integer}{range=100,10000}{default=500}"
+          f"{{type=integer}}{{range={HOP_DWELL_MIN_MS},{HOP_DWELL_MAX_MS}}}"
+          f"{{default=500}}"
           "{tooltip=Time on each channel. A beacon interval is about 100 ms, "
           "so below roughly 300 ms you will miss beacons}")
     print("arg {number=7}{call=--bandwidth}{display=Channel width}"
@@ -594,6 +600,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if args.hop not in HOP_SETS:
             sys.stderr.write(f"unknown hop set {args.hop}" + os.linesep)
+            return 1
+        # A dwell outside this range is not merely odd: a negative one reaches
+        # time.sleep() on the hop thread, which raises there and kills hopping
+        # silently while the capture carries on looking healthy.
+        if not HOP_DWELL_MIN_MS <= args.hop_dwell <= HOP_DWELL_MAX_MS:
+            sys.stderr.write(
+                f"hop dwell {args.hop_dwell} outside "
+                f"{HOP_DWELL_MIN_MS}-{HOP_DWELL_MAX_MS} ms" + os.linesep)
             return 1
         return do_capture(args.fifo, args.port, channel, args.antenna,
                           args.extcap_control_in, args.extcap_control_out,

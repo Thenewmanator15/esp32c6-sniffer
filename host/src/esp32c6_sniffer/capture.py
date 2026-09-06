@@ -54,6 +54,11 @@ from .tap import (
 WIFI_CHANNEL_MIN = 1
 WIFI_CHANNEL_MAX = 14
 
+#: How far the device-derived time may drift from the host clock before the
+#: anchor is reset. Generous against real drift, which is parts per million,
+#: and tight enough to catch a restarted or corrupted counter immediately.
+MAX_CLOCK_SKEW_S = 60.0
+
 #: Wire format this host code speaks, matching SN_FIRMWARE_VERSION in
 #: firmware/main/main.c. Checked at open() because the failure it prevents is
 #: silent: an older board packs its metadata differently, so every field would
@@ -166,6 +171,9 @@ class CaptureStats:
     #: channel, a length that cannot be right. Counted rather than raised,
     #: because one bad frame must not end a capture.
     malformed_metadata: int = 0
+    #: Times the device clock had to be re-pinned to the host clock, because
+    #: the board's counter restarted or a timestamp was corrupt.
+    timestamp_reanchors: int = 0
 
     @property
     def lossless(self) -> bool:
@@ -218,6 +226,7 @@ class CaptureSession:
         #: 802.15.4 radio had been used since boot.
         self.recovered_from_802154 = False
         self._t0_device: int | None = None
+        self._last_stamp: float | None = None
         self._t0_host: float = 0.0
         self._snaplen = snaplen
         self._frame_filter = frame_filter
@@ -450,10 +459,44 @@ class CaptureSession:
         return channel
 
     def _anchor(self, device_us: int) -> float:
+        """Maps the board's microsecond counter onto the host clock.
+
+        Pinning the first frame and offsetting from it keeps inter-frame
+        spacing at the board's resolution, which is the point: the host clock
+        is far too coarse to time frames against.
+
+        It needs two guards, because the device counter is not as
+        well-behaved as that assumes.
+
+        It restarts. The stall recovery rebuilds the Wi-Fi driver on purpose,
+        and enabling 802.15.4 restarts its counter too, so a capture spanning
+        either would run backwards in the middle of the file. And a corrupted
+        timestamp -- one bad byte in the metadata -- put a frame 292,805 years
+        into the future in testing, which makes a capture unreadable in any
+        viewer that scales its time axis.
+
+        So whenever the implied time drifts further from the host clock than
+        any real drift could account for, the anchor is reset. Normal
+        operation never trips it: the two clocks advance together to within
+        milliseconds. The result is then held non-decreasing, because frames
+        arrive in order and a pcap that says otherwise is simply wrong.
+        """
+        now = time.time()
         if self._t0_device is None:
             self._t0_device = device_us
-            self._t0_host = time.time()
-        return self._t0_host + (device_us - self._t0_device) / 1_000_000.0
+            self._t0_host = now
+
+        stamp = self._t0_host + (device_us - self._t0_device) / 1_000_000.0
+        if abs(stamp - now) > MAX_CLOCK_SKEW_S:
+            self._t0_device = device_us
+            self._t0_host = now
+            self.stats.timestamp_reanchors += 1
+            stamp = now
+
+        if self._last_stamp is not None and stamp < self._last_stamp:
+            stamp = self._last_stamp
+        self._last_stamp = stamp
+        return stamp
 
     def records(self) -> Iterator[tuple[bytes, float, int]]:
         """Yields (record, wall_clock_timestamp, original_length).

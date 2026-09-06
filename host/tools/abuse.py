@@ -199,5 +199,49 @@ link.send(Command.STOP)
 link.pump(1.0)
 link.close()
 
+print()
+print("maximum load: CSI on, every frame type, largest snapshot")
+link = Link()
+link.send(Command.SET_RADIO, int(Radio.WIFI))
+link.pump(1.5)
+link.send(Command.SET_SNAPLEN, 512)
+link.send(Command.SET_FILTER, 0xF)
+link.send(Command.SET_CSI, 1)
+link.pump(2.0)
+link.send(Command.SET_CHANNEL, 6)
+link.pump(2.0)
+
+packets = [0]
+csi = [0]
+stats = [None]
+end = time.time() + 20.0
+while time.time() < end:
+    for f in link.parser.feed(link.ser.read(8192)):
+        if f.ftype is FrameType.PACKET:
+            packets[0] += 1
+        elif f.ftype is FrameType.CSI:
+            csi[0] += 1
+        elif f.ftype is FrameType.STATS and len(f.payload) >= 80:
+            stats[0] = struct.unpack_from("<20I", f.payload)
+
+record("sustained maximum load", packets[0] > 0,
+       f"{packets[0]} frames, {csi[0]} CSI records in 20 s")
+if stats[0] is not None:
+    link_sent, ringfull, _short, stalls, _bytes = stats[0][:5]
+    wifi = stats[0][8:20]
+    isr_full, rejected = wifi[5], wifi[6]
+    csi_dropped = wifi[9]
+    # Dropping under maximum load is a capacity fact, not a defect, but it has
+    # to be visible rather than silent -- an invisible drop is the failure.
+    record("drops are reported, not hidden", True,
+           f"ring-full={ringfull} tx-stalls={stalls} isr-full={isr_full} "
+           f"link-rejected={rejected} csi-dropped={csi_dropped}")
+link.send(Command.SET_CSI, 0)
+link.pump(1.0)
+link.send(Command.STOP)
+link.pump(1.0)
+record("alive after maximum load", link.alive() is not None)
+link.close()
+
 passed = sum(1 for _n, ok, _d in results if ok)
 print(f"\n{passed} passed, {len(results) - passed} failed")

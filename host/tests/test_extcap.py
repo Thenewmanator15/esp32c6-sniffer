@@ -258,3 +258,43 @@ def test_unknown_hop_set_is_rejected():
     )
     assert result.returncode != 0
     assert "hop" in result.stderr.lower()
+
+
+def _run_expect_failure(*args: str):
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), *args],
+        capture_output=True, text=True, timeout=30,
+    )
+    return result
+
+
+def test_negative_snaplen_is_rejected():
+    r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
+                            "--fifo", "unused", "--channel", "6",
+                            "--snaplen", "-1")
+    assert r.returncode != 0
+
+
+def test_negative_hop_dwell_does_not_spin():
+    """A negative dwell would make the hop thread never sleep, pinning a core
+    and flooding the board with retunes."""
+    r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
+                            "--fifo", "unused", "--channel", "6",
+                            "--hop", "1", "--hop-dwell", "-5")
+    assert r.returncode != 0, "a negative dwell was accepted"
+
+
+def test_unwritable_csi_path_fails_before_the_capture_starts():
+    """Failing after Wireshark has started showing packets is much worse than
+    failing immediately."""
+    r = _run_expect_failure("--capture", "--extcap-interface", WIFI_INTERFACE,
+                            "--fifo", "unused", "--channel", "6",
+                            "--csi", "/nonexistent-directory/x.csv")
+    assert r.returncode != 0
+
+
+def test_unknown_arguments_are_ignored_not_fatal():
+    """Wireshark passes options this plugin never declared; refusing them
+    would make the interface unusable."""
+    out = _run("--extcap-interfaces", "--some-future-option", "value")
+    assert "interface {value=" in out

@@ -425,3 +425,34 @@ def test_reply_too_short_still_raises():
     """A runt is a framing failure, which is different from an unknown one."""
     with pytest.raises(ControlError):
         decode_reply(b"\x01\x00")
+
+
+# --- timestamps -----------------------------------------------------------
+
+def test_a_restarted_device_clock_does_not_move_time_backwards():
+    """The radio's counter restarts whenever the driver is rebuilt, which the
+    stall recovery does on purpose. Anchoring blindly to the first frame turns
+    that into a capture whose timestamps run backwards mid-file."""
+    session = wifi_session()
+    frame = bytes([0x80, 0x00]) + b"x" * 20
+    stamps = []
+    for device_us in (10_000_000, 10_500_000, 5, 1_000_000):
+        built = session._build_record(wifi_payload(frame, 22,
+                                                   timestamp=device_us))
+        assert built is not None
+        stamps.append(session._anchor(built[2]))
+    assert stamps == sorted(stamps), f"time went backwards: {stamps}"
+
+
+def test_a_wild_device_timestamp_does_not_land_the_capture_in_2106():
+    """A corrupted timestamp must not put a frame decades away, which makes a
+    capture unreadable in any viewer that scales its time axis."""
+    session = wifi_session()
+    frame = bytes([0x80, 0x00]) + b"x" * 20
+    first = session._anchor(1_000_000)
+    built = session._build_record(
+        wifi_payload(frame, 22, timestamp=(1 << 63)))
+    assert built is not None
+    later = session._anchor(built[2])
+    # A century is 3.15e9 seconds; anything near that is not a real capture.
+    assert later - first < 3.15e9, f"jumped {(later - first) / 3.15e7:.0f} years"
