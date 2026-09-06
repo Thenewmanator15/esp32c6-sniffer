@@ -464,6 +464,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                ble_phys: int | None = None,
                key_file: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
+    from esp32c6_sniffer.recovery import ensure_wifi_ready
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
     )
@@ -628,6 +629,30 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             fp_out = open(control_out, "wb", 0)
         fp_in = open(control_in, "rb", 0) if control_in else None
 
+        # Both radios share one 2.4 GHz front end, and leaving the 802.15.4
+        # radio ENABLED when a host disconnects leaves the Wi-Fi receiver deaf
+        # until the RF domain is power-gated. The board records that in RTC
+        # memory; this reads the flag and power-cycles before capturing.
+        #
+        # It has to be here, not only in the survey tools. Without it the
+        # ordinary path -- capture Zigbee in Wireshark, then switch to Wi-Fi --
+        # produced a silently EMPTY capture, with no error anywhere, which is
+        # the worst possible way for this to fail.
+        # Held rather than logged: the toolbar is not accepting messages until
+        # Wireshark says it has initialised, which is after the session opens.
+        deferred_log: list[str] = []
+        if radio is Radio.WIFI:
+            try:
+                if ensure_wifi_ready(port):
+                    deferred_log.append(
+                        "802.15.4 had been used; power-cycled the radio first")
+            except Exception as exc:
+                # A board too old to answer, or a port that briefly vanished
+                # during the cycle. Capturing anyway beats refusing: what this
+                # guards against shows up as zero frames, which the log makes
+                # visible either way.
+                deferred_log.append(f"could not check the radio state: {exc}")
+
         with CaptureSession(port, channel=channel,
                             antenna=Antenna(antenna),
                             radio=radio,
@@ -646,6 +671,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 thread.start()
             else:
                 state["initialized"] = True   # no toolbar; nothing to wait for
+
+            for message in deferred_log:
+                log(message)
 
             if hop_channels:
                 # request_channel() only sets a flag; the capture loop owns the
