@@ -29,7 +29,7 @@ when nothing arrives.
 | Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +6.0 dB better. |
 | Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
 | Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards. |
-| Host | **Python 3.10+** and **Wireshark 4.x**. Npcap is *not* required: frames arrive over USB, not from a network adapter. |
+| Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. |
 
 On ESP-IDF v6.0.2 the Wi-Fi receiver on this board hears nothing even with the
 RF switch driven correctly. That is measured, not folklore, and it is why the
@@ -63,27 +63,43 @@ If flashing fails, hold **BOOT**, tap **RESET**, release **BOOT**, and retry.
 **2. Host package**
 
 ```powershell
-cd host
+cd host                                              # Windows
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+```bash
+cd host                                              # Linux / macOS
+python3 -m venv .venv
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
 **3. Wireshark plugin**
 
 ```powershell
-.\extcap\install.ps1
+.\extcap\install.ps1        # Windows
 ```
 
-This installs into `%APPDATA%\Wireshark\extcap`, so it needs no administrator
-rights and survives a Wireshark upgrade. It also installs a Wireshark
-*configuration profile* with columns for channel, signal strength and link
-quality, colouring rules and filter buttons. Confirm it registered:
-
-```powershell
-& "C:\Program Files\Wireshark\tshark.exe" -D
+```bash
+./extcap/install.sh         # Linux / macOS
 ```
 
-`.\extcap\install.ps1 -Uninstall` removes all of it.
+It installs per-user — `%APPDATA%\Wireshark\extcap` or
+`~/.config/wireshark/extcap` — so it needs no administrator rights and
+survives a Wireshark upgrade. It also installs a **configuration profile per
+radio**, each with the columns, colouring and filter buttons for that radio,
+and each selecting itself when you capture on it. Confirm it registered:
+
+```
+tshark -D
+```
+
+Add `-Uninstall` or `--uninstall` to remove all of it.
+
+On Linux the serial port belongs to a group — `dialout` on most
+distributions, `uucp` on Arch. Without membership the board is visible and
+impossible to open, which looks exactly like a broken plugin; `install.sh`
+checks and tells you the command to fix it.
 
 ## Using it in Wireshark
 
