@@ -5,4 +5,4 @@
 # the first frame and cannot claim another radio's capture.
 
 # Automatically switch to this profile if this display filter matches
-auto_switch_filter: frame.interface_name == "esp32c6-wifi"
+auto_switch_filter: frame.interface_name contains "esp32c6-wifi"

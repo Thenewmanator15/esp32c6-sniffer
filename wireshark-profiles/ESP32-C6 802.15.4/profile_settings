@@ -11,4 +11,4 @@
 # which is why a file from anywhere else matches none of these profiles.
 
 # Automatically switch to this profile if this display filter matches
-auto_switch_filter: frame.interface_name == "esp32c6-802154"
+auto_switch_filter: frame.interface_name contains "esp32c6-802154"

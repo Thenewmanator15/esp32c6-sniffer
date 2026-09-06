@@ -262,15 +262,54 @@ def parse_channel_token(interface: str, text: str) -> int:
     return channel
 
 
+#: Separates the radio from the port in an interface name, when more than one
+#: board is attached. Chosen because Wireshark passes interface values through
+#: unquoted and this survives that; a space or a colon does not.
+PORT_SEPARATOR = "@"
+
+
+def split_interface(name: str) -> tuple[str, str | None]:
+    """Splits "esp32c6-wifi@COM7" into its radio and its board.
+
+    Returns (radio, port), with port None for the plain form. The plain form
+    is what a single board gets, so the common case keeps the interface names
+    -- and therefore Wireshark's saved per-interface options -- unchanged.
+    """
+    base, separator, port = name.partition(PORT_SEPARATOR)
+    return base, (port if separator else None)
+
+
+def board_interfaces() -> list[tuple[str, str]]:
+    """Every (interface value, display name) to advertise.
+
+    One set per board. Two boards mean two radios can capture AT ONCE, which
+    the single shared front end otherwise forbids: Zigbee on one and Wi-Fi on
+    the other, correlated in one Wireshark session. With one board or none the
+    names stay bare, so nothing that was configured before moves.
+    """
+    ports = find_board_ports()
+    out: list[tuple[str, str]] = []
+    for name, spec in INTERFACES.items():
+        if len(ports) > 1:
+            for port in ports:
+                out.append((f"{name}{PORT_SEPARATOR}{port}",
+                            f"{spec['display']} on {port}"))
+        else:
+            out.append((name, spec["display"]))
+    return out
+
+
 def print_interfaces(selected: str | None = None) -> None:
     # The control bitfield must appear BOTH here and on the interface line.
     # Declaring controls only in --extcap-config does not make Wireshark
     # create the pipes, and the failure is silent.
     print(f"extcap {{version=0.3.0}}{{display=ESP32-C6 Sniffer}}"
           f"{{control={CONTROL_BITS}}}")
-    for name, spec in INTERFACES.items():
-        print(f"interface {{value={name}}}{{display={spec['display']}}}"
+    for value, display in board_interfaces():
+        print(f"interface {{value={value}}}{{display={display}}}"
               f"{{control={CONTROL_BITS}}}")
+    if selected is not None:
+        selected = split_interface(selected)[0]
     # When Wireshark names the interface, offer only that radio's channels.
     # Otherwise offer both, which is why the values are prefixed: 11 to 14
     # exist in both radios and mean different frequencies.
@@ -521,7 +560,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                drop_acks: bool = False, csi_path: str | None = None,
                ble_interval: int = 0, ble_window: int = 0,
                ble_phys: int | None = None,
-               key_file: str | None = None) -> int:
+               key_file: str | None = None,
+               interface_label: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -646,9 +686,15 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             hardware="Seeed Studio XIAO ESP32-C6",
             os_name=f"{platform.system()} {platform.release()}",
             application="esp32c6-sniffer extcap",
-            interface_name=interface,
+            # The name Wireshark used, not the bare radio: with two boards
+            # attached that carries the port, so a capture stays attributable
+            # to the board that took it, and the per-radio profile still
+            # matches because it looks for the radio within the name.
+            interface_name=interface_label or interface,
             interface_description=(
                 f"{spec['display']} ({spec['band']})"
+                + (f", on {port}" if interface_label
+                   and PORT_SEPARATOR in interface_label else "")
                 + (f", channel {channel}" if spec["min"] is not None else "")),
         )
         for secret_type, secret in decryption_keys:
@@ -869,14 +915,24 @@ def main(argv: list[str] | None = None) -> int:
         print_interfaces(args.extcap_interface)
         return 0
 
-    if (args.extcap_interface is not None
-            and args.extcap_interface not in INTERFACES):
-        sys.stderr.write(f"unknown interface: {args.extcap_interface}\n")
-        return 1
+    # An interface may name its board -- "esp32c6-wifi@COM7" -- when more than
+    # one is attached. The port it names wins over the default, so selecting
+    # the second board's Wi-Fi interface captures on the second board rather
+    # than on whichever one was found first.
+    interface_name = args.extcap_interface
+    interface_port = None
+    if interface_name is not None:
+        interface_name, interface_port = split_interface(interface_name)
+        if interface_name not in INTERFACES:
+            sys.stderr.write(f"unknown interface: {args.extcap_interface}"
+                             + os.linesep)
+            return 1
+        if interface_port:
+            args.port = interface_port
 
     # Every remaining mode is interface-specific. Defaulting to 802.15.4
     # keeps a bare invocation working, as it did before Wi-Fi existed.
-    interface = args.extcap_interface or INTERFACE
+    interface = interface_name or INTERFACE
     spec = INTERFACES[interface]
 
     if args.extcap_dlts:
@@ -936,7 +992,8 @@ def main(argv: list[str] | None = None) -> int:
                               args.hop, args.hop_dwell, args.bandwidth,
                               args.drop_acks, args.csi_path,
                               args.ble_interval, args.ble_window,
-                              args.ble_phys, args.key_file)
+                              args.ble_phys, args.key_file,
+                              interface_label=args.extcap_interface)
         except (OSError, RuntimeError) as exc:
             # Almost always the wrong serial port, which used to reach the
             # user as a Python traceback in a Wireshark dialog. Name the port
