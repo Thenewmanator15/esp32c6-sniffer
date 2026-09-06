@@ -5,6 +5,13 @@ left to. This exists for the survey tool, which has to summarise a room without
 a full HCI dissector -- who is advertising, how often, how loudly, and whether
 they are trying to be anonymous about it.
 
+That is the whole boundary, and it is worth stating because the temptation to
+cross it is constant: anything that ends up in a capture file is Wireshark's
+job, and Wireshark 4.6 dissects more than one might assume -- Matter
+advertising data, the Matter message layer and its TLV encoding all have
+dissectors. Nothing here is for reading captures. It exists because the survey
+never produces one.
+
 Two report layouts, and they are not interchangeable:
 
 * Legacy, LE Meta subevent 0x02: event type, address type, address, data
@@ -40,6 +47,16 @@ AD_TX_POWER = 0x0A
 AD_SERVICE_DATA_16 = 0x16
 AD_APPEARANCE = 0x19
 AD_MANUFACTURER = 0xFF
+
+#: Matter's commissioning service. A device advertises under this only while
+#: it is waiting to be commissioned -- out of the box, or after a factory
+#: reset, or when put into pairing mode. A configured Matter device does not
+#: appear here at all, which makes the presence of one a fact worth reporting
+#: rather than background noise.
+MATTER_SERVICE_UUID = 0xFFF6
+
+#: The only opcode defined for that service data.
+MATTER_OPCODE_COMMISSIONABLE = 0x00
 
 #: A deliberately small subset of the Bluetooth company identifiers: the
 #: vendors that dominate a typical room. The full list runs to thousands and
@@ -103,6 +120,43 @@ class AddressType:
 EVENT_TYPE_LEGACY_PDU = 0x0010
 
 
+@dataclass(frozen=True)
+class MatterCommissioning:
+    """What a Matter device says while it waits to be commissioned.
+
+    The discriminator is how a commissioner tells one waiting device from
+    another when several are in pairing mode; it is the number the setup code
+    encodes. Vendor and product identify the model.
+    """
+    discriminator: int
+    vendor_id: int
+    product_id: int
+    version: int
+    extended_announcement: bool
+
+
+def parse_matter_service_data(value: bytes) -> MatterCommissioning | None:
+    """Decodes Matter commissioning service data, or None if it is not that.
+
+    Layout, after the two UUID bytes: one opcode byte, then a 16-bit field
+    holding the 12-bit discriminator and a 4-bit version, then vendor and
+    product identifiers, then flags. Everything little-endian.
+    """
+    if len(value) < 8:
+        return None
+    if value[0] != MATTER_OPCODE_COMMISSIONABLE:
+        return None
+    combined = value[1] | (value[2] << 8)
+    flags = value[7]
+    return MatterCommissioning(
+        discriminator=combined & 0x0FFF,
+        version=(combined >> 12) & 0x0F,
+        vendor_id=value[3] | (value[4] << 8),
+        product_id=value[5] | (value[6] << 8),
+        extended_announcement=bool(flags & 0x02),
+    )
+
+
 @dataclass
 class AdvertisingReport:
     address: str
@@ -121,6 +175,9 @@ class AdvertisingReport:
     company_id: int | None = None
     services: list[str] = field(default_factory=list)
     tx_power_dbm: int | None = None
+    #: Set when the device is advertising itself as ready to be
+    #: commissioned into a Matter fabric.
+    matter: object | None = None
 
     @property
     def company(self) -> str | None:
@@ -168,6 +225,10 @@ def _enrich(report: AdvertisingReport) -> AdvertisingReport:
                 report.services.append(f"{value[i + 1]:02x}{value[i]:02x}")
         elif ad_type == AD_TX_POWER and value:
             report.tx_power_dbm = value[0] - 256 if value[0] > 127 else value[0]
+        elif ad_type == AD_SERVICE_DATA_16 and len(value) >= 2:
+            uuid = value[0] | (value[1] << 8)
+            if uuid == MATTER_SERVICE_UUID:
+                report.matter = parse_matter_service_data(value[2:])
     return report
 
 

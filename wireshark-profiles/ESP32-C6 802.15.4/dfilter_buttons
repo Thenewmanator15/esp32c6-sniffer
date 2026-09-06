@@ -1,5 +1,6 @@
 "TRUE","Zigbee","zbee_nwk","Zigbee network-layer frames"
 "TRUE","Thread","mle or 6lowpan","Thread: MLE and 6LoWPAN"
+"TRUE","Matter","matter","Matter messages. Needs the Thread network key first: without it these are encrypted at the MAC layer and never reach the dissector"
 "TRUE","Data","wpan.frame_type == 0x0001","Data frames only: hides acknowledgements, beacons and MAC commands"
 "TRUE","No acks","not (wpan.frame_type == 0x0002)","Everything except acknowledgements, which are usually about half the frames"
 "TRUE","Beacons","wpan.frame_type == 0x0000","Beacons: which networks are here and on what PAN"

@@ -4,4 +4,5 @@
 "TRUE","Discoverable","btcommon.eir_ad.entry.flags.le_general_discoverable_mode == 1","Devices announcing themselves as discoverable"
 "TRUE","Extended","bthci_evt.le_ext_advts_event_type.legacy == 0","BLE 5 extended advertising PDUs, which legacy scanning cannot see"
 "TRUE","Apple","btcommon.eir_ad.entry.company_id == 0x004c","Apple manufacturer data"
+"TRUE","Matter","bluetooth.matter","Devices advertising as ready to be commissioned into a Matter fabric"
 "TRUE","Strong","bthci_evt.rssi > -70","Nearby advertisers only"

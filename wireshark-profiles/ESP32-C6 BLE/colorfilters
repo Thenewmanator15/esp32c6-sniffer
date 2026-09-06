@@ -5,6 +5,7 @@
 # devices, so the useful distinction is not the protocol -- it is always the
 # same -- but what kind of advertiser each one is.
 @Extended PDU (BLE 5)@bthci_evt.le_ext_advts_event_type.legacy == 0@[52428,65535,58853][0,0,0]
+@Matter commissionable@bluetooth.matter@[52428,65535,52428][0,0,0]
 @Named@btcommon.eir_ad.entry.device_name@[52685,58853,65535][0,0,0]
 @Connectable@bthci_evt.le_ext_advts_event_type.connectable == 1@[65535,60652,53456][0,0,0]
 @Scan response@bthci_evt.le_ext_advts_event_type.scan_response == 1@[65535,58596,45746][0,0,0]

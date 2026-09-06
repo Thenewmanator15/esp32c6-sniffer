@@ -158,3 +158,92 @@ def test_a_genuine_extended_advertisement_is_flagged():
         extended(ad((0x09, b"new")), event_type=0x0000))
     assert reports[0].via_extended_report
     assert reports[0].extended_pdu
+
+
+# --- Matter commissioning ----------------------------------------------------
+#
+# A Matter device advertises under service 0xFFF6 only while it is waiting to
+# be commissioned: out of the box, after a factory reset, or when put into
+# pairing mode. A configured one never appears, which makes seeing one a fact
+# worth reporting rather than background noise.
+#
+# Constructed rather than captured: nothing here is in commissioning mode, and
+# putting a real device into it to write a test would be an odd way round.
+
+def matter_service_data(discriminator=0x0F00, vendor=0x1234, product=0x5678,
+                        version=0, flags=0x00, opcode=0x00):
+    combined = (discriminator & 0x0FFF) | ((version & 0x0F) << 12)
+    return bytes([0xF6, 0xFF, opcode,
+                  combined & 0xFF, combined >> 8,
+                  vendor & 0xFF, vendor >> 8,
+                  product & 0xFF, product >> 8,
+                  flags])
+
+
+def test_a_commissionable_device_is_decoded():
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    reports = parse_advertising_reports(
+        legacy(ad((AD_SERVICE_DATA_16, matter_service_data()))))
+    matter = reports[0].matter
+    assert matter is not None
+    assert matter.discriminator == 0x0F00
+    assert matter.vendor_id == 0x1234
+    assert matter.product_id == 0x5678
+
+
+def test_the_discriminator_is_twelve_bits_and_the_version_the_other_four():
+    """They share one 16-bit field. Reading the whole field as the
+    discriminator gives a number that is right only when the version is 0."""
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    reports = parse_advertising_reports(legacy(ad((
+        AD_SERVICE_DATA_16, matter_service_data(discriminator=0xABC,
+                                                version=3)))))
+    assert reports[0].matter.discriminator == 0xABC
+    assert reports[0].matter.version == 3
+
+
+def test_the_extended_announcement_flag_is_read():
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    plain = parse_advertising_reports(
+        legacy(ad((AD_SERVICE_DATA_16, matter_service_data(flags=0x00)))))
+    extended = parse_advertising_reports(
+        legacy(ad((AD_SERVICE_DATA_16, matter_service_data(flags=0x02)))))
+    assert not plain[0].matter.extended_announcement
+    assert extended[0].matter.extended_announcement
+
+
+def test_another_service_is_not_read_as_matter():
+    """Service data is common. Decoding somebody else's as Matter would invent
+    a commissionable device that does not exist."""
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    other = bytes([0x0D, 0x18]) + bytes(8)     # 0x180D, heart rate
+    reports = parse_advertising_reports(
+        legacy(ad((AD_SERVICE_DATA_16, other))))
+    assert reports[0].matter is None
+
+
+def test_an_unknown_opcode_is_not_decoded():
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    reports = parse_advertising_reports(
+        legacy(ad((AD_SERVICE_DATA_16, matter_service_data(opcode=0x7F)))))
+    assert reports[0].matter is None
+
+
+def test_truncated_matter_data_is_not_decoded():
+    from esp32c6_sniffer.adv import AD_SERVICE_DATA_16
+
+    full = matter_service_data()
+    for cut in range(2, len(full)):
+        reports = parse_advertising_reports(
+            legacy(ad((AD_SERVICE_DATA_16, full[:cut]))))
+        assert reports[0].matter is None, cut
+
+
+def test_an_ordinary_advertisement_has_no_matter_field():
+    reports = parse_advertising_reports(legacy(ad((0x09, b"kettle"))))
+    assert reports[0].matter is None

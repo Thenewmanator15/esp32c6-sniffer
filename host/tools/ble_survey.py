@@ -47,6 +47,7 @@ class Device:
         self.company: str | None = None
         self.extended_pdu = False
         self.services: set[str] = set()
+        self.matter = None
 
     def update(self, report) -> None:
         self.count += 1
@@ -59,6 +60,8 @@ class Device:
             self.company = report.company
         self.extended_pdu = self.extended_pdu or report.extended_pdu
         self.services.update(report.services)
+        if report.matter is not None:
+            self.matter = report.matter
 
 
 def main() -> int:
@@ -125,6 +128,14 @@ def main() -> int:
             label = d.name or d.company or ""
             if d.name and d.company:
                 label = f"{d.name}  ({d.company})"
+            if d.matter is not None:
+                # Worth saying plainly: a Matter device advertises this way
+                # only while it is waiting to be commissioned, so one here is
+                # a device nobody has finished setting up.
+                label = (f"{label}  " if label else "") + (
+                    f"[Matter, waiting to be commissioned, "
+                    f"discriminator {d.matter.discriminator}, "
+                    f"vendor 0x{d.matter.vendor_id:04x}]")
             rate = d.count / args.seconds
             print(f"{d.best_rssi:>5}  {bar(d.best_rssi):<20}  {rate:>5.1f}  "
                   f"{d.address:<17}  {label}")
