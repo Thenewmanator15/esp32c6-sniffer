@@ -49,6 +49,12 @@ typedef enum {
      * a LOG line because it is binary and because formatting it on the
      * board would perturb the timing it reports. */
     SN_FRAME_TRACE = 10,
+
+    /* Host to board: BLE addresses to restrict scanning to. Its own
+     * frame rather than a command because a command carries four bytes
+     * and an address is six. Payload is N x (address type, 6 bytes),
+     * and an empty payload clears the restriction. */
+    SN_FRAME_BLE_FILTER = 11,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

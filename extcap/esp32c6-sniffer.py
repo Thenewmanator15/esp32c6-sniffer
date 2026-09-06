@@ -486,6 +486,14 @@ def print_config(interface: str, reload_option: str | None = None,
               "{type=integer}{range=10,10240}{default=60}"
               "{tooltip=How long it listens each time. Equal to the interval "
               "means continuous listening, which is what a sniffer wants}")
+        print("arg {number=6}{call=--ble-filter}{display=Only these devices}"
+              "{type=string}"
+              "{placeholder=aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66}"
+              "{tooltip=Restricts scanning to up to eight addresses, filtered "
+              "by the controller so the rest never cross the USB link. One "
+              "advertiser here produced half of everything a survey heard, so "
+              "this is the difference between watching a device and watching "
+              "a room. Leave empty to hear everything}")
         print("arg {number=5}{call=--ble-phys}{display=Advertising PHYs}"
               "{type=selector}{default=1}"
               "{tooltip=Extended scanning reports both legacy and BLE 5 "
@@ -647,7 +655,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                ble_interval: int = 0, ble_window: int = 0,
                ble_phys: int | None = None,
                key_file: str | None = None,
-               interface_label: str | None = None) -> int:
+               interface_label: str | None = None,
+               ble_filter: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -853,6 +862,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # find out when you try to read it and the join is hours in the past.
         handshakes = HandshakeTracker() if radio is Radio.WIFI else None
 
+        # Comma or space separated, because a Wireshark option is one text
+        # field and people will type it either way.
+        filter_addresses = []
+        if ble_filter and radio is Radio.BLE:
+            filter_addresses = [a for a in ble_filter.replace(",", " ").split()
+                                if a]
+
         # The packet loop and the heartbeat both write to the pipe, from
         # different threads. Interleaving two pcapng blocks produces a file
         # that is unreadable from the point they collide.
@@ -868,6 +884,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ble_interval_ms=ble_interval,
                             ble_window_ms=ble_window,
                             ble_phys=ble_phys,
+                            ble_filter=filter_addresses,
                             csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:
@@ -1046,6 +1063,7 @@ def main(argv: list[str] | None = None) -> int:
                         default=0)
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
+    parser.add_argument("--ble-filter", dest="ble_filter", default=None)
     args, unknown = parser.parse_known_args(argv)
 
     # Wireshark shows a capture-filter box for extcap interfaces and passes
@@ -1150,7 +1168,8 @@ def main(argv: list[str] | None = None) -> int:
                               args.drop_acks, args.csi_path,
                               args.ble_interval, args.ble_window,
                               args.ble_phys, args.key_file,
-                              interface_label=args.extcap_interface)
+                              interface_label=args.extcap_interface,
+                              ble_filter=args.ble_filter)
         except (OSError, RuntimeError) as exc:
             # Almost always the wrong serial port, which used to reach the
             # user as a Python traceback in a Wireshark dialog. Name the port

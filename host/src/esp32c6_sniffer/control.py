@@ -227,6 +227,55 @@ def encode_credentials(ssid: str, passphrase: str) -> bytes:
     return encode_frame(FrameType.WIFI_CREDENTIALS, 0, payload)
 
 
+#: The accept list every BLE controller must support. Asking for more silently
+#: drops the surplus, so it is refused here where the caller can be told.
+MAX_BLE_FILTER = 8
+
+BLE_ADDRESS_PUBLIC = 0
+BLE_ADDRESS_RANDOM = 1
+
+
+def encode_ble_filter(addresses) -> bytes:
+    """Frames a list of BLE addresses to restrict scanning to.
+
+    Each entry is "aa:bb:cc:dd:ee:ff" or a (type, address) pair, where type is
+    0 for a public address and 1 for a random one. An empty list clears the
+    restriction and scans everything again.
+
+    The controller does the filtering, so a rejected advertisement is never
+    reported and never crosses the USB link. Watching one device therefore
+    costs a fraction of what watching a room does -- which matters here,
+    because one nearby device advertising at 21 a second was half of
+    everything a survey heard.
+
+    Addresses go on the wire least significant byte first, as HCI carries
+    them. Getting that backwards filters on an address belonging to nobody and
+    reports nothing at all, which looks exactly like a quiet room.
+    """
+    if len(addresses) > MAX_BLE_FILTER:
+        raise ValueError(
+            f"{len(addresses)} addresses, the controller accept list holds "
+            f"{MAX_BLE_FILTER}")
+    payload = bytearray()
+    for entry in addresses:
+        kind = BLE_ADDRESS_PUBLIC
+        text = entry
+        if isinstance(entry, (tuple, list)):
+            kind, text = entry
+        parts = str(text).replace("-", ":").split(":")
+        if len(parts) != 6:
+            raise ValueError(f"{text!r} is not a six-byte BLE address")
+        try:
+            raw = bytes(int(p, 16) for p in parts)
+        except ValueError:
+            raise ValueError(f"{text!r} is not hexadecimal") from None
+        if kind not in (BLE_ADDRESS_PUBLIC, BLE_ADDRESS_RANDOM):
+            raise ValueError(f"address type {kind} is not 0 or 1")
+        payload.append(kind)
+        payload += raw[::-1]
+    return encode_frame(FrameType.BLE_FILTER, 0, bytes(payload))
+
+
 def decode_reply(payload: bytes) -> dict:
     """Decode a CONTROL_REPLY frame's payload.
 

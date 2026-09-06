@@ -30,6 +30,8 @@ static const char *TAG = "radio_ble";
 #define OPCODE_LE_SET_SCAN_ENABLE    0x200C
 #define OPCODE_LE_SET_EXT_SCAN_PARAMS 0x2041
 #define OPCODE_LE_SET_EXT_SCAN_ENABLE 0x2042
+#define OPCODE_LE_CLEAR_ACCEPT_LIST  0x2010
+#define OPCODE_LE_ADD_TO_ACCEPT_LIST 0x2011
 #define OPCODE_LE_PERIODIC_CREATE_SYNC    0x2044
 #define OPCODE_LE_PERIODIC_CANCEL_SYNC    0x2045
 #define OPCODE_LE_PERIODIC_TERMINATE_SYNC 0x2046
@@ -78,6 +80,13 @@ static volatile uint16_t s_pending_opcode;
 static volatile uint8_t s_pending_status;
 static volatile bool s_running;
 static bool s_controller_up;
+
+/* Addresses scanning is restricted to. Eight is the accept list every
+ * controller must support; asking for more silently drops the surplus, so the
+ * limit is enforced where it can be reported instead. */
+#define SN_BLE_MAX_FILTER 8
+static uint8_t s_filter[SN_BLE_MAX_FILTER][7];   /* type, then 6 address bytes */
+static uint8_t s_filter_count;
 static bool s_extended;          /* true once extended scanning is running */
 static uint8_t s_phys = SN_BLE_PHY_1M;
 static sn_ble_stats_t s_stats;
@@ -285,7 +294,10 @@ static esp_err_t configure_extended_scan(uint16_t interval_ms,
     uint8_t params[3 + 2 * 5];
     uint8_t n = 0;
     params[n++] = 0x00;      /* own address type, public */
-    params[n++] = 0x00;      /* accept everything */
+    /* 0 accepts everything, 1 accepts only the addresses in the accept list.
+     * Set from whether any were given, so a filter that was asked for and
+     * silently not applied cannot happen. */
+    params[n++] = s_filter_count ? 0x01 : 0x00;
     params[n++] = phys;
     for (uint8_t bit = 0; bit < 8; bit++) {
         if (!(phys & (1u << bit))) {
@@ -305,6 +317,58 @@ static esp_err_t configure_extended_scan(uint16_t interval_ms,
     /* enable, no duplicate filtering, no duration or period limit */
     const uint8_t enable[6] = {0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
     return send_command(OPCODE_LE_SET_EXT_SCAN_ENABLE, enable, sizeof(enable));
+}
+
+/* Addresses the controller should restrict scanning to.
+ *
+ * The filtering happens in the controller, which is the point: a filtered
+ * advertisement is never reported, never framed and never crosses the USB
+ * link, so watching one device costs a fraction of what watching a room does.
+ * Filtering on the host would carry every advertisement and then throw most of
+ * them away.
+ *
+ * Eight is the accept list every controller must support; asking for more
+ * silently drops the surplus, so the limit is enforced here where it can be
+ * reported instead.
+ */
+esp_err_t sn_radio_ble_set_filter(const uint8_t *entries, size_t len)
+{
+    if (len % 7u != 0u) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const size_t count = len / 7u;
+    if (count > SN_BLE_MAX_FILTER) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_filter_count = (uint8_t)count;
+    for (size_t i = 0; i < count; i++) {
+        memcpy(s_filter[i], entries + i * 7u, 7u);
+    }
+    ESP_LOGI(TAG, "advertising filter: %u address(es)", s_filter_count);
+    return ESP_OK;
+}
+
+uint8_t sn_radio_ble_filter_count(void)
+{
+    return s_filter_count;
+}
+
+/* Loads the accept list into the controller. Rebuilt on every scan start
+ * rather than kept in step, because the controller is deinitialised when a
+ * capture stops and forgets it. */
+static esp_err_t apply_filter(void)
+{
+    esp_err_t err = send_command(OPCODE_LE_CLEAR_ACCEPT_LIST, NULL, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+    for (uint8_t i = 0; i < s_filter_count; i++) {
+        err = send_command(OPCODE_LE_ADD_TO_ACCEPT_LIST, s_filter[i], 7u);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
 }
 
 static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
@@ -327,6 +391,13 @@ static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
     }
     err = send_command(OPCODE_LE_SET_EVENT_MASK, all_le_events,
                        sizeof(all_le_events));
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    /* After the reset, which clears the controller's accept list, and before
+     * either scan setup, which is where the policy referring to it is set. */
+    err = apply_filter();
     if (err != ESP_OK) {
         return err;
     }
@@ -360,7 +431,8 @@ static esp_err_t configure_scan(uint16_t interval_ms, uint16_t window_ms)
         (uint8_t)(interval & 0xFF), (uint8_t)(interval >> 8),
         (uint8_t)(window & 0xFF), (uint8_t)(window >> 8),
         0x00,                          /* own address type, public */
-        0x00,                          /* accept everything */
+        /* 0 accepts everything, 1 only the accept list. */
+        (uint8_t)(s_filter_count ? 0x01 : 0x00),
     };
     err = send_command(OPCODE_LE_SET_SCAN_PARAMS, params, sizeof(params));
     if (err != ESP_OK) {

@@ -49,6 +49,8 @@ class FrameType(IntEnum):
     WIFI_CREDENTIALS = 9
     #: A batch of trace entries, oldest first. See esp32c6_sniffer.trace.
     TRACE = 10
+    #: Host to board: BLE addresses to restrict scanning to.
+    BLE_FILTER = 11
 
 
 @dataclass(frozen=True)

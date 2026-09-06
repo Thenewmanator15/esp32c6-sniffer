@@ -398,6 +398,18 @@ static void emit_conformance_vectors(void)
     sn_usb_link_send(SN_FRAME_LOG, (const uint8_t *)logmsg, sizeof(logmsg) - 1);
 }
 
+static void on_ble_filter(const uint8_t *payload, size_t len)
+{
+    const esp_err_t err = sn_radio_ble_set_filter(payload, len);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "advertising filter rejected: %s", esp_err_to_name(err));
+        return;
+    }
+    if (len == 0u) {
+        ESP_LOGI(TAG, "advertising filter cleared");
+    }
+}
+
 static void on_credentials(const uint8_t *payload, size_t len)
 {
     /* ssid_len, ssid, pass_len, passphrase. Bounded at every step: this
@@ -468,6 +480,7 @@ void app_main(void)
 
     sn_control_set_handler(on_command);
     sn_control_set_credentials_handler(on_credentials);
+    sn_control_set_ble_filter_handler(on_ble_filter);
     ESP_ERROR_CHECK(sn_control_start());
 
     ESP_LOGI(TAG, "link up, mode=%d", SN_MODE);

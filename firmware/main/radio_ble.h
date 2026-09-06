@@ -78,6 +78,19 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms);
 void sn_radio_ble_stop(void);
 
 bool sn_radio_ble_running(void);
+
+/* Restricts scanning to specific advertisers.
+ *
+ * `entries` is N repetitions of one address-type byte followed by six address
+ * bytes, least significant first as HCI carries them. Passing zero entries
+ * scans everything again.
+ *
+ * The controller does the filtering, so a rejected advertisement is never
+ * reported and never crosses the USB link. Takes effect at the next scan
+ * start: the controller is deinitialised when a capture stops and forgets it.
+ */
+esp_err_t sn_radio_ble_set_filter(const uint8_t *entries, size_t len);
+uint8_t sn_radio_ble_filter_count(void);
 void sn_radio_ble_get_stats(sn_ble_stats_t *out);
 
 /* Primary advertising PHYs a scan may use. 2M is deliberately absent: primary

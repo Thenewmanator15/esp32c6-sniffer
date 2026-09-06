@@ -23,6 +23,7 @@ from .control import (
     Antenna,
     Bandwidth,
     Command,
+    encode_ble_filter,
     encode_credentials,
     CtrlFilter,
     FrameFilter,
@@ -223,6 +224,7 @@ class CaptureSession:
         ble_interval_ms: int = 0,
         ble_window_ms: int = 0,
         ble_phys: int | None = None,
+        ble_filter=None,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
     ) -> None:
@@ -256,6 +258,9 @@ class CaptureSession:
         # None leaves the board's default (extended, 1M). 0 forces legacy
         # scanning, which is how the two are compared.
         self._ble_phys = ble_phys
+        #: BLE addresses to restrict scanning to, filtered by the
+        #: controller so the rest never cross the link.
+        self._ble_filter = list(ble_filter or [])
         self._ctrl_filter = ctrl_filter
         # Called for each CSI record. CSI has no place in a pcap, so it leaves
         # by a different door rather than being forced into one.
@@ -403,6 +408,12 @@ class CaptureSession:
                     (self._ble_interval_ms & 0xFFFF)
                     | ((self._ble_window_ms & 0xFFFF) << 16),
                 )
+            # Before START, always. The accept list is loaded when the scan is
+            # configured, and the controller forgets it when a capture stops,
+            # so sending it afterwards filters nothing.
+            if self._ble_filter:
+                self._serial.write(encode_ble_filter(self._ble_filter))
+                self._serial.flush()
             self._command(Command.START)
         else:
             self._command(Command.SET_CHANNEL, self._channel)

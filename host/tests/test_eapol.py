@@ -133,8 +133,8 @@ def test_two_stations_joining_at_once_are_not_confused():
     tracker = HandshakeTracker()
     first = [frame(info, from_ap=info in (M1, M3)) for info in (M1, M2)]
     original, original_text = STA, STA_TEXT
-    STA = bytes([0x99] * 6)
-    STA_TEXT = "99:99:99:99:99:99"
+    STA = bytes([0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01])
+    STA_TEXT = "de:ad:be:ef:00:01"
     second = [frame(info, from_ap=info in (M1, M3)) for info in (M1, M2, M3, M4)]
     STA, STA_TEXT = original, original_text
 
@@ -142,7 +142,7 @@ def test_two_stations_joining_at_once_are_not_confused():
         assert tracker.feed(f) is None
     done = tracker.feed(second[3])
     assert done is not None
-    assert done.station == "99:99:99:99:99:99"
+    assert done.station == "de:ad:be:ef:00:01"
     assert tracker.complete_count == 1
     assert len(tracker.partial) == 1
 

@@ -44,9 +44,23 @@ SKIP_SUFFIXES = {".pcap", ".pcapng", ".png", ".bin", ".elf"}
 
 
 def tracked_text_files():
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO,
-                         capture_output=True, text=True, check=True).stdout
-    for name in out.split("\0"):
+    """Everything that would be published: committed files AND new ones.
+
+    `git ls-files` alone lists only what is already committed, so a brand new
+    file was invisible to this guard. A real device's address reached a test
+    file that way, and was caught by an unrelated assertion rather than by the
+    check written for exactly that -- the guard passed on a working tree that
+    contained it.
+
+    Untracked files are included with --exclude-standard, so anything
+    .gitignore covers -- build output, the virtualenv -- is still skipped.
+    """
+    listed = subprocess.run(["git", "ls-files", "-z"], cwd=REPO,
+                            capture_output=True, text=True, check=True).stdout
+    untracked = subprocess.run(
+        ["git", "ls-files", "-z", "--others", "--exclude-standard"], cwd=REPO,
+        capture_output=True, text=True, check=True).stdout
+    for name in (listed + untracked).split("\0"):
         if not name:
             continue
         path = REPO / name
