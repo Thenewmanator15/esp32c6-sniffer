@@ -6,8 +6,15 @@
 # shown as plain UDP, with the "Matter" display filter matching nothing. The
 # dissector is present and works -- it is simply never reached.
 #
-# 5540 is Matter's operational port. Pointing the dissector at it turns those
-# frames into Matter messages with session identifiers, counters and
+# This is deliberate upstream, not an oversight. The dissector's author
+# declined to claim a port because implementations may pick an arbitrary one
+# and advertise it over mDNS, so Matter is offered through Decode As only
+# (Wireshark merge request 9865). The dissector landed in Wireshark 4.2; on
+# older releases this entry names a dissector that does not exist and is
+# ignored, which costs nothing.
+#
+# 5540 is Matter's standard operational port. Pointing the dissector at it
+# turns those frames into Matter messages with session identifiers, counters and
 # acknowledgements. Verified against live Thread traffic: frames that read
 # "56368 -> 5540 Len=42" in the protocol column became "Matter, Unicast
 # Session, Counter=...", with the session and counter values filled in.

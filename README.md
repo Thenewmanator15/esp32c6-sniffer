@@ -29,7 +29,7 @@ when nothing arrives.
 | Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +13 to +14 dB better. |
 | Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
 | Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards. |
-| Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. |
+| Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. Matter dissection additionally needs **4.2 or later**, the release that introduced it. |
 
 On ESP-IDF v6.0.2 the Wi-Fi receiver on this board hears nothing even with the
 RF switch driven correctly. That is measured, not folklore, and it is why the
@@ -595,6 +595,18 @@ Matter dissector registers itself on Bluetooth only — commissioning service UU
 alone, Matter decrypts correctly, arrives on its operational port 5540, and is
 displayed as plain UDP. The profile ships a `Decode As` entry that points the
 dissector at 5540.
+
+That is deliberate on Wireshark's part, not an oversight. The dissector's
+author declined to claim a port because Matter implementations may pick an
+arbitrary one and advertise it over mDNS, so the dissector is offered through
+`Decode As` only. 5540 is the standard operational port and is what a Home
+Assistant fabric uses in practice, but if you ever see Matter-shaped UDP on
+another port, right-click the frame, choose **Decode As**, and set the UDP port
+to `Matter` by hand.
+
+The dissector arrived in **Wireshark 4.2**. On 4.0 or 4.1 the profile still
+installs and every other button works; the `Decode As` entry simply refers to a
+dissector that is not there, and Matter frames stay labelled UDP.
 
 Measured on a live Thread network: the key took 6LoWPAN, IPv6 and UDP from 12
 frames to 21; the `Decode As` entry then turned eight of those from `UDP 5540`
