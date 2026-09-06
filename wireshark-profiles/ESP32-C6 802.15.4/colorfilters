@@ -1,6 +1,7 @@
 # Colouring for 802.15.4 captures. Ordered most specific first, since Wireshark
 # applies the first match.
 @Encrypted payload@wpan.security == 1@[54227,50629,65535][0,0,0]
+@Matter (readable, unsecured session)@matter.message.session_id == 0@[39321,65535,39321][0,0,0]
 @Matter@matter@[52428,65535,52428][0,0,0]
 @Thread (MLE)@mle@[52428,61680,52428][0,0,0]
 @Zigbee@zbee_nwk@[52685,58853,65535][0,0,0]

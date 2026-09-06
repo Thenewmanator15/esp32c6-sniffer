@@ -571,12 +571,17 @@ file directly.
 ### Matter and Thread
 
 Matter over Thread is already captured: those frames arrive and Wireshark
-identifies them. Reading them needs your Thread network key, because Thread
-encrypts at the MAC layer.
+identifies them. Reading them takes two things, and missing either one looks
+exactly the same — frames that stay stubbornly encrypted.
+
+**1. Your Thread network key**, because Thread encrypts at the MAC layer:
 
 ```powershell
 cd host
-.\.venv\Scripts\python.exe tools	hread_key.py --key <32 hex chars>
+# Read from a file, not an argument: a command line reaches the process list
+# and your shell history.
+.\.venv\Scripts\python.exe tools\thread_key.py --key-file C:\path\to\key.txt
+.\.venv\Scripts\python.exe tools\thread_key.py --list
 ```
 
 The key comes from your border router, and only for a network you control.
@@ -584,20 +589,58 @@ Home Assistant exposes it under Settings, Devices & Services, Thread. Apple's
 Home app can share Thread credentials to a Mac. An OpenThread border router
 answers `ot-ctl networkkey`.
 
-With it installed, frames resolve through 6LoWPAN and IPv6 to UDP, and Matter
-traffic to its message layer: which node talks to which, session identifiers,
-counters, acknowledgements. Wireshark has dissectors for Matter, its Bluetooth
-transport and its advertising data built in.
+**2. The `ESP32-C6 802.15.4` profile**, which the installer sets up. Wireshark's
+Matter dissector registers itself on Bluetooth only — commissioning service UUID
+0xFFF6 and its BTP transport — and claims no UDP port at all. So with the key
+alone, Matter decrypts correctly, arrives on its operational port 5540, and is
+displayed as plain UDP. The profile ships a `Decode As` entry that points the
+dissector at 5540.
+
+Measured on a live Thread network: the key took 6LoWPAN, IPv6 and UDP from 12
+frames to 21; the `Decode As` entry then turned eight of those from `UDP 5540`
+into Matter messages with their session identifiers, counters and
+acknowledgements.
+
+#### What you can read without any key at all
+
+Matter's session-establishment traffic travels on the **unsecured session**
+(session ID 0) and is not encrypted. When a device establishes a CASE session
+over Thread, the exchange flags, protocol opcode, exchange and protocol IDs are
+all in clear text. The `Commissioning` filter button selects them.
+
+You still need the Thread network key to see these, because Thread's own MAC
+encryption is underneath — but no Matter key exists that would reveal more.
+
+#### The ceiling
 
 **The Matter payload itself stays encrypted.** It is protected by session keys
 negotiated during commissioning, and Wireshark's built-in Matter dissector has
-no key table at all, so there is nowhere to supply them. A separate
-experimental plugin from the Matter project can decrypt, but it is Linux-only
-and built for Wireshark 3.6. That is a real ceiling, not a configuration
-problem.
+no key table and no preferences at all, so there is nowhere to supply them.
 
-Commissioning itself happens over Bluetooth before a device joins Thread, and
-inside a connection, so this chip cannot capture it at all.
+The Matter project publishes a separate experimental dissector
+([project-chip/matter-dissector](https://github.com/project-chip/matter-dissector))
+which *does* take keys, through its own preferences pane. Two things limit it
+in practice. It is Linux x86_64 only and built against the Wireshark 3.6 branch,
+and its own README warns it may crash Wireshark on protocol and cluster
+combinations it has not been tested against. More fundamentally, it needs the
+session keys, and those come either from a device built with
+`MATTER_CONFIG_SECURITY_TEST_MODE` — which makes it use well-known CASE keys —
+or from instrumenting the SDK. For a commercial device already commissioned
+into your fabric, there is no way to obtain them. So the ceiling is real for
+ordinary use, and liftable only if you control the firmware.
+
+Two further limits worth stating plainly:
+
+* **Frames carrying only a short 16-bit source address cannot be decrypted by
+  anyone.** 802.15.4's CCM* construction takes the 64-bit source address into
+  its nonce, and it is not in the frame. On a sample of 29 encrypted frames, 20
+  were affected — 19 of them empty sleepy-device Data Requests, so little was
+  actually lost. Wireshark reports this as `No extended source address - can't
+  decrypt`, which is easy to mistake for a wrong key.
+* **The Bluetooth half of commissioning is out of reach.** A device advertising
+  itself as commissionable *is* captured, and the BLE profile's `Matter` button
+  finds it. But the commissioning exchange that follows runs inside a GATT
+  connection, and this chip is a scanner that cannot follow connections.
 
 ## Honest capability ceilings
 
