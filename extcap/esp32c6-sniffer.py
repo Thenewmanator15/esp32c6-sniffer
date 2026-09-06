@@ -654,6 +654,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     )
     from esp32c6_sniffer.csi import CSV_HEADER, to_csv_row
 
+    from esp32c6_sniffer.eapol import HandshakeTracker
     from esp32c6_sniffer.pcapng import PcapngWriter
 
     if interface == WIFI_INTERFACE:
@@ -845,6 +846,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # has initialised, which is after the session opens.
         deferred_log: list[str] = []
 
+        # Wi-Fi only, and only worth the per-frame cost there. A WPA2 capture
+        # is decryptable only if the four-way handshake was caught, and the
+        # handshake happens when a device joins -- a moment, not a state. Told
+        # at the time, you know the capture is worth keeping; told never, you
+        # find out when you try to read it and the join is hours in the past.
+        handshakes = HandshakeTracker() if radio is Radio.WIFI else None
+
         # The packet loop and the heartbeat both write to the pipe, from
         # different threads. Interleaving two pcapng blocks produces a file
         # that is unreadable from the point they collide.
@@ -923,6 +931,21 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             next_report = time.monotonic() + 1.0
             try:
                 for record, timestamp, original_len in session.records():
+                    if handshakes is not None:
+                        # The 802.11 frame sits after the radiotap header,
+                        # whose length is its third and fourth bytes.
+                        radiotap_len = int.from_bytes(record[2:4], "little")
+                        found = handshakes.feed(record[radiotap_len:])
+                        if found is not None:
+                            log(f"four-way handshake captured for "
+                                f"{found.bssid} <- {found.station}: with the "
+                                f"passphrase, this session can be decrypted")
+                            control_write(
+                                fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
+                                (f"WPA handshake captured for {found.bssid}. "
+                                 f"Add the passphrase under Edit, Preferences, "
+                                 f"Protocols, IEEE 802.11 to decrypt this "
+                                 f"capture.").encode())
                     with write_lock:
                         writer.write_packet(record, timestamp,
                                             original_length=original_len)
