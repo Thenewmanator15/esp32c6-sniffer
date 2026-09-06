@@ -1,7 +1,22 @@
 [project]
 name = "esp32c6-sniffer"
 version = "0.1.0"
+description = "Passive tri-radio wireless sniffer on an ESP32-C6, streaming into Wireshark"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["../LICENSE"]
+authors = [{ name = "Mathew Newman" }]
+keywords = ["wireshark", "extcap", "802.15.4", "zigbee", "thread", "wifi",
+            "bluetooth", "ble", "esp32", "esp32c6", "sniffer", "pcapng"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Networking :: Monitoring",
+]
 dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]

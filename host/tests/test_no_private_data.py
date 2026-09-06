@@ -93,3 +93,57 @@ def test_no_addresses_from_a_real_network(tracked):
     assert not found, (
         "addresses from a real network:\n  " + "\n  ".join(found)
         + "\nUse 192.0.2.x, 198.51.100.x or 203.0.113.x (RFC 5737).")
+
+
+#: Paths that only exist on one developer's machine. A tool carrying one works
+#: there and nowhere else, and the failure a user sees is an import error that
+#: says nothing about the cause.
+#: The character class must contain a BACKSLASH as well as a slash. Written
+#: with only the slash it silently matched no Windows path at all -- passing
+#: on a repository that did contain one, which is the worst way for a guard to
+#: be wrong.
+ABSOLUTE_PATH = re.compile(
+    r"""["'](?:[A-Za-z]:[\\/]|/home/|/Users/)[^"'\n]{3,}["']""")
+
+#: Absolute paths that are fine: the documented install location of a
+#: third-party tool, or a device node, rather than somebody's project folder.
+ALLOWED_ABSOLUTE = (r"C:\Program Files", "C:/Program Files", "/usr/",
+                    "/dev/tty", "/dev/ttyACM", "/dev/ttyUSB",
+                    # Standard install locations searched for, not assumed:
+                    # the scripts fall through them and report what they tried.
+                    r"C:\Espressif", "/esp/", "\\esp\\",
+                    # The conventional placeholder, in documentation examples.
+                    "\\path\\to\\", "/path/to/")
+
+
+def _offending_paths(line: str) -> list[str]:
+    return [match for match in ABSOLUTE_PATH.findall(line)
+            if not any(allowed in match for allowed in ALLOWED_ABSOLUTE)]
+
+
+def test_no_paths_from_one_developers_machine(tracked):
+    r"""tools/abuse.py carried a hardcoded sys.path pointing at H:\dev, so it
+    ran for its author and for nobody else."""
+    found = []
+    for name, text in tracked:
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for match in _offending_paths(line):
+                found.append("%s:%d  %s" % (name, line_no, match))
+    assert not found, (
+        "absolute paths that will not exist in a clone:\n  "
+        + "\n  ".join(found))
+
+
+def test_the_path_guard_catches_what_it_is_for():
+    r"""A guard whose pattern never fires passes on a repository that is
+    broken. This one already did: the character class was missing its
+    backslash, so every Windows path went through it untouched."""
+    assert _offending_paths(r'sys.path.insert(0, r"H:\dev\projects\thing")')
+    assert _offending_paths('open("/home/someone/keys.txt")')
+    assert _offending_paths(r'PATH = "C:\Users\Work\captures"')
+    assert _offending_paths('data = "/Users/someone/Desktop/out.pcap"')
+    # And must stay quiet on the ones that are legitimate.
+    assert not _offending_paths(r"TSHARK = r'C:\Program Files\Wireshark\x.exe'")
+    assert not _offending_paths(
+        'DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"')
+    assert not _offending_paths('path = os.path.join(here, "..", "src")')

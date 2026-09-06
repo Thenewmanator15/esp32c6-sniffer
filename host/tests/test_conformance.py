@@ -57,6 +57,16 @@ def _find_burst_start(frames) -> int:
     return -1
 
 
+#: Frame types only the capture build emits. Seeing one means the board is
+#: flashed for capture rather than conformance, so the golden burst will never
+#: arrive -- a build the operator chose, not a fault to report.
+CAPTURE_BUILD_FRAMES = {FrameType.STATS, FrameType.HEARTBEAT}
+
+
+def _looks_like_the_capture_build(frames) -> bool:
+    return any(frame.ftype in CAPTURE_BUILD_FRAMES for frame in frames)
+
+
 @pytest.mark.hardware
 def test_firmware_emits_identical_bytes(sniffer_port):
     """The C encoder must produce exactly what the Python encoder produces.
@@ -71,7 +81,18 @@ def test_firmware_emits_identical_bytes(sniffer_port):
     raw, frames = _collect(sniffer_port, 8.0, parser)
 
     start = _find_burst_start(frames)
-    assert start >= 0, f"no complete conformance burst in {len(frames)} frames"
+    if start < 0 and _looks_like_the_capture_build(frames):
+        pytest.skip(
+            "board is running the capture build (SN_MODE=2), which does not "
+            "emit the golden burst; reflash with -DSN_MODE=0 to run this"
+        )
+    # Deliberately distinguished from the skip above. No burst AND nothing
+    # identifying the capture build is a real failure, and reporting that as a
+    # skip would hide a broken conformance build behind a convenience.
+    assert start >= 0, (
+        f"no complete conformance burst in {len(frames)} frames, and no sign "
+        f"this is the capture build either"
+    )
 
     for case, frame in zip(VECTORS, frames[start:]):
         assert int(frame.ftype) == case["type"], f"type differs: {case['name']}"

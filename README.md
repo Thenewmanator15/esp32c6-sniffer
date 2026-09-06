@@ -10,7 +10,130 @@ interfaces; picking one selects the radio.
 **Passive capture only.** No transmit, no deauthentication, no injection. Intended for
 networks and devices you own or are authorised to test.
 
-## Status
+---
+
+**Contents** — [What you need](#what-you-need) · [Install](#install) ·
+[Using it in Wireshark](#using-it-in-wireshark) · [What it does](#what-it-does) ·
+[What it will not do](#honest-capability-ceilings) · [Testing](#testing) ·
+[Licence](#licence)
+
+## What you need
+
+| | |
+|---|---|
+| Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +6.0 dB better. |
+| Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
+| Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards. |
+| Host | **Python 3.10+** and **Wireshark 4.x**. Npcap is *not* required: frames arrive over USB, not from a network adapter. |
+
+On ESP-IDF v6.0.2 the Wi-Fi receiver on this board hears nothing even with the
+RF switch driven correctly. That is measured, not folklore, and it is why the
+version matters — see
+[the postmortem](docs/2026-09-05-wifi-investigation-postmortem.md).
+
+## Install
+
+Three steps: build and flash the firmware, set up the host package, install the
+Wireshark plugin.
+
+**1. Firmware** (once, and again only when the firmware changes)
+
+```powershell
+cd firmware
+. .\idf-env.ps1              # dot-sourced, not run: it sets variables
+idf.py -DSN_MODE=2 build     # 2 = capture. 0 = conformance tests, 1 = benchmark
+.\flash.ps1 -Port COM3
+```
+
+`idf-env.ps1` finds ESP-IDF in the usual install locations. If yours is
+elsewhere, either set `IDF_PATH`, pass `-IdfPath <path>`, or drop a line in
+`firmware\idf-env.local.ps1` (untracked):
+
+```powershell
+$LocalIdfPath = 'D:\path\to\esp-idf'
+```
+
+If flashing fails, hold **BOOT**, tap **RESET**, release **BOOT**, and retry.
+
+**2. Host package**
+
+```powershell
+cd host
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+**3. Wireshark plugin**
+
+```powershell
+.\extcap\install.ps1
+```
+
+This installs into `%APPDATA%\Wireshark\extcap`, so it needs no administrator
+rights and survives a Wireshark upgrade. It also installs a Wireshark
+*configuration profile* with columns for channel, signal strength and link
+quality, colouring rules and filter buttons. Confirm it registered:
+
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -D
+```
+
+`.\extcap\install.ps1 -Uninstall` removes all of it.
+
+## Using it in Wireshark
+
+Restart Wireshark. **Three interfaces** appear on the welcome screen, one per
+radio:
+
+| Interface | Captures | Link type |
+|---|---|---|
+| ESP32-C6 IEEE 802.15.4 | Zigbee, Thread, Matter | `IEEE802_15_4_TAP` (283) |
+| ESP32-C6 Wi-Fi 2.4 GHz | 802.11b/g/n/ax | `IEEE802_11_RADIOTAP` (127) |
+| ESP32-C6 Bluetooth LE | Advertisements | `BLUETOOTH_HCI_H4_WITH_PHDR` (201) |
+
+They share one RF front end and **cannot run at once**; starting a second while
+one is capturing simply fails to open the port.
+
+Click the gear beside an interface for its options — channel, antenna, and for
+Wi-Fi the throughput controls described [below](#wi-fi-options).
+
+**Turn the toolbar on**: *View → Interface Toolbars → ESP32-C6*. It gives a
+channel selector that retunes **mid-capture with no restart**, an antenna
+toggle, and a log window showing frame counts and the board's own drop
+counters. Toolbar channel values carry a radio prefix (`z25`, `w6`) because
+channels 11–14 exist in both radios and mean different frequencies.
+
+**Select the profile**: right-click the profile area at the bottom-right of the
+status bar and choose *ESP32-C6 Sniffer*. Without it frames still dissect
+correctly, but channel and signal strength are only visible by clicking into
+each one.
+
+`tshark` works too, with no toolbar:
+
+```powershell
+& "C:\Program Files\Wireshark\tshark.exe" -i esp32c6-wifi -w capture.pcapng
+```
+
+## What it does
+
+Beyond capturing into Wireshark:
+
+- **Mid-capture channel changes** from the toolbar, with no restart.
+- **A spectrum survey** using the radio's energy detector, which sees the Wi-Fi
+  that overlaps most 802.15.4 channels and is invisible to a packet capture.
+- **Drop counters published by the board**, so "did I miss anything?" is
+  answerable rather than assumed.
+- **Timestamps good to ~0.5 µs**, measured against the standard's fixed
+  acknowledgement turnaround rather than claimed from a datasheet.
+- **Self-describing captures**: pcapng carrying the board, radio, channel, the
+  drop counters, and optionally the Zigbee key. See
+  [below](#what-the-capture-file-carries).
+- **Channel state information** export, per-subcarrier, alongside the capture.
+- **802.11ax (HE) decoding** from the radio's own PHY metadata, verified
+  against real 11ax traffic.
+- **Survey tools** for Wi-Fi and BLE that summarise a room without a capture.
+
+## Development status
 
 **802.15.4 capture works.** The board appears in Wireshark's interface list and
 captures live Zigbee and Thread traffic.
@@ -79,23 +202,13 @@ including several that would have silently corrupted or crippled captures.
 
 ## Capturing
 
-```powershell
-cd firmware
-. .\idf-env.ps1
-idf.py -DSN_MODE=2 build     # 2 = capture; 0 = conformance tests, 1 = benchmark
-.\flash.ps1 -Port COM3
-cd ..
-.\extcap\install.ps1
-```
+Flash and install the plugin together, as in [Install](#install) above. The two
+halves share a wire format, and the host checks the board's reported firmware
+version when a capture opens: a mismatch stops with a message naming both
+versions rather than decoding older metadata into confident nonsense.
 
-Flash and install together. The two halves share a wire format, and the host
-checks the board's reported firmware version when a capture opens: a mismatch
-stops with a message naming both versions rather than decoding older metadata
-into confident nonsense.
-
-Restart Wireshark. Both interfaces appear on the welcome screen, with channel
-and antenna selectable in their options. Zigbee commonly uses channels 11, 15,
-20 and 25; Thread uses anything from 11 to 26.
+Zigbee commonly uses channels 11, 15, 20 and 25; Thread uses anything from 11
+to 26.
 
 The sniffer is passive, so it only shows traffic that already exists. If a
 channel looks empty, it probably is -- though on Wi-Fi, check the toolbar log
@@ -468,29 +581,6 @@ inside a connection, so this chip cannot capture it at all.
 
 The three radios share one RF front end and **cannot** capture simultaneously.
 
-## Prerequisites
-
-- A Seeed Studio XIAO ESP32-C6.
-- **ESP-IDF v6.1**, installed at `H:\dev\tools\.espressif\v6.1\esp-idf` with tools
-  under `H:\dev\tools\.espressif`, matching the `IDF_TOOLS_PATH` that
-  `H:\dev\setup-caches.ps1` sets.
-- Wireshark, for milestone 2 onwards. Npcap is **not** required, because frames
-  arrive over USB rather than from a local network adapter.
-
-## Building
-
-```powershell
-cd firmware
-. .\idf-env.ps1      # dot-sourced, not run
-idf.py build
-idf.py -p COM3 flash
-```
-
-`idf-env.ps1` pins `IDF_TOOLS_PATH` and `IDF_PATH` so a build never depends on
-whatever ESP-IDF version happens to be active in the shell.
-
-If flashing fails, hold BOOT, tap RESET, release BOOT, and retry.
-
 ## Testing
 
 ```powershell
@@ -507,7 +597,7 @@ Two more suites run against the board, and they ask different questions.
 
 ```powershell
 .\.venv\Scripts\python.exe tools\selftest.py --port COM3   # does each feature work?
-.\.venv\Scripts\python.exe toolsbuse.py    --port COM3   # can it be broken?
+.\.venv\Scripts\python.exe tools\abuse.py    --port COM3   # can it be broken?
 ```
 
 `selftest.py` drives every feature and reports PASS, FAIL or SKIP, where SKIP
@@ -527,3 +617,51 @@ Between them they have found more real defects than review did, including two
 that the ordinary tests could not see: a snapshot length that was silently
 discarded on every channel change, and a host crash on a reply the board was
 right to send.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| No interfaces in Wireshark | The plugin is not installed or Wireshark was not restarted. Check with `tshark -D`. |
+| The board does not appear as a COM port | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
+| `could not open port` | Something else holds it: another capture, a serial monitor, or a previous run that has not exited. The three radios cannot capture at once. |
+| Wi-Fi captures nothing, 802.15.4 works | The 802.15.4 radio was left enabled by a crashed host, which leaves the shared front end deaf. The host power-cycles the radio automatically when it sees the flag; if it persists, run `tools\wifi_survey.py --recover`. |
+| Flashing fails | Hold **BOOT**, tap **RESET**, release **BOOT**, retry. `flash.ps1` already retries three times. |
+| A channel looks empty | It probably is. The sniffer is passive and shows only traffic that already exists. On Wi-Fi, check the toolbar log first. |
+
+## Contributing
+
+Run the tests before proposing a change:
+
+```powershell
+cd host
+.\.venv\Scripts\python.exe -m pytest -q          # add --port COM3 for the board
+```
+
+Two guards exist specifically to keep this repository publishable, and they
+fail the build rather than warn:
+
+* nothing identifying a real network may be committed -- no MAC addresses that
+  are not obviously synthetic, no addresses from RFC 1918 or link-local space.
+  Use the RFC 5737 documentation ranges (`192.0.2.x`) instead;
+* no absolute paths that exist only on one machine. `tools/abuse.py` once
+  carried a hardcoded `sys.path`, and ran for its author and nobody else.
+
+## Legal and ethical use
+
+This tool is **passive**. It transmits nothing, and there is deliberately no
+deauthentication, injection, or attack module in it. It cannot be made to
+interfere with a network.
+
+Passive capture is still regulated in many places, and rules differ by
+jurisdiction. Capture only on networks and devices you own or have written
+authorisation to test. Radio traffic you can hear may include your neighbours';
+this is a reason for care, not a licence.
+
+The key-embedding feature exists so that a capture of **your own** encrypted
+network can be read by someone you send it to. Embedding a key you were not
+given does not become acceptable because a tool makes it convenient.
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

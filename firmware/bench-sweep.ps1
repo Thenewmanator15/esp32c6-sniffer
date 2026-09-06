@@ -21,8 +21,16 @@ $ErrorActionPreference = 'Stop'
 
 if (-not $env:IDF_PATH) { throw "Run '. .\idf-env.ps1' first." }
 
-$hostPy = "H:\dev\projects\esp32c6-sniffer\host\.venv\Scripts\python.exe"
-if (-not (Test-Path $hostPy)) { throw "host venv not found at $hostPy" }
+# Resolved from this script's own location, so a clone anywhere works.
+$hostRoot = Join-Path $PSScriptRoot '..\host'
+$hostPy = $null
+foreach ($rel in @('.venv\Scripts\python.exe', '.venv/bin/python')) {
+    $candidate = Join-Path $hostRoot $rel
+    if (Test-Path $candidate) { $hostPy = $candidate; break }
+}
+if (-not $hostPy) {
+    throw "host venv not found under $hostRoot - create it, then 'pip install -e .'"
+}
 
 $results = @()
 

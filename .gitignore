@@ -25,3 +25,6 @@ venv/
 Thumbs.db
 desktop.ini
 build-wifionly/
+
+# Machine-specific toolchain location (see firmware/idf-env.ps1)
+firmware/idf-env.local.ps1

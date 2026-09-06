@@ -19,8 +19,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$py = "H:\dev\tools\.espressif\python_env\idf6.1_py3.14_env\Scripts\python.exe"
-if (-not (Test-Path $py)) { throw "ESP-IDF python not found at $py" }
+# The ESP-IDF python, taken from the environment export.ps1 sets up. A
+# hardcoded path here tied this script to one machine's disk layout.
+$py = $null
+if ($env:IDF_PYTHON_ENV_PATH) {
+    foreach ($rel in @('Scripts\python.exe', 'bin/python')) {
+        $candidate = Join-Path $env:IDF_PYTHON_ENV_PATH $rel
+        if (Test-Path $candidate) { $py = $candidate; break }
+    }
+}
+if (-not $py) { $py = (Get-Command python -ErrorAction SilentlyContinue).Source }
+if (-not $py) { throw "ESP-IDF python not found. Run '. .\idf-env.ps1' first." }
 
 $build = Join-Path $PSScriptRoot 'build'
 foreach ($f in @(

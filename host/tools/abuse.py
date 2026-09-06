@@ -16,7 +16,6 @@ the board refused an unknown command correctly, and the HOST crashed decoding
 the refusal, which would have ended a live capture.
 """
 import sys, time, struct, serial
-sys.path.insert(0, r"H:\dev\projects\esp32c6-sniffer\host\src")
 
 from esp32c6_sniffer.control import Command, Radio, encode_command, decode_reply
 from esp32c6_sniffer.framing import FrameType, encode_frame
@@ -109,12 +108,18 @@ record("alive after hostile values", link.alive() is not None)
 
 print("\nunknown command identifiers")
 unknown_ok = 0
-for cid in (16, 99, 255):
+# Derived, not hardcoded. These were once 16, 99 and 255; the firmware grew a
+# command 16 and this reported the board as faulty for correctly accepting it.
+_defined = {int(c) for c in Command}
+_unknown = [c for c in range(max(_defined) + 1, 256) if c not in _defined]
+UNKNOWN_IDS = (_unknown[0], _unknown[len(_unknown) // 2], _unknown[-1])
+for cid in UNKNOWN_IDS:
     link.raw(cid, 0)
     replies = link.pump(1.5)
     if any(r["command"] == cid and not r["ok"] for r in replies):
         unknown_ok += 1
-record("unknown commands refused", unknown_ok == 3, f"{unknown_ok} of 3")
+record("unknown commands refused", unknown_ok == len(UNKNOWN_IDS),
+       f"{unknown_ok} of {len(UNKNOWN_IDS)} ({UNKNOWN_IDS})")
 record("alive after unknown commands", link.alive() is not None)
 
 print("\ngarbage and truncated frames on the command stream")
