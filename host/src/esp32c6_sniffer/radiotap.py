@@ -107,14 +107,32 @@ HE_DATA1_BSS_COLOR_KNOWN = 0x0004
 HE_DATA1_UL_DL_KNOWN = 0x0010
 HE_DATA1_MCS_KNOWN = 0x0020
 HE_DATA1_DCM_KNOWN = 0x0040
-HE_DATA2_BW_RU_KNOWN = 0x0004
+HE_DATA1_BW_RU_KNOWN = 0x4000
 HE_DATA2_GI_KNOWN = 0x0002
+#: Named only so it can be asserted clear. This decoder has no LTF
+#: symbol count to report, and it once sat here in place of the
+#: bandwidth known-bit, publishing a confident zero on every HE frame.
+HE_DATA2_NUM_LTF_KNOWN = 0x0004
 HE_DATA3_BSS_COLOR_MASK = 0x003F
 HE_DATA3_UL_DL = 0x0080
 HE_DATA3_MCS_SHIFT = 8
 HE_DATA3_DCM = 0x1000
 HE_DATA5_BW_MASK = 0x000F
 HE_DATA5_GI_SHIFT = 4
+HE_DATA5_LTF_SIZE_SHIFT = 6
+
+#: HE-SIG-A carries one combined "GI + LTF Size" field, but radiotap has two
+#: separate ones and they do not share an encoding. Copying the raw value into
+#: radiotap's guard interval got three of these four wrong, and claimed to know
+#: it: 1 became 1.6 us when it is 0.8, and 3 became "reserved" when it is 3.2.
+#: Left is radiotap's GI (0=0.8 us, 1=1.6, 2=3.2), right its LTF symbol size
+#: (1=1x, 2=2x, 4x=3).
+HE_GI_LTF_TO_RADIOTAP = {
+    0: (0, 1),      # 0.8 us GI, 1x LTF
+    1: (0, 2),      # 0.8 us GI, 2x LTF
+    2: (1, 2),      # 1.6 us GI, 2x LTF
+    3: (2, 3),      # 3.2 us GI, 4x LTF
+}
 
 
 def decode_he_sig_a(sig1: int, sig2: int):
@@ -142,10 +160,18 @@ def decode_he_sig_a(sig1: int, sig2: int):
     bandwidth = (sig1 >> 19) & 0x03
     gi_ltf = (sig1 >> 21) & 0x03
 
+    gi, ltf_size = HE_GI_LTF_TO_RADIOTAP[gi_ltf]
+
+    # Every bit set here is a claim to Wireshark that the matching field is
+    # populated, so only the fields HE-SIG-A actually carries may be claimed.
+    # The bandwidth bit lives in data1, not data2; setting data2 bit 2 instead
+    # claimed to know the LTF SYMBOL COUNT, which is not in HE-SIG-A and was
+    # left at zero, whilst the bandwidth that was populated went undeclared and
+    # so was never displayed.
     data1 = (HE_DATA1_FORMAT_SU | HE_DATA1_BSS_COLOR_KNOWN
              | HE_DATA1_UL_DL_KNOWN | HE_DATA1_MCS_KNOWN
-             | HE_DATA1_DCM_KNOWN)
-    data2 = HE_DATA2_BW_RU_KNOWN | HE_DATA2_GI_KNOWN
+             | HE_DATA1_DCM_KNOWN | HE_DATA1_BW_RU_KNOWN)
+    data2 = HE_DATA2_GI_KNOWN
     data3 = (bss_color & HE_DATA3_BSS_COLOR_MASK)
     data3 |= (mcs << HE_DATA3_MCS_SHIFT)
     if dcm:
@@ -153,7 +179,11 @@ def decode_he_sig_a(sig1: int, sig2: int):
     if ul_dl:
         data3 |= HE_DATA3_UL_DL
     data4 = 0
-    data5 = (bandwidth & HE_DATA5_BW_MASK) | (gi_ltf << HE_DATA5_GI_SHIFT)
+    # LTF symbol size has no known bit: 0 means unknown, so the field is
+    # self-describing and writing the real size claims nothing false.
+    data5 = ((bandwidth & HE_DATA5_BW_MASK)
+             | (gi << HE_DATA5_GI_SHIFT)
+             | (ltf_size << HE_DATA5_LTF_SIZE_SHIFT))
     data6 = 0
     return (data1, data2, data3, data4, data5, data6)
 

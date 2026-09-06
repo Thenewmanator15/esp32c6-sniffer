@@ -292,9 +292,45 @@ address 192.0.2.238, gateway 192.0.2.1
 599 11ax frames: 599 decoded, 0 rejected by the decoder's own checks
 ```
 
-And in Wireshark, `radiotap.he.data_3.data_mcs` reads 6 and 7 across 1274
-frames with zero malformed in 2395. The HE-SIG-A bit layout this project
-assumed is correct.
+That the decoder ran without rejecting anything is not verification. Reading
+`radiotap.he.data_3.data_mcs` back in Wireshark is not either: that field
+contains this project's own decoded value, so the check confirms only that
+Wireshark and this code agree on where the byte goes. Three checks that are
+not circular, against a 45 s capture of 2595 frames:
+
+* **BSS colour, from two different parts of the frame.** HE-SIG-A sits in the
+  PHY preamble; a beacon advertises the same colour in its management body,
+  dissected by unrelated Wireshark code. We decode `0x1e` on all 1437 HE
+  frames, and the access point they all come from advertises `0x1e`. The five
+  other access points in range advertise 0x04, 0x10 and 0x0b, so the match is
+  not everything reading one number.
+* **Direction.** UL/DL decodes as downlink on every frame, and every frame has
+  that access point as its transmitter.
+* **Bandwidth.** 20 MHz on all of them, which is the only width a 2.4 GHz link
+  uses. A wrong bit offset would read 40, 80 or 160.
+
+Doing this found three faults, all silent -- no exception, no malformed
+capture, just fields that were wrong or absent:
+
+| | before | after |
+|---|---|---|
+| bandwidth | not displayed at all | 20 MHz |
+| guard interval | 1.6 us | 0.8 us |
+| LTF symbol size | not displayed | 2x |
+| claims to know the LTF symbol count | yes, and it was zero | no |
+
+The bandwidth known-bit is data1 bit 14, not data2 bit 2; data2 bit 2 says the
+LTF *symbol count* is known, which HE-SIG-A does not carry, so the capture
+published a confident zero for it whilst the bandwidth it did decode went
+undeclared and was never shown. Separately, HE-SIG-A carries one combined
+"GI + LTF Size" field and radiotap has two with different encodings, so
+copying it across got three of its four values wrong -- including the one this
+network uses.
+
+The bit positions now come from Wireshark's own field registry
+(`tshark -G fields`) rather than from memory, and a synthetic capture
+round-trips all four guard intervals and all four bandwidths back through
+tshark. `host/tests/test_radiotap.py` holds one regression test per fault.
 
 The passphrase is read interactively and never accepted as an argument, so it
 stays out of shell history and process lists. The board holds it in RAM and its
