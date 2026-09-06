@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import struct
 import sys
 import threading
@@ -285,6 +286,14 @@ def print_config(interface: str) -> None:
     print("value {arg=2}{value=0}{display=Onboard ceramic}")
     print("value {arg=2}{value=1}{display=External U.FL}")
 
+    if interface == INTERFACE:
+        print("arg {number=3}{call=--keys}{display=Zigbee key file}"
+              "{type=fileselect}{fileext=Key files (*.txt)}"
+              "{tooltip=Embeds Zigbee network keys IN the capture, so it "
+              "decrypts on any machine without the recipient pasting a key "
+              "into their own Wireshark. One key per line, 32 hex digits, "
+              "optionally prefixed nwk or aps. For a network you own}")
+
     if interface == BLE_INTERFACE:
         print("arg {number=3}{call=--ble-interval}{display=Scan interval (ms)}"
               "{type=integer}{range=10,10240}{default=60}"
@@ -386,6 +395,65 @@ def control_write(fp, arg: int, cmd: int, payload: bytes) -> None:
         pass
 
 
+#: Key-file labels, and the length each key must be. Zigbee keys are 128-bit;
+#: anything else is a typo or a different kind of key, and embedding it would
+#: produce a capture that silently fails to decrypt.
+KEY_KINDS = {"nwk": ("SECRET_ZIGBEE_NWK", 16), "aps": ("SECRET_ZIGBEE_APS", 16)}
+
+
+def read_key_file(path: str) -> list[tuple[int, bytes]]:
+    """Reads Zigbee keys from a file, for embedding in the capture.
+
+    A path rather than the key itself, because an extcap argument reaches the
+    process list and Wireshark's saved configuration. The file holds one key
+    per line, blank lines and # comments ignored::
+
+        nwk 0123456789abcdef0123456789abcdef
+        aps 00112233445566778899aabbccddeeff
+
+    A bare key with no label is taken as a network key, which is the one
+    almost everybody means.
+
+    Raises ValueError naming the offending line. A wrong key produces a
+    capture that simply does not decrypt, and hunting that afterwards is far
+    worse than refusing it now.
+    """
+    from esp32c6_sniffer import pcapng
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError as exc:
+        raise ValueError(f"cannot read key file {path}: {exc}") from exc
+
+    keys: list[tuple[int, bytes]] = []
+    for number, line in enumerate(lines, 1):
+        text = line.split("#", 1)[0].strip()
+        if not text:
+            continue
+        parts = text.split()
+        kind = parts[0].lower() if len(parts) > 1 else "nwk"
+        digits = (parts[1] if len(parts) > 1 else parts[0]).replace(":", "")
+        if kind not in KEY_KINDS:
+            raise ValueError(
+                f"{path} line {number}: unknown key kind {parts[0]!r}, "
+                f"expected one of {', '.join(sorted(KEY_KINDS))}")
+        name, want = KEY_KINDS[kind]
+        try:
+            raw = bytes.fromhex(digits)
+        except ValueError:
+            raise ValueError(
+                f"{path} line {number}: {digits!r} is not hexadecimal") from None
+        if len(raw) != want:
+            raise ValueError(
+                f"{path} line {number}: a {kind} key is {want} bytes "
+                f"({want * 2} hex digits), got {len(raw)}")
+        keys.append((getattr(pcapng, name), raw))
+    if not keys:
+        raise ValueError(f"{path} contains no keys")
+    return keys
+
+
 def do_capture(fifo: str, port: str, channel: int, antenna: int,
                control_in: str | None, control_out: str | None,
                interface: str = INTERFACE, snaplen: int | None = None,
@@ -393,14 +461,15 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                hop_dwell_ms: int = 500, bandwidth: int = 0,
                drop_acks: bool = False, csi_path: str | None = None,
                ble_interval: int = 0, ble_window: int = 0,
-               ble_phys: int | None = None) -> int:
+               ble_phys: int | None = None,
+               key_file: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
     )
     from esp32c6_sniffer.csi import CSV_HEADER, to_csv_row
 
-    from esp32c6_sniffer.pcap import PcapWriter
+    from esp32c6_sniffer.pcapng import PcapngWriter
 
     if interface == WIFI_INTERFACE:
         radio = Radio.WIFI
@@ -419,6 +488,18 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     hop_channels = HOP_SETS.get(hop) if wifi else None
     session_bandwidth = Bandwidth(bandwidth) if wifi else None
     session_ctrl = CtrlFilter.NO_ACK if (wifi and drop_acks) else None
+
+    # Read any keys BEFORE the fifo is opened: a bad key file must fail
+    # while Wireshark can still show the error, not after it has committed to
+    # a capture. A key never appears on the command line -- only a path to it
+    # does -- so it stays out of process lists and shell history.
+    decryption_keys: list[tuple[int, bytes]] = []
+    if key_file:
+        try:
+            decryption_keys = read_key_file(key_file)
+        except ValueError as exc:
+            sys.stderr.write(str(exc) + os.linesep)
+            return 1
 
     state = {"initialized": False, "running": True}
     fp_out = None
@@ -495,8 +576,53 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # third radio made it silently label BLE records as 802.15.4 TAP: 448
         # frames captured and not one of them dissected.
         session_linktype = INTERFACES[interface]["dlt"]
-        writer = PcapWriter(pipe, session_linktype)
+        # pcapng rather than classic pcap, so the capture describes itself:
+        # what took it, on which radio, and -- written at close -- how many
+        # frames the board dropped before the host ever saw them. In a pcap
+        # all of that lives outside the file and is lost the moment the
+        # capture is handed to somebody else.
+        spec = INTERFACES[interface]
+        writer = PcapngWriter(
+            pipe, session_linktype,
+            hardware="Seeed Studio XIAO ESP32-C6",
+            os_name=f"{platform.system()} {platform.release()}",
+            application="esp32c6-sniffer extcap",
+            interface_name=interface,
+            interface_description=(
+                f"{spec['display']} ({spec['band']})"
+                + (f", channel {channel}" if spec["min"] is not None else "")),
+        )
+        for secret_type, secret in decryption_keys:
+            # Before any packet: Wireshark applies a secret to frames it has
+            # yet to dissect, not retrospectively to ones already on screen.
+            writer.write_secret(secret_type, secret)
         writer.flush()
+        capture_started = time.time()
+
+        def write_statistics(s) -> None:
+            """Puts the board's own counters into the file.
+
+            Without this the answer to "did I miss anything?" lives only in a
+            toolbar log that nobody keeps, and a capture read back months
+            later cannot be told apart from a quiet channel.
+
+            Sequence gaps count as drops because that is what they are: frames
+            the board numbered and the host never received.
+            """
+            try:
+                writer.write_statistics(
+                    received=s.fw_frames_captured or s.frames,
+                    dropped=(s.fw_isr_queue_full + s.fw_link_rejected
+                             + s.fw_frames_dropped_ringfull
+                             + s.sequence_gaps),
+                    start_time_s=capture_started,
+                    end_time_s=time.time())
+                writer.flush()
+            except Exception:
+                # Wireshark closing first makes this a broken pipe. The
+                # capture is already written; losing a footer is not worth an
+                # error over a stop the user asked for.
+                pass
 
         if control_out:
             fp_out = open(control_out, "wb", 0)
@@ -554,6 +680,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     if now >= next_report:
                         next_report = now + 1.0
                         s = session.stats
+                        # An interface-statistics block every second, not only
+                        # at close. Wireshark stops a capture by closing the
+                        # pipe, so anything written in a cleanup path is
+                        # written into a pipe nobody is reading and never
+                        # reaches the file. dumpcap writes these periodically
+                        # for the same reason. A reader takes the last one.
+                        write_statistics(s)
                         extra = ""
                         if s.fw_recoveries:
                             # A workaround for a fault that is not ours, so it
@@ -587,6 +720,16 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             )
             finally:
                 state["running"] = False
+                # The board's own counters, written into the file. Without
+                # this the answer to "did I miss anything?" lives only in a
+                # toolbar log that nobody keeps, so a capture read back later
+                # cannot be told apart from a quiet channel.
+                # A last one, for the case where the capture ends on our side
+                # -- a board unplugged, a --count limit -- and the pipe is
+                # still open. When Wireshark stops us the pipe is already
+                # closed and this writes nowhere, which is why the periodic
+                # block above exists.
+                write_statistics(session.stats)
                 if csi_file is not None:
                     csi_file.close()
                 if fp_out is not None:
@@ -618,6 +761,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bandwidth", type=int, default=0)
     parser.add_argument("--drop-acks", dest="drop_acks", action="store_true")
     parser.add_argument("--csi", dest="csi_path", default=None)
+    parser.add_argument("--keys", dest="key_file", default=None)
     parser.add_argument("--ble-interval", dest="ble_interval", type=int,
                         default=0)
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
@@ -693,7 +837,8 @@ def main(argv: list[str] | None = None) -> int:
                           interface, args.snaplen, args.frame_filter,
                           args.hop, args.hop_dwell, args.bandwidth,
                           args.drop_acks, args.csi_path,
-                          args.ble_interval, args.ble_window, args.ble_phys)
+                          args.ble_interval, args.ble_window, args.ble_phys,
+                          args.key_file)
 
     print_interfaces(args.extcap_interface)
     return 0

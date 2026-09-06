@@ -67,6 +67,9 @@ Beyond capture, it also does things other 802.15.4 sniffers do not:
   answerable. Measured 0 sequence gaps in 1920 frames.
 - **Timestamps good to ~0.5 microseconds**, measured against the standard's
   fixed acknowledgement turnaround.
+- **Captures that describe themselves.** pcapng, carrying the board, the
+  radio, the channel, the board's own drop counters and -- for Zigbee -- the
+  decryption key, all inside the file. See below.
 
 Read the design first: [docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md](docs/superpowers/specs/2026-09-05-esp32c6-sniffer-design.md)
 
@@ -118,6 +121,63 @@ Hopping trades completeness for coverage: you will miss whatever arrives while
 the radio is on another channel. A beacon interval is about 100 ms, so a dwell
 below roughly 300 ms starts losing beacons from the very networks you are
 trying to find.
+
+## What the capture file carries
+
+Output is pcapng, not classic pcap, because classic pcap carries a link type
+and a snapshot length and nothing else. Everything worth knowing lived outside
+the file and was lost the moment a capture was handed to anybody:
+
+```
+Capture hardware:    Seeed Studio XIAO ESP32-C6
+Capture application: esp32c6-sniffer extcap
+                     Name = esp32c6-wifi
+                     Description = ESP32-C6 Wi-Fi 2.4 GHz (802.11) (Wi-Fi), channel 6
+                     Number of stat entries = 16
+```
+
+Those stat entries are the board's own receive and drop counts, written once a
+second rather than only at the end. That is not tidiness: **Wireshark stops a
+capture by closing the pipe**, so anything written in a cleanup path is written
+into a pipe nobody is reading and never reaches the file. dumpcap writes them
+periodically for the same reason. Verified by killing a capture outright, with
+no cleanup at all, and finding sixteen of them in the file.
+
+So "did I miss anything?" is answerable from the file months later, instead of
+from a toolbar log nobody kept. A capture with no drop record cannot be told
+apart from a quiet channel.
+
+### Keys inside the capture
+
+An 802.15.4 capture can carry its Zigbee keys, in a Decryption Secrets Block:
+
+```
+--keys keys.txt     # or the "Zigbee key file" option in the interface dialog
+```
+
+One key per line, 32 hex digits, optionally prefixed `nwk` or `aps`; `#`
+comments and blank lines ignored. The capture then decrypts on any machine,
+without the recipient pasting a key into their own Wireshark preferences.
+
+A **path** is taken rather than the key itself, because an extcap argument
+reaches the process list and Wireshark's saved configuration. A malformed key
+is refused before the capture starts, naming the line, because a wrong key
+produces a file that simply does not decrypt and hunting that afterwards --
+with the traffic long gone -- is far worse.
+
+The block layout and the secret-type codes were taken from Wireshark rather
+than from memory: a file written by `editcap --inject-secrets` was parsed back,
+the statistics block was compared byte-for-byte against one dumpcap wrote, and
+the Zigbee type codes were read out of the shipped `libwiretap.dll` and
+`libwireshark.dll`.
+
+**Not verified end to end:** that a real Zigbee network decrypts from an
+embedded key. The 802.15.4 traffic in range here is Thread, not Zigbee, and
+Thread does not use this mechanism -- it takes a key through Wireshark's
+802.15.4 key table, which is what `tools/thread_key.py` installs. What is
+verified is that the block is written, that Wireshark counts it
+(`Number of decryption secrets in file: 2`), and that both the file-format and
+dissector libraries carry the type codes.
 
 ## Finding the networks
 
