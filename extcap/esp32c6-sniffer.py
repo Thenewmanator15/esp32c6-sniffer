@@ -664,6 +664,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             arg, cmd, payload = control_read(fp_in)
             if arg is None and cmd is None:
                 state["running"] = False       # quit, or pipe closed
+                # And wake the capture loop, which is otherwise blocked
+                # waiting for a frame that may never come. The flag alone is
+                # only read once a packet has arrived, so on a quiet channel
+                # -- 802.15.4 channel 11 gives a couple of frames a minute
+                # here -- the plugin never noticed Wireshark had gone, and
+                # Wireshark hung waiting for a child that would not exit.
+                session.request_stop()
                 return
             if cmd == CTRL_CMD_INITIALIZED:
                 # Arrives after Wireshark replays every user-changed control.
@@ -754,7 +761,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         writer.flush()
         capture_started = time.time()
 
-        def write_statistics(s) -> None:
+        def write_statistics(s, reraise: bool = False) -> None:
             """Puts the board's own counters into the file.
 
             Without this the answer to "did I miss anything?" lives only in a
@@ -774,10 +781,14 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     end_time_s=time.time())
                 writer.flush()
             except Exception:
-                # Wireshark closing first makes this a broken pipe. The
-                # capture is already written; losing a footer is not worth an
-                # error over a stop the user asked for.
-                pass
+                # Wireshark closing first makes this a broken pipe. For the
+                # heartbeat that IS the signal to stop, so it asks to see it;
+                # for the ordinary callers the capture is already written and
+                # losing a footer is not worth an error over a stop the user
+                # asked for.
+                if reraise:
+                    raise
+
 
         if control_out:
             fp_out = open(control_out, "wb", 0)
@@ -797,6 +808,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # at once, because the toolbar accepts nothing until Wireshark says it
         # has initialised, which is after the session opens.
         deferred_log: list[str] = []
+
+        # The packet loop and the heartbeat both write to the pipe, from
+        # different threads. Interleaving two pcapng blocks produces a file
+        # that is unreadable from the point they collide.
+        write_lock = threading.Lock()
 
         with CaptureSession(port, channel=channel,
                             antenna=Antenna(antenna),
@@ -842,14 +858,41 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 threading.Thread(target=hopper, daemon=True).start()
                 log(f"hopping {list(hop_channels)} every {hop_dwell_ms} ms")
 
+            # A heartbeat, because everything else in this loop is driven by
+            # packets arriving. On a quiet channel none do: 802.15.4 channel
+            # 11 gives a couple of frames a minute here, and the plugin
+            # therefore never wrote to the pipe, never learned that Wireshark
+            # had closed it, and never exited -- so Wireshark hung on shutdown
+            # waiting for a child that was waiting for a frame.
+            #
+            # Writing the statistics block once a second doubles as the test:
+            # a write to a closed pipe raises, which is the only reliable
+            # signal that the host has gone. It also means a quiet capture
+            # gets its drop counters at all, which it previously did not.
+            def heartbeat() -> None:
+                while state["running"]:
+                    time.sleep(1.0)
+                    if not state["running"]:
+                        return
+                    try:
+                        with write_lock:
+                            write_statistics(session.stats, reraise=True)
+                    except Exception:
+                        state["running"] = False
+                        session.request_stop()
+                        return
+
+            threading.Thread(target=heartbeat, daemon=True).start()
+
             next_report = time.monotonic() + 1.0
             try:
                 for record, timestamp, original_len in session.records():
-                    writer.write_packet(record, timestamp,
-                                        original_length=original_len)
-                    # Flush per packet or Wireshark shows nothing until the
-                    # buffer fills, which looks like a broken capture.
-                    writer.flush()
+                    with write_lock:
+                        writer.write_packet(record, timestamp,
+                                            original_length=original_len)
+                        # Flush per packet or Wireshark shows nothing until
+                        # the buffer fills, which looks like a broken capture.
+                        writer.flush()
                     if not state["running"]:
                         break
                     now = time.monotonic()
