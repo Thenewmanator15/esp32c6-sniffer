@@ -110,10 +110,13 @@ def key_table_paths() -> list[Path]:
     and never used, with nothing to say why: the capture would simply stay
     encrypted, which is what it looks like when the key is wrong.
 
-    Whether a profile inherits the root's table could not be settled by
-    experiment here -- a malformed entry draws no complaint either way, and
-    proving it needs a real key and encrypted traffic to decrypt. Writing to
-    all of them is correct under either answer and costs nothing.
+    Settled by experiment against Wireshark 4.6.8, with a real key and real
+    encrypted Thread traffic: a profile does NOT inherit the root's table. A
+    capture that decrypted to 21 frames under a profile holding the key
+    decrypted to 12 -- the unencrypted ones alone -- under a profile with an
+    empty key table, and to 12 again under a profile with no key table file at
+    all, while the root table held the key throughout. So writing to every
+    profile is not belt-and-braces; it is required.
     """
     root = wireshark_config_dir()
     paths = [root / "ieee802154_keys"]
