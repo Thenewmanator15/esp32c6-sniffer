@@ -1,7 +1,7 @@
 "TRUE","Zigbee","zbee_nwk","Zigbee network-layer frames"
 "TRUE","Thread","mle or 6lowpan","Thread: MLE and 6LoWPAN"
 "TRUE","Matter","matter","Matter over Thread. Needs two things: the Thread network key (tools/thread_key.py), and the Decode As entry mapping UDP 5540 to Matter that this profile ships, because the dissector claims no UDP port of its own"
-"TRUE","Commissioning","matter.message.session_id == 0","Matter session establishment on the unsecured session. This traffic is not encrypted: opcode, exchange and protocol IDs are all readable. Still needs the Thread network key, because Thread MAC encryption is underneath"
+"TRUE","Commissioning","matter.message.session_id == 0 && matter.message.session_type == 0","Matter session establishment on the unsecured session. This traffic is not encrypted: opcode, exchange and protocol IDs are all readable. Still needs the Thread network key, because Thread MAC encryption is underneath"
 "TRUE","Group cast","matter.message.session_type == 1","Matter messages addressed to a device group rather than a single node"
 "TRUE","Data","wpan.frame_type == 0x0001","Data frames only: hides acknowledgements, beacons and MAC commands"
 "TRUE","No acks","not (wpan.frame_type == 0x0002)","Everything except acknowledgements, which are usually about half the frames"
