@@ -343,6 +343,15 @@ def main() -> int:
                     help="aps: access points from a scan (fast). frames: "
                          "promiscuous Wi-Fi frames, which is what the "
                          "post-mortem's retracted table used (slower)")
+    ap.add_argument("--arms", default=None,
+                    help="comma-separated arm sequence, overriding the default "
+                         "rotation. Use it to put controls before the arm under "
+                         "test, e.g. dirty,dirty,clean")
+    ap.add_argument("--stop-on-deaf", action="store_true",
+                    help="halt as soon as a deaf trial cannot be recovered. "
+                         "On this board the state is sticky and only physically "
+                         "removing power clears it, so every later trial would "
+                         "read INVALID and tell you nothing")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -353,13 +362,37 @@ def main() -> int:
     print(f"each trial power-gates first and requires a non-zero baseline")
     print()
 
+    fixed = None
+    if args.arms:
+        fixed = [a.strip() for a in args.arms.split(",") if a.strip()]
+        bad = [a for a in fixed if a not in ARMS]
+        if bad:
+            sys.stderr.write("error: unknown arm(s) %s, choose from %s\n"
+                             % (bad, list(ARMS)))
+            return 1
+
     rows: list[dict] = []
+    halted = False
     for cycle in range(1, args.cycles + 1):
-        # Rotate, so no arm always follows the same predecessor.
-        order = list(itertools.islice(
-            itertools.cycle(ARMS), cycle - 1, cycle - 1 + len(ARMS)))
+        if fixed is not None:
+            order = fixed
+        else:
+            # Rotate, so no arm always follows the same predecessor.
+            order = list(itertools.islice(
+                itertools.cycle(ARMS), cycle - 1, cycle - 1 + len(ARMS)))
         for arm in order:
-            rows.append(trial(args.port, arm, cycle, verbose, measure))
+            row = trial(args.port, arm, cycle, verbose, measure)
+            rows.append(row)
+            if (args.stop_on_deaf and row["valid"] and row["deaf"]
+                    and not row["recovered"]):
+                print()
+                print("  stopping: deaf and the power-gate did not recover it.")
+                print("  Physically unplug the board and plug it back in; that")
+                print("  is the only thing found to clear this state.")
+                halted = True
+                break
+        if halted:
+            break
 
     summarise(rows)
 
