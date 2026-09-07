@@ -392,3 +392,66 @@ def test_a_capture_filter_is_refused_rather_than_ignored():
     assert "capture filter cannot be applied" in result.stderr
     # It must say what to use instead, not merely refuse.
     assert "Frame types" in result.stderr or "display filter" in result.stderr
+
+
+# --- Thread credentials option -------------------------------------------
+
+def test_thread_credentials_are_offered_on_802154_only():
+    """Thread is an 802.15.4 protocol; the option would be noise elsewhere."""
+    config = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    assert "{call=--thread}" in config
+    for other in (WIFI_INTERFACE, BLE_INTERFACE):
+        assert "--thread" not in _run("--extcap-config",
+                                      "--extcap-interface", other)
+
+
+def test_thread_credentials_are_taken_as_a_path_not_a_value():
+    """A key passed as an option value reaches the process list and
+    Wireshark's saved configuration; a path does not."""
+    config = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    line = next(l for l in config.splitlines() if "{call=--thread}" in l)
+    assert "{type=fileselect}" in line
+    assert "{type=string}" not in line
+
+
+def test_the_thread_option_says_it_writes_to_wireshark():
+    """It installs a key into the user's configuration, which is a side
+    effect of starting a capture and must not be a surprise."""
+    config = _run("--extcap-config", "--extcap-interface", INTERFACE)
+    line = next(l for l in config.splitlines() if "{call=--thread}" in l)
+    lowered = line.lower()
+    assert "install" in lowered
+    assert "key table" in lowered
+    assert "channel" in lowered
+
+
+def test_a_bad_thread_file_fails_before_the_capture_starts():
+    """Wireshark can show an error now; once a capture is running it cannot."""
+    with tempfile.TemporaryDirectory() as tmp:
+        bad = Path(tmp) / "bad.txt"
+        bad.write_text("this is not hex", encoding="utf-8")
+        fifo = Path(tmp) / "fifo"
+        result = subprocess.run(
+            [sys.executable, str(PLUGIN), "--capture",
+             "--extcap-interface", INTERFACE, "--fifo", str(fifo),
+             "--port", "COM99", "--thread", str(bad)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 1
+        assert "hexadecimal" in result.stderr
+        # The failure must name the problem without echoing the file.
+        assert "this is not hex" not in result.stderr
+
+
+def test_a_thread_file_that_does_not_exist_is_named():
+    with tempfile.TemporaryDirectory() as tmp:
+        fifo = Path(tmp) / "fifo"
+        missing = Path(tmp) / "absent.txt"
+        result = subprocess.run(
+            [sys.executable, str(PLUGIN), "--capture",
+             "--extcap-interface", INTERFACE, "--fifo", str(fifo),
+             "--port", "COM99", "--thread", str(missing)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 1
+        assert "cannot read" in result.stderr

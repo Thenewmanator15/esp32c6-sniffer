@@ -33,6 +33,24 @@ SYNTHETIC_MACS = {
 }
 
 MAC = re.compile(r"\b(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+
+#: PAN identifiers that exist to be written down. A real one names a real
+#: 802.15.4 network, and it is only two bytes, so it reads like any other
+#: constant -- which is exactly how the operator's own PAN reached a Thread
+#: test fixture, copied out of a live dataset because it was the value to hand.
+SYNTHETIC_PANS = {
+    0x0000, 0xFFFF,          # the unassigned and broadcast PANs
+    0x1234, 0x4321, 0xABCD, 0xBEEF, 0xCAFE, 0xDEAD,
+}
+
+#: Matched only where a PAN is plainly meant. A bare four-hex-digit constant is
+#: far too common to flag on sight.
+#: [=:]{1,2} rather than [=:], so a comparison is caught and not just an
+#: assignment. The first version of this missed `pan_id == 0x...`, which was
+#: one of the two lines that actually leaked.
+PAN_LITERAL = re.compile(r"pan(?:_id)?\s*[=:]{1,2}\s*(0x[0-9a-fA-F]{4})\b",
+                         re.IGNORECASE)
+
 #: RFC 1918 and the link-local range: a real address from a real network.
 PRIVATE_IP = re.compile(
     r"\b(?:192\.168\.\d{1,3}\.\d{1,3}"
@@ -161,3 +179,40 @@ def test_the_path_guard_catches_what_it_is_for():
     assert not _offending_paths(
         'DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"')
     assert not _offending_paths('path = os.path.join(here, "..", "src")')
+
+
+def test_no_real_pan_identifiers(tracked):
+    """A PAN ID names a real 802.15.4 network.
+
+    Two bytes, so it reads like any other constant, and the only reason to type
+    an unusual one is that it came off a live network. This caught the
+    operator's own PAN in a Thread test fixture, where it had been copied
+    straight out of a border router's operational dataset -- the guard above
+    could not see it, because a PAN is not a MAC or an IP.
+    """
+    found = []
+    for name, text in tracked:
+        for line_no, line in enumerate(text.splitlines(), 1):
+            for literal in PAN_LITERAL.findall(line):
+                if int(literal, 16) not in SYNTHETIC_PANS:
+                    found.append("%s:%d  %s" % (name, line_no, literal))
+    assert not found, (
+        "PAN identifiers that are not obviously synthetic:\n  "
+        + "\n  ".join(found)
+        + "\nUse one of: "
+        + ", ".join("0x%04X" % pan for pan in sorted(SYNTHETIC_PANS)))
+
+
+def test_the_pan_guard_catches_what_it_is_for():
+    """Proved rather than assumed: a guard that matches nothing is not a guard.
+
+    The pattern is deliberately narrow -- it fires only where a PAN is plainly
+    being named -- so it needs a test that it fires at all.
+    """
+    real = [m for m in PAN_LITERAL.findall('creds = dataset(pan=0x7A2C)')
+            if int(m, 16) not in SYNTHETIC_PANS]
+    assert real == ["0x7A2C"]
+    assert PAN_LITERAL.findall("assert creds.pan_id == 0xBEEF") == ["0xBEEF"]
+    # And stays quiet on hex that has nothing to do with a PAN.
+    assert not PAN_LITERAL.findall("MASK = 0x7A2C")
+    assert not PAN_LITERAL.findall("session_id = 0xd3a0")

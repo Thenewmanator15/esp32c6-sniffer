@@ -458,6 +458,16 @@ def print_config(interface: str, reload_option: str | None = None,
               "The block travels with the file for other tools, and for if "
               "that changes. One key per line, 32 hex digits, optionally "
               "prefixed nwk or aps. For a network you own}")
+        print("arg {number=4}{call=--thread}{display=Thread credentials}"
+              "{type=fileselect}{fileext=Credential files (*.txt)}"
+              "{tooltip=A file holding your border router's operational "
+              "dataset, or a bare 32-hex network key. Thread encrypts at the "
+              "MAC layer, and its key cannot ride inside a capture -- "
+              "Wireshark has no 802.15.4 secrets type -- so this INSTALLS it "
+              "into Wireshark's own key table, for this profile and the root. "
+              "A dataset also carries the channel, and the capture moves to "
+              "it, because the wrong channel gives an empty capture that "
+              "looks exactly like a wrong key. For a network you own}")
         # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
         # 100 ms on a handful of channels, so a survey finds the traffic in
         # seconds. Here there are sixteen channels, nothing announces itself,
@@ -665,6 +675,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                ble_interval: int = 0, ble_window: int = 0,
                ble_phys: int | None = None,
                key_file: str | None = None,
+               thread_file: str | None = None,
                interface_label: str | None = None,
                ble_filter: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
@@ -706,6 +717,36 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             sys.stderr.write(str(exc) + os.linesep)
             return 1
 
+    # Thread credentials, read on the same terms and for the same reason: a
+    # bad file must fail while Wireshark can still show why. Unlike the Zigbee
+    # keys this cannot go in the capture -- Wireshark defines no 802.15.4
+    # secrets type -- so it is installed into the key table instead, which is
+    # a side effect the option's tooltip states plainly.
+    thread_note: str | None = None
+    if thread_file:
+        from esp32c6_sniffer.thread import (
+            ThreadKeyError, install_key, read_credentials,
+        )
+        try:
+            creds = read_credentials(thread_file)
+        except ThreadKeyError as exc:
+            sys.stderr.write(str(exc) + os.linesep)
+            return 1
+        installed = install_key(creds.key)
+        thread_note = f"Thread credentials: {creds.summary()}"
+        if installed:
+            thread_note += f"; installed into {len(installed)} key table(s)"
+        else:
+            thread_note += "; already installed"
+        # A dataset is authoritative about its own network, and the default
+        # channel is 11. Leaving a channel-15 network on 11 produces silence.
+        if creds.from_dataset and creds.channel is not None:
+            if creds.channel != channel:
+                thread_note += (
+                    f"; moving from channel {channel} to {creds.channel}"
+                )
+            channel = creds.channel
+
     state = {"initialized": False, "running": True}
     fp_out = None
 
@@ -733,6 +774,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 # Writing before this is ignored.
                 state["initialized"] = True
                 log(f"capture started on channel {session._channel}")
+                if thread_note:
+                    # Said here rather than on stderr, because the channel may
+                    # have moved and the user should see which network they
+                    # are actually pointed at.
+                    log(thread_note)
                 continue
             if cmd == CTRL_CMD_SET and arg == CTRL_ARG_ANTENNA:
                 # Boolean controls carry a raw 0/1 byte, not the ASCII digit.
@@ -903,6 +949,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 thread.start()
             else:
                 state["initialized"] = True   # no toolbar; nothing to wait for
+                if thread_note:
+                    log(thread_note)
 
             if session.recovered_from_802154:
                 deferred_log.append(
@@ -1079,6 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drop-acks", dest="drop_acks", action="store_true")
     parser.add_argument("--csi", dest="csi_path", default=None)
     parser.add_argument("--keys", dest="key_file", default=None)
+    parser.add_argument("--thread", dest="thread_file", default=None)
     parser.add_argument("--ble-interval", dest="ble_interval", type=int,
                         default=0)
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
@@ -1188,6 +1237,7 @@ def main(argv: list[str] | None = None) -> int:
                               args.drop_acks, args.csi_path,
                               args.ble_interval, args.ble_window,
                               args.ble_phys, args.key_file,
+                              args.thread_file,
                               interface_label=args.extcap_interface,
                               ble_filter=args.ble_filter)
         except (OSError, RuntimeError) as exc:

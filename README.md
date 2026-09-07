@@ -595,20 +595,39 @@ Matter over Thread is already captured: those frames arrive and Wireshark
 identifies them. Reading them takes two things, and missing either one looks
 exactly the same — frames that stay stubbornly encrypted.
 
-**1. Your Thread network key**, because Thread encrypts at the MAC layer:
+**1. Your Thread credentials**, because Thread encrypts at the MAC layer.
+
+The easiest route is the **Thread credentials** option in the interface dialog:
+point it at a file and start the capture. Or from a terminal:
 
 ```powershell
 cd host
-# Read from a file, not an argument: a command line reaches the process list
-# and your shell history.
-.\.venv\Scripts\python.exe tools\thread_key.py --key-file C:\path\to\key.txt
+# A path, never the key itself: a command line reaches the process list and
+# your shell history.
+.\.venv\Scripts\python.exe tools\thread_key.py --key-file C:\path\to\dataset.txt
 .\.venv\Scripts\python.exe tools\thread_key.py --list
 ```
 
-The key comes from your border router, and only for a network you control.
-Home Assistant exposes it under Settings, Devices & Services, Thread. Apple's
-Home app can share Thread credentials to a Mac. An OpenThread border router
-answers `ot-ctl networkkey`.
+**Give it the whole operational dataset, not just the key.** A border router
+hands out a hex string carrying the key, the channel, the PAN ID and the
+network name together, and either form is accepted. The dataset is worth
+preferring because it names the channel — and sitting on the wrong 802.15.4
+channel produces an empty capture that looks exactly like a wrong key. Given a
+dataset, both the tool and the interface option move the capture to that
+channel and say so in the log.
+
+It comes from your border router, and only for a network you control. Home
+Assistant exposes it under Settings, Devices & Services, Thread, then the
+overflow menu on your border router. Apple's Home app can share Thread
+credentials to a Mac. An OpenThread border router answers
+`ot-ctl dataset active -x`, or `ot-ctl networkkey` for the key alone.
+
+Unlike the Zigbee key file, this **writes to your Wireshark configuration**
+rather than into the capture, and the option's tooltip says so. There is no
+choice about it: Wireshark defines Decryption Secrets Block types for TLS, SSH,
+WireGuard, OPC UA and ESP, and no 802.15.4 type exists, so a Thread key cannot
+travel inside a capture file. The consequence is that your capture will not
+decrypt on someone else's machine unless they install the key too.
 
 **2. The `ESP32-C6 802.15.4` profile**, which the installer sets up. Wireshark's
 Matter dissector registers itself on Bluetooth only — commissioning service UUID
