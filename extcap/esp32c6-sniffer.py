@@ -451,10 +451,13 @@ def print_config(interface: str, reload_option: str | None = None,
     if interface == INTERFACE:
         print("arg {number=3}{call=--keys}{display=Zigbee key file}"
               "{type=fileselect}{fileext=Key files (*.txt)}"
-              "{tooltip=Embeds Zigbee network keys IN the capture, so it "
-              "decrypts on any machine without the recipient pasting a key "
-              "into their own Wireshark. One key per line, 32 hex digits, "
-              "optionally prefixed nwk or aps. For a network you own}")
+              "{tooltip=Records Zigbee network keys IN the capture, in a "
+              "Decryption Secrets Block. Wireshark shows the block but does "
+              "NOT decrypt from it: no dissector consumes the Zigbee secret "
+              "types, so the key still has to go in Wireshark's own table. "
+              "The block travels with the file for other tools, and for if "
+              "that changes. One key per line, 32 hex digits, optionally "
+              "prefixed nwk or aps. For a network you own}")
         # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
         # 100 ms on a handful of channels, so a survey finds the traffic in
         # seconds. Here there are sixteen channels, nothing announces itself,

@@ -297,8 +297,10 @@ An 802.15.4 capture can carry its Zigbee keys, in a Decryption Secrets Block:
 ```
 
 One key per line, 32 hex digits, optionally prefixed `nwk` or `aps`; `#`
-comments and blank lines ignored. The capture then decrypts on any machine,
-without the recipient pasting a key into their own Wireshark preferences.
+comments and blank lines ignored.
+
+**This does not currently make the capture decrypt anywhere, and an earlier
+version of this README said it did.** See below.
 
 A **path** is taken rather than the key itself, because an extcap argument
 reaches the process list and Wireshark's saved configuration. A malformed key
@@ -312,13 +314,32 @@ the statistics block was compared byte-for-byte against one dumpcap wrote, and
 the Zigbee type codes were read out of the shipped `libwiretap.dll` and
 `libwireshark.dll`.
 
-**Not verified end to end:** that a real Zigbee network decrypts from an
-embedded key. The 802.15.4 traffic in range here is Thread, not Zigbee, and
-Thread does not use this mechanism -- it takes a key through Wireshark's
-802.15.4 key table, which is what `tools/thread_key.py` installs. What is
-verified is that the block is written, that Wireshark counts it
-(`Number of decryption secrets in file: 2`), and that both the file-format and
-dissector libraries carry the type codes.
+#### What an embedded key does and does not do
+
+Checked against the Wireshark master source rather than inferred. Exactly five
+secret types have a consumer: TLS, SSH, WireGuard, OPC UA and ESP, each calling
+`secrets_register_type()` from its own dissector. The Zigbee types appear only
+in two `value_string` display tables, `wiretap/secrets-types.c` and
+`epan/dissectors/file-pcapng.c`.
+
+So a Zigbee secret in a capture is read, named, and shown in the file-format
+dissection -- and then dropped. `secrets_wtap_callback()` looks up a callback
+that was never registered, finds none, and returns. **No Zigbee key has ever
+been used for decryption from a Decryption Secrets Block.** The key still has
+to go into Wireshark's own table.
+
+The block is written anyway, because it is spec-conformant, self-describing,
+costs nothing, and starts working the day a consumer is registered. What it
+must not be called is a way to make a capture decrypt on someone else's
+machine.
+
+Thread is worse off still: it has no secret type at all, so it takes its key
+through Wireshark's 802.15.4 key table, which is what `tools/thread_key.py`
+installs.
+
+Verified here: the block is written correctly, Wireshark counts it
+(`Number of decryption secrets in file: 2`), and both libraries carry the type
+codes. Verified false: that this decrypts anything.
 
 ## Finding the networks
 

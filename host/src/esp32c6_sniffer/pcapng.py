@@ -72,8 +72,20 @@ ISB_IFDROP = 5
 #: precision nor discard any.
 TSRESOL_MICROSECONDS = 6
 
-#: Decryption secret types, read from libwiretap.dll. Wireshark reads Zigbee
-#: secrets from a capture file even though editcap will not inject them.
+#: Decryption secret types, read from libwiretap.dll.
+#:
+#: Only five of these have a consumer in Wireshark: TLS, SSH, WireGuard, OPC UA
+#: and ESP each call secrets_register_type() from their dissector. The Zigbee
+#: types appear only in value_string display tables (wiretap/secrets-types.c
+#: and epan/dissectors/file-pcapng.c), so a Zigbee secret is read, named and
+#: shown in the file-format dissection, then dropped: secrets_wtap_callback()
+#: looks up a callback that was never registered. Checked against the master
+#: tree, not inferred.
+#:
+#: Writing them is still correct and costs nothing. The block is
+#: spec-conformant and self-describing, and it starts working the day a
+#: consumer is registered. It just must not be described as making a capture
+#: decrypt somewhere else.
 SECRET_TLS = 0x544C534B          # "TLSK"
 SECRET_SSH = 0x5353484B          # "SSHK"
 SECRET_WIREGUARD = 0x57474B4C    # "WGKL"
