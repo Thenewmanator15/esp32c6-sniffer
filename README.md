@@ -171,22 +171,33 @@ its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
 731 frames in 15 s, management and data, RSSI -50 to -96 dBm, no drops,
 decoding as radiotap.
 
-**One quirk, now understood and handled automatically.** Both radios share a
-single 2.4 GHz front end, and leaving the 802.15.4 radio *enabled* when the
-host disconnects leaves the Wi-Fi receiver deaf until the RF domain is
-power-gated. Measured, three arms, each starting from a working Wi-Fi radio:
+**One quirk, handled automatically — and the explanation for it is retracted.**
+Both radios share a single 2.4 GHz front end. The Wi-Fi receiver has been seen
+to go deaf for minutes to hours, recoverable only by power-gating the RF domain
+— not by a driver rebuild, a reflash, or a full `erase-flash`. That much is
+solid and the recovery works.
 
-| what happened | Wi-Fi frames before | after |
-|---|---|---|
-| 802.15.4 left running | 389 | **0** |
-| 802.15.4 stopped properly | 564 | 449 |
-| idle for the same time | 425 | 539 |
+What was wrong was the cause. This README, and the post-mortem, said the trigger
+was leaving the 802.15.4 radio enabled when the host disconnects, on the
+strength of a three-row table with **one trial per arm**. Replicated properly
+with `tools/latch_trial.py` — arms interleaved, a power-gate and a proven
+non-zero baseline before each trial, and the treatment verified by frame counts
+and the board's own dirty flag — the effect is not there:
 
-So it is not using the radio that does it, it is walking away with it still on.
-A capture session stops the radio on close, so ordinary use is unaffected; a
-crashed or force-killed host is what leaves it poisoned. Nothing short of
-power-gating recovers it -- not a driver rebuild, not a reflash, not a full
-`erase-flash`.
+| measure | dirty | clean | idle |
+|---|---|---|---|
+| access points, n=5 each | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 |
+| Wi-Fi frames, n=3 each | 596, 645, 587 | 634, 671, 605 | 567, 440, 529 |
+
+24 planned trials across both instruments, zero reproductions, with the board
+reporting the front end still owned in every dirty trial. The frame measure is
+the one the original table used, so this is like-for-like.
+
+The mitigation stays — `esp_ieee802154_sleep()` before `disable()`, the
+`RADIO_DIRTY` flag, and an automatic power-cycle when the host sees it set. It
+is cheap, it is harmless, and something did produce those original zeros. What
+is gone is the claim to know what.
+
 
 The board records the condition in RTC memory, where it survives the reset that
 opening the serial port causes, and the host power-cycles before a Wi-Fi
@@ -749,7 +760,7 @@ right to send.
 | The board does not appear as a COM port | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
 | `cannot capture on COM3` | The board is on a different port. The message names the one it found; set it in the interface options. The board is the device with USB id `303A:1001`, and a machine can easily have another serial device on COM3. |
 | `could not open port` | Something else holds it: another capture, a serial monitor, or a previous run that has not exited. The three radios cannot capture at once. |
-| Wi-Fi captures nothing, 802.15.4 works | The 802.15.4 radio was left enabled by a crashed host, which leaves the shared front end deaf. The host power-cycles the radio automatically when it sees the flag; if it persists, run `tools\wifi_survey.py --recover`. |
+| Wi-Fi captures nothing, 802.15.4 works | The receiver has gone deaf; the cause is not established (see above). The host power-cycles the radio automatically when it sees the flag; if it persists, run `tools\wifi_survey.py --recover`. |
 | Flashing fails | Hold **BOOT**, tap **RESET**, release **BOOT**, retry. `flash.ps1` already retries three times. |
 | A channel looks empty | It probably is. The sniffer is passive and shows only traffic that already exists. On Wi-Fi, check the toolbar log first. |
 

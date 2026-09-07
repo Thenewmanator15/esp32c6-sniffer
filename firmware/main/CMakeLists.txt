@@ -14,6 +14,16 @@ idf_component_register(
 if(DEFINED SN_MODE)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE SN_MODE=${SN_MODE})
 endif()
+
+# SN_154_LEGACY_STOP=1 builds sn_radio154_stop() WITHOUT the
+# esp_ieee802154_sleep() that precedes disable(). It exists so the claim that
+# disable() alone does not hand back the shared 2.4 GHz front end can be A/B
+# tested rather than asserted -- it changes one API call and nothing else.
+# Never ship it; the default is 0.
+if(DEFINED SN_154_LEGACY_STOP)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+                               SN_154_LEGACY_STOP=${SN_154_LEGACY_STOP})
+endif()
 if(DEFINED SN_BENCH_PAYLOAD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
                                SN_BENCH_PAYLOAD=${SN_BENCH_PAYLOAD})

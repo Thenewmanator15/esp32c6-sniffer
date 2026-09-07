@@ -253,8 +253,15 @@ void sn_radio154_stop(void)
      * capture, 0 after, while idling the same 30 seconds cost nothing. Both
      * share one 2.4 GHz front end, and esp_ieee802154_disable() alone does not
      * hand it back. Parking the radio first is the only other lever the API
-     * offers; if it does not help, the workaround is a power cycle. */
+     * offers; if it does not help, the workaround is a power cycle.
+     *
+     * SN_154_LEGACY_STOP builds the version without the sleep, so the claim
+     * above can be A/B tested against this same binary rather than asserted.
+     * It isolates one API call and nothing else, which is the form an upstream
+     * report needs. Build with -DSN_154_LEGACY_STOP=1; never ship it. */
+#if !defined(SN_154_LEGACY_STOP) || !SN_154_LEGACY_STOP
     esp_ieee802154_sleep();
+#endif
     esp_ieee802154_disable();
     s_running = false;
     /* The front end is handed back, so the next boot has nothing to undo. */

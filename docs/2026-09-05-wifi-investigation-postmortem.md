@@ -109,21 +109,73 @@ The workaround is `SN_CMD_RADIO_POWER_CYCLE`, exposed as
 automatic stall recovery because it resets the board, which would end a running
 Wireshark capture without warning; the capture log says what to run instead.
 
-**What sets it, resolved.** Not time, not heat: leaving the 802.15.4 radio
-enabled when the host disconnects. Three arms, each starting from a working
-Wi-Fi receiver, 25 seconds of activity each:
+**What sets it — RETRACTED 2026-09-07.** The paragraph below stood for two days
+and does not replicate. It is kept, struck through, because the way it failed is
+the same lesson this document is about.
 
-| arm | Wi-Fi frames before | after |
-|---|---|---|
-| 802.15.4 left running | 389 | **0** |
-| 802.15.4 stopped properly first | 564 | 449 |
-| idle | 425 | 539 |
+> ~~**What sets it, resolved.** Not time, not heat: leaving the 802.15.4 radio
+> enabled when the host disconnects. Three arms, each starting from a working
+> Wi-Fi receiver, 25 seconds of activity each:~~
+>
+> | arm | Wi-Fi frames before | after |
+> |---|---|---|
+> | ~~802.15.4 left running~~ | ~~389~~ | ~~**0**~~ |
+> | ~~802.15.4 stopped properly first~~ | ~~564~~ | ~~449~~ |
+> | ~~idle~~ | ~~425~~ | ~~539~~ |
+>
+> ~~Reproduced on demand.~~
 
-Reproduced on demand. The "hours-long deaf stretches" earlier in the day were
-not duration at all -- they were ad-hoc probe scripts that opened the port,
-started 802.15.4 and closed without sending STOP, leaving the radio enabled.
-Every later Wi-Fi attempt found the front end still owned. The scan binaries
-that kept working are the ones that never touch 802.15.4.
+That table is **one trial per arm**, and this document's own closing lesson is
+"repeat before concluding, and alternate". It did neither. `tools/latch_trial.py`
+now does, and the effect is not there:
+
+| measure | arm | n | deaf | counts after treatment |
+|---|---|---|---|---|
+| access points | dirty | 5 | 0 | 4, 4, 4, 4, 4 |
+| access points | clean | 5 | 0 | 4, 4, 4, 4, 4 |
+| access points | idle | 5 | 0 | 4, 4, 4, 4, 4 |
+| Wi-Fi frames | dirty | 3 | 0 | 596, 645, 587 |
+| Wi-Fi frames | clean | 3 | 0 | 634, 671, 605 |
+| Wi-Fi frames | idle | 3 | 0 | 567, 440, 529 |
+
+**24 trials, two different instruments, no effect.** The frame measure is the
+one the retracted table used, so this is a like-for-like replication and not a
+change of subject.
+
+The treatment is not in doubt, which is what makes the null result mean
+something. Every dirty trial was verified three ways: every command
+acknowledged, 8 to 113 802.15.4 frames actually counted arriving during the
+dwell, and the board's own `RADIO_DIRTY` flag reading back **dirty** in 8 of 8
+dirty trials and **clean** in all 16 others. The front end was, by the
+firmware's own account, left owned — and Wi-Fi worked anyway.
+
+Two earlier versions of that trial produced clean-looking null results that were
+worthless, and both are worth recording:
+
+- The first acknowledged **not one command**. `START` carries the channel as its
+  value for 802.15.4, and passing 0 is refused as `BAD_VALUE`. The radio never
+  started, so all three arms were the idle arm — and the table looked perfectly
+  reasonable. This is the same error as reading a zero from an instrument nobody
+  proved was switched on, applied to the *treatment* rather than the
+  measurement.
+- The second crashed on a serial handle that had gone stale across a deep-sleep
+  reset.
+
+**What this does and does not overturn.** It does not say the deafness never
+happened; the original observations were real observations of something. It says
+the stated *cause* does not survive replication, so the mechanism is unknown
+again. Every trial here starts from a power-gate and runs a 25-second arm, so a
+trigger needing long uptime, heat, or a particular sequence would be missed.
+
+**Nothing has been reported upstream, and on this evidence nothing should be.**
+A vendor report resting on n=1 that fails at n=24 would be worse than silence.
+
+**The workaround stays.** `esp_ieee802154_sleep()` before `disable()`, the
+`RADIO_DIRTY` flag, `ensure_wifi_ready()` and `SN_CMD_RADIO_POWER_CYCLE` all
+remain, because they are cheap, they are harmless, and something did produce
+those original zeros. What is removed is the claim to know why.
+`SN_154_LEGACY_STOP` builds the firmware without the sleep, so if the effect is
+ever reproduced the single API call can be isolated in an A/B.
 
 Two things had to be right for the fix to work, and each was wrong first:
 
@@ -155,10 +207,13 @@ rebuilds left the callback count at exactly 0), and neither does a full
 kept anyway, with backoff, because it fixes an ordinary driver-level stall and
 because the attempt is what makes the condition visible in the counters.
 
-What has still not been done is characterising what *sets* the latch — a
-scripted trial recording uptime, temperature and time-to-deafness, rather than
-the ad-hoc runs that produced this table. The clearing mechanism is now known;
-the triggering one is not, so nothing has been reported upstream yet.
+The scripted trial that was missing here now exists as
+`tools/latch_trial.py`, and it retracted the trigger rather than confirming it
+(see above). What still has not been done is a trial long enough to reach
+whatever the real trigger is: these arms are 25 seconds from a power-gated
+start, and the original deafness appeared during long ad-hoc sessions. Uptime,
+temperature and time-to-deafness remain unmeasured. Nothing has been reported
+upstream, and on the current evidence nothing should be.
 
 **Practical consequence:** any Wi-Fi test must be repeated before it means
 anything, and no offline test may depend on live Wi-Fi traffic. The
