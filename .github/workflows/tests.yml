@@ -1,0 +1,55 @@
+# The host suite, on every push.
+#
+# Nearly all of it needs no board: the hardware tests ask conftest for a serial
+# port and skip when there is none, so a runner with nothing attached reports
+# skips rather than failures. What does run here is the part that matters most
+# to get wrong quietly -- the golden vectors in host/tests/vectors/golden.json,
+# which hold the C frame encoder to byte-identical output with the Python one.
+#
+# That guarantee is about to carry more weight. firmware/shared/frame.c is
+# compiled into two firmwares, the ESP-IDF build and the Zephyr build for the
+# nRF54L15, so drift between them is a wire-format bug on one board and not the
+# other. Nobody would notice by hand.
+#
+# Both operating systems are deliberate. The plugin is developed on Windows but
+# written to run elsewhere -- thread.py branches on os.name, the extcap defaults
+# to /dev/ttyACM0 -- and only a Linux runner tests those branches.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  host:
+    name: host ${{ matrix.python }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One red leg should not hide the others: a failure that appears only on
+      # Linux, or only on the oldest Python, is the failure worth seeing.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        # The floor declared in host/pyproject.toml, and the current release.
+        # Testing only the newest would let the declared floor rot.
+        python: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install the host package
+        working-directory: host
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run the suite
+        working-directory: host
+        # Explicit rather than relying on the hardware tests to skip
+        # themselves. They do skip, but a deselect says what was intended.
+        run: python -m pytest -q -m "not hardware"
