@@ -34,18 +34,35 @@ def patch_ports(monkeypatch, ports):
     monkeypatch.setattr(lp, "comports", lambda: ports)
 
 
+#: A device on no board list. The USB id this test used to use for "some other
+#: Seeed device" was 2886:0066 -- which turned out to be the XIAO nRF54L15,
+#: now a board in its own right. An unknown id has to be genuinely unknown.
+UNKNOWN_VID, UNKNOWN_PID = 0x1234, 0x5678
+
+
 def test_the_board_is_identified_by_vid_and_pid(monkeypatch):
     """Not by port number, and not by name: 'USB Serial Device' is what both
     devices on this machine are called."""
     patch_ports(monkeypatch, [
-        FakePort("COM4", 0x2886, 0x0066),      # a different Seeed device
+        FakePort("COM9", UNKNOWN_VID, UNKNOWN_PID),
         FakePort("COM3", plugin.ESP32C6_USB_VID, plugin.ESP32C6_USB_PID),
     ])
-    assert plugin.find_board_ports() == ["COM3"]
+    assert plugin.find_board_ports() == [("COM3", "esp32c6")]
+
+
+def test_the_board_is_named_as_well_as_found(monkeypatch):
+    """Which board, not merely that one is there. The dialog's options depend
+    on it, and it has to be known before any port is opened."""
+    patch_ports(monkeypatch, [
+        FakePort("COM3", plugin.ESP32C6_USB_VID, plugin.ESP32C6_USB_PID),
+        FakePort("COM4", 0x2886, 0x0066),
+    ])
+    assert plugin.find_board_ports() == [
+        ("COM3", "esp32c6"), ("COM4", "nrf54l15")]
 
 
 def test_no_board_yields_an_empty_list_not_a_guess(monkeypatch):
-    patch_ports(monkeypatch, [FakePort("COM4", 0x2886, 0x0066)])
+    patch_ports(monkeypatch, [FakePort("COM9", UNKNOWN_VID, UNKNOWN_PID)])
     assert plugin.find_board_ports() == []
 
 
@@ -54,7 +71,8 @@ def test_several_boards_are_all_reported(monkeypatch):
         FakePort("COM3", plugin.ESP32C6_USB_VID, plugin.ESP32C6_USB_PID),
         FakePort("COM7", plugin.ESP32C6_USB_VID, plugin.ESP32C6_USB_PID),
     ])
-    assert plugin.find_board_ports() == ["COM3", "COM7"]
+    assert plugin.find_board_ports() == [
+        ("COM3", "esp32c6"), ("COM7", "esp32c6")]
 
 
 def test_a_port_with_no_vid_does_not_crash_the_search(monkeypatch):
@@ -64,7 +82,7 @@ def test_a_port_with_no_vid_does_not_crash_the_search(monkeypatch):
         FakePort("COM1", None, None),
         FakePort("COM3", plugin.ESP32C6_USB_VID, plugin.ESP32C6_USB_PID),
     ])
-    assert plugin.find_board_ports() == ["COM3"]
+    assert plugin.find_board_ports() == [("COM3", "esp32c6")]
 
 
 def test_enumeration_failing_is_not_fatal(monkeypatch):

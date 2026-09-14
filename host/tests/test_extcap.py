@@ -31,13 +31,33 @@ def _run(*args: str) -> str:
     return result.stdout
 
 
+def _advertises(out: str, radio: str) -> bool:
+    """Is this radio offered, bare or qualified by a port?
+
+    These tests run the plugin as a subprocess, so they see whatever hardware
+    is actually attached to the machine running them. Interface names go bare
+    with one board and carry "@<port>" with two, which means asserting the
+    bare form here makes the result depend on what happens to be plugged in.
+    Whether the name is bare is a rule in its own right and is tested
+    hermetically in test_multi_board.py; what this file cares about is that
+    the radio is offered at all.
+    """
+    for line in out.splitlines():
+        if not line.startswith("interface {value="):
+            continue
+        value = line.split("{value=", 1)[1].split("}", 1)[0]
+        if value.split("@", 1)[0] == radio:
+            return True
+    return False
+
+
 def test_plugin_file_exists():
     assert PLUGIN.is_file(), f"plugin missing at {PLUGIN}"
 
 
 def test_lists_the_802154_interface():
     out = _run("--extcap-interfaces")
-    assert f"interface {{value={INTERFACE}}}" in out
+    assert _advertises(out, INTERFACE), out
 
 
 def test_declares_the_extcap_version_line():
@@ -61,7 +81,7 @@ def test_does_not_advertise_unimplemented_radios():
 
 def test_lists_the_wifi_interface():
     out = _run("--extcap-interfaces")
-    assert f"interface {{value={WIFI_INTERFACE}}}" in out
+    assert _advertises(out, WIFI_INTERFACE), out
 
 
 def test_reports_the_radiotap_linktype_for_wifi():

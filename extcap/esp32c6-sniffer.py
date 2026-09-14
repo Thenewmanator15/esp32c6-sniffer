@@ -123,25 +123,85 @@ DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 #: product id every C6 presents. Used to find the board rather than assume a
 #: port number: this machine has a second USB serial device on COM4, and a
 #: default of COM3 is a guess that is wrong as often as it is right.
+#:
+#: That COM4 device turned out to be the other board in this table.
 ESP32C6_USB_VID = 0x303A
 ESP32C6_USB_PID = 0x1001
 
+#: Every board this plugin knows, keyed by the USB id it enumerates as.
+#:
+#: Identity has to be settled here rather than over the wire, because the
+#: extcap must list its interfaces before any port is opened -- Wireshark asks
+#: what exists while nothing is plugged in, and an interface that appears only
+#: once a board is attached cannot be configured in advance. A GET_BOARD
+#: command would answer too late to name an interface.
+#:
+#: `radios` records what the FIRMWARE implements, not what the silicon can do.
+#: The nRF54L15 has a BLE radio; it gets a BLE interface when there is firmware
+#: behind it and not before.
+BOARDS = {
+    (ESP32C6_USB_VID, ESP32C6_USB_PID): {
+        "id": "esp32c6",
+        "display": "ESP32-C6",
+        "usb": "303A:1001",
+        # Order is load-bearing: it is the order interfaces appear in
+        # Wireshark's list, and it reproduces the order the hand-written
+        # INTERFACES table used before this was generated.
+        "radios": ("802154", "ble", "wifi"),
+        # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
+        "antenna": True,
+    },
+    (0x2886, 0x0066): {
+        "id": "nrf54l15",
+        "display": "nRF54L15",
+        "usb": "2886:0066",
+        # No Wi-Fi radio exists on this part, and BLE waits for firmware.
+        "radios": ("802154",),
+        # The same arrangement as the C6's, found while spiking this board:
+        # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
+        # selects the antenna, both regulator-boot-on in its devicetree.
+        # Which position selects which antenna is not documented anywhere.
+        # See docs/2026-09-14-nrf54l15-spike.md.
+        "antenna": True,
+    },
+}
 
-def find_board_ports() -> list[str]:
-    """Serial ports that look like an ESP32-C6.
 
-    Returns an empty list rather than raising if pyserial cannot enumerate:
-    this must never be the reason a capture fails.
+def list_comports() -> list:
+    """Every serial port pyserial can see, or an empty list.
+
+    Its own function so tests can replace the hardware, and so the two ways
+    enumeration can fail -- pyserial missing, pyserial raising -- are handled
+    in one place.
     """
     try:
         from serial.tools import list_ports
     except Exception:
         return []
+    return list(list_ports.comports())
+
+
+def find_board_ports() -> list[tuple[str, str]]:
+    """(port, board id) for every board we recognise, in enumeration order.
+
+    Returns an empty list rather than raising if pyserial cannot enumerate:
+    this must never be the reason a capture fails.
+
+    An unrecognised USB id is skipped rather than guessed at. Guessing
+    produces a board whose capabilities are wrong, which is worse than a board
+    that is absent: it would be selectable, and every option in its dialog
+    would be a promise nothing can keep.
+    """
     try:
-        return [p.device for p in list_ports.comports()
-                if p.vid == ESP32C6_USB_VID and p.pid == ESP32C6_USB_PID]
+        ports = list_comports()
     except Exception:
         return []
+    found: list[tuple[str, str]] = []
+    for port in ports:
+        board = BOARDS.get((port.vid, port.pid))
+        if board is not None:
+            found.append((port.device, board["id"]))
+    return found
 
 
 def default_port() -> str:
@@ -159,12 +219,18 @@ def default_port() -> str:
     for anyone configuring the interface before plugging the board in.
     """
     found = find_board_ports()
-    return found[0] if found else DEFAULT_PORT
+    return found[0][0] if found else DEFAULT_PORT
 
 
-INTERFACES = {
-    INTERFACE: {
-        "display": DISPLAY,
+#: What each radio is, independent of which board carries it.
+#:
+#: `title` is the half of the display name that follows the board's name, so
+#: that "ESP32-C6" + "IEEE 802.15.4 (Zigbee/Thread)" reproduces the name this
+#: plugin has always shown. Changing those strings would move users' saved
+#: per-interface options, so they are reproduced exactly rather than rebuilt.
+RADIOS = {
+    "802154": {
+        "title": "IEEE 802.15.4 (Zigbee/Thread)",
         "dlt": DLT_NUMBER,
         "dlt_name": DLT_NAME,
         "dlt_display": "IEEE 802.15.4 with TAP pseudo-header",
@@ -174,8 +240,8 @@ INTERFACES = {
         "max": CHANNEL_MAX,
         "default": DEFAULT_CHANNEL,
     },
-    BLE_INTERFACE: {
-        "display": BLE_DISPLAY,
+    "ble": {
+        "title": "Bluetooth LE (advertisements)",
         "dlt": BLE_DLT_NUMBER,
         "dlt_name": BLE_DLT_NAME,
         "dlt_display": "Bluetooth HCI H4 with direction",
@@ -187,8 +253,8 @@ INTERFACES = {
         "max": None,
         "default": 0,
     },
-    WIFI_INTERFACE: {
-        "display": WIFI_DISPLAY,
+    "wifi": {
+        "title": "Wi-Fi 2.4 GHz (802.11)",
         "dlt": WIFI_DLT_NUMBER,
         "dlt_name": WIFI_DLT_NAME,
         "dlt_display": "IEEE 802.11 with radiotap header",
@@ -199,6 +265,28 @@ INTERFACES = {
         "default": WIFI_DEFAULT_CHANNEL,
     },
 }
+
+
+def _build_interfaces() -> dict:
+    """Every interface this plugin can offer: board x the radios it implements.
+
+    Generated rather than written out, because the combinations multiply with
+    each board and a hand-maintained table drifts from the board table beside
+    it. Ordering follows BOARDS and then that board's declared radio order, so
+    the C6's three keep the positions they had.
+    """
+    built: dict = {}
+    for board in BOARDS.values():
+        for radio in board["radios"]:
+            spec = dict(RADIOS[radio])
+            spec["display"] = f"{board['display']} {spec['title']}"
+            spec["board"] = board["id"]
+            spec["radio"] = radio
+            built[f"{board['id']}-{radio}"] = spec
+    return built
+
+
+INTERFACES = _build_interfaces()
 
 # Toolbar control numbers. Ordering in the toolbar follows these.
 CTRL_ARG_CHANNEL = 0
@@ -298,18 +386,39 @@ def board_interfaces() -> list[tuple[str, str]]:
 
     One set per board. Two boards mean two radios can capture AT ONCE, which
     the single shared front end otherwise forbids: Zigbee on one and Wi-Fi on
-    the other, correlated in one Wireshark session. With one board or none the
-    names stay bare, so nothing that was configured before moves.
+    the other, correlated in one Wireshark session. That is why names carry
+    the port.
+
+    With exactly one board the names stay bare, so nothing that was configured
+    before moves -- Wireshark saves capture options against the interface name,
+    and renaming one silently drops the snapshot length, channel and filter a
+    user had set.
+
+    With no board at all, every board we know is offered bare: Wireshark asks
+    what exists before anything is plugged in, and we cannot know which board
+    is coming. An interface that materialises only once hardware is attached
+    cannot be configured in advance.
+
+    A radio is only ever advertised on a port holding the board that has it.
+    Advertising esp32c6-802154 on a port holding an nRF would be selectable
+    and would fail on open, which is worse than not offering it.
     """
-    ports = find_board_ports()
+    found = find_board_ports()
     out: list[tuple[str, str]] = []
+
+    if len(found) <= 1:
+        present = {board for _port, board in found}
+        for name, spec in INTERFACES.items():
+            if present and spec["board"] not in present:
+                continue
+            out.append((name, spec["display"]))
+        return out
+
     for name, spec in INTERFACES.items():
-        if len(ports) > 1:
-            for port in ports:
+        for port, board in found:
+            if board == spec["board"]:
                 out.append((f"{name}{PORT_SEPARATOR}{port}",
                             f"{spec['display']} on {port}"))
-        else:
-            out.append((name, spec["display"]))
     return out
 
 
@@ -400,7 +509,7 @@ def print_config(interface: str, reload_option: str | None = None,
     # The default is looked up each time Wireshark opens this dialog, so a
     # board that moved between runs, or is on a machine that never had a COM3,
     # still shows the right port without anybody editing anything.
-    detected = find_board_ports()
+    detected = [port for port, _board in find_board_ports()]
     if detected:
         found_note = f"Found: {', '.join(detected)}. "
     else:
@@ -1250,7 +1359,7 @@ def main(argv: list[str] | None = None) -> int:
             # OSError here caught nothing and the traceback still escaped.
             sys.stderr.write(f"cannot capture on {args.port}: {exc}"
                              + os.linesep)
-            found = find_board_ports()
+            found = [port for port, _board in find_board_ports()]
             if found:
                 sys.stderr.write(
                     "the board looks like it is on: "
