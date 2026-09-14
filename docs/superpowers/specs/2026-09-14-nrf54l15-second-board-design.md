@@ -109,7 +109,7 @@ and becomes generated: board x radio. The existing `<radio>@<port>` scheme is
 unchanged, and the board name is already inside the radio name today.
 
     esp32c6-802154          esp32c6-wifi        esp32c6-ble
-    nrf54l15-802154@COM4    nrf54l15-ble@COM4
+    nrf54l15-802154@COM4    nrf54l15-ble@COM4   (ble only once step 6 lands)
 
 `split_interface()` and `PORT_SEPARATOR` need no change.
 
@@ -166,8 +166,9 @@ Nearly all of it needs no hardware. The host half is pure Python and
 `find_board_ports`. New cases in that style:
 
 - a XIAO alone gets bare `nrf54l15-*` names
-- a C6 plus a XIAO yields five interfaces, not six, because there is no Wi-Fi
-  radio on the nRF to name
+- a C6 plus a XIAO yields four interfaces while only 802.15.4 firmware exists
+  for the nRF -- three for the C6 and one for the XIAO. It becomes five when
+  step 6 lands BLE, and never six: there is no Wi-Fi radio on the nRF to name
 - the antenna option is absent from the XIAO's config output
 - an unknown VID/PID is ignored rather than guessed at
 - a lone C6 produces output identical to today, option for option
