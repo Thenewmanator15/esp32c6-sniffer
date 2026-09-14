@@ -87,17 +87,41 @@ board whose capabilities are wrong, which is worse than a board that is absent.
 
 ## Capabilities
 
-|                | XIAO ESP32-C6          | XIAO nRF54L15     |
-|----------------|------------------------|-------------------|
-| Radios         | 802.15.4, Wi-Fi, BLE   | 802.15.4, BLE     |
-| `SET_ANTENNA`  | yes, a real RF switch  | no                |
-| Energy detect  | yes                    | to be confirmed   |
-| Timestamps     | ~0.5 us, C6 mechanism  | unknown           |
+Amended after the Task 1 spike, which contradicted two rows of this table.
+See [docs/2026-09-14-nrf54l15-spike.md](../../2026-09-14-nrf54l15-spike.md).
+
+|                | XIAO ESP32-C6          | XIAO nRF54L15            |
+|----------------|------------------------|--------------------------|
+| Radios         | 802.15.4, Wi-Fi, BLE   | 802.15.4, BLE            |
+| `SET_ANTENNA`  | yes, a real RF switch  | **yes, also a switch**   |
+| Energy detect  | yes                    | **yes**                  |
+| RSSI           | yes                    | yes, 1 dB resolution     |
+| Timestamps     | ~0.5 us, C6 mechanism  | available, uncharacterised |
 
 `SET_ANTENNA` exists on the C6 because that board has an FM8625H RF switch on
 GPIO3/GPIO14, documented in `firmware/main/board.h`. It is a property of the
 board, not of the radio, which is precisely why capabilities belong in the
 board table.
+
+**The nRF board has the same arrangement, and this spec originally said it did
+not.** Its devicetree declares two fixed regulators, both `regulator-boot-on`:
+
+    rfsw_ctl: enable-gpios = <&gpio2 5 GPIO_ACTIVE_LOW>
+    rfsw_pwr: enable-gpios = <&gpio2 3 GPIO_ACTIVE_HIGH>
+
+one powering the switch and one selecting between the onboard ceramic antenna
+and an external IPEX connector -- the same shape of trap as the C6's, on the
+same vendor's board family. Which position selects which antenna is not
+documented in the board files and is still unknown.
+
+Energy detection and RSSI are both available through the driver --
+`nrf_802154_energy_detection(uint32_t time_us)` reporting via
+`nrf_802154_energy_detected`, and `nrf_802154_rssi_last_get()` -- so the
+spectrum survey is portable to this board rather than C6-only.
+
+Timestamps exist and the driver defines a sentinel meaning "this timestamp is
+inaccurate", which is more than the C6 offers. No accuracy figure may be
+claimed for this board until it is characterised on its own terms.
 
 Capabilities gate the dialog, so an interface that cannot select an antenna
 has no antenna dropdown, rather than one that lies.
