@@ -1084,6 +1084,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ble_window_ms=ble_window,
                             ble_phys=ble_phys,
                             ble_filter=filter_addresses,
+                            board=board_for_interface(interface)["id"],
                             csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:

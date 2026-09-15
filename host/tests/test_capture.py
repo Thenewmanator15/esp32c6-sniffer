@@ -424,3 +424,56 @@ def test_a_length_below_the_frame_is_rejected():
                      siga1=ht_sig1(mcs=7, length=len(body)))
     )
     assert not present_bitmap(record) & (1 << BIT_MCS)
+
+
+# --- per-board firmware versions -------------------------------------------
+#
+# The version handshake existed because an older board packs its metadata
+# differently, so every field would decode to a confident wrong number rather
+# than an error. With two boards there are two firmwares, each with its own
+# version, and telling an operator to run idf.py at an nRF misleads twice
+# over: the wrong toolchain, and a version number that then looks like a fault
+# rather than a stale flash.
+
+def test_each_board_has_its_own_expected_firmware_version():
+    from esp32c6_sniffer.capture import EXPECTED_FIRMWARE_VERSIONS
+    assert EXPECTED_FIRMWARE_VERSIONS["esp32c6"] == 6
+    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 1
+
+
+def test_the_old_constant_still_names_the_c6():
+    """Existing callers, docs and the README refer to it by the old name."""
+    from esp32c6_sniffer.capture import (EXPECTED_FIRMWARE_VERSION,
+                                         EXPECTED_FIRMWARE_VERSIONS)
+    assert EXPECTED_FIRMWARE_VERSION == EXPECTED_FIRMWARE_VERSIONS["esp32c6"]
+
+
+def test_the_mismatch_message_names_the_board():
+    from esp32c6_sniffer.capture import version_mismatch_message
+    assert "nrf54l15" in version_mismatch_message("nrf54l15", found=0)
+    assert "esp32c6" in version_mismatch_message("esp32c6", found=0)
+
+
+def test_the_mismatch_message_carries_both_version_numbers():
+    """Naming only one leaves the operator to guess which end is stale."""
+    from esp32c6_sniffer.capture import version_mismatch_message
+    message = version_mismatch_message("esp32c6", found=3)
+    assert "3" in message and "6" in message
+
+
+def test_the_mismatch_message_names_that_boards_own_toolchain():
+    from esp32c6_sniffer.capture import version_mismatch_message
+    nrf = version_mismatch_message("nrf54l15", found=0)
+    assert "west" in nrf
+    assert "idf.py" not in nrf
+
+    c6 = version_mismatch_message("esp32c6", found=0)
+    assert "idf.py" in c6
+    assert "west" not in c6
+
+
+def test_a_session_defaults_to_the_board_that_existed_first():
+    """Every existing caller constructs a session without naming a board."""
+    import inspect
+    from esp32c6_sniffer.capture import CaptureSession
+    assert inspect.signature(CaptureSession).parameters["board"].default == "esp32c6"

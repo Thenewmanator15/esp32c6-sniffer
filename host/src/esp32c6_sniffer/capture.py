@@ -75,11 +75,46 @@ REPLY_POLL_S = 0.01
 #: and tight enough to catch a restarted or corrupted counter immediately.
 MAX_CLOCK_SKEW_S = 60.0
 
-#: Wire format this host code speaks, matching SN_FIRMWARE_VERSION in
-#: firmware/main/main.c. Checked at open() because the failure it prevents is
-#: silent: an older board packs its metadata differently, so every field would
-#: decode to a confident wrong number rather than an error.
-EXPECTED_FIRMWARE_VERSION = 6
+#: Wire format each board's firmware speaks. The C6 figure matches
+#: SN_FIRMWARE_VERSION in firmware/main/main.c; the nRF figure matches
+#: SN_FIRMWARE_VERSION in firmware-nrf54l15/src/main.c.
+#:
+#: Checked at open() because the failure it prevents is silent: an older board
+#: packs its metadata differently, so every field would decode to a confident
+#: wrong number rather than an error.
+EXPECTED_FIRMWARE_VERSIONS = {
+    "esp32c6": 6,
+    "nrf54l15": 1,
+}
+
+#: How to reflash each board, quoted back to the operator on a mismatch.
+#: Naming the wrong toolchain misleads twice over: the wrong tool, and a
+#: version number that then looks like a fault rather than a stale flash.
+REFLASH_COMMANDS = {
+    "esp32c6": r"idf.py -DSN_MODE=2 build then .lash.ps1 -Port <port>",
+    "nrf54l15": ("west build -b xiao_nrf54l15/nrf54l15/cpuapp -- -DSN_MODE=2 "
+                 "then west flash --runner openocd"),
+}
+
+#: The board this host spoke to before there was more than one. Kept because
+#: callers, the README and the docs all refer to it by this name.
+EXPECTED_FIRMWARE_VERSION = EXPECTED_FIRMWARE_VERSIONS["esp32c6"]
+
+
+def version_mismatch_message(board: str, found: int) -> str:
+    """What to tell an operator whose board and host disagree.
+
+    Names the board as well as both versions, because with two boards
+    attached "the board" is ambiguous, and names that board's own toolchain,
+    because being told to run idf.py at an nRF wastes the time it takes to
+    find out why that does not work.
+    """
+    expected = EXPECTED_FIRMWARE_VERSIONS[board]
+    return (
+        f"{board} board is running firmware version {found}, "
+        f"this host expects {expected}. "
+        f"Rebuild and reflash: {REFLASH_COMMANDS[board]}"
+    )
 
 # Matches sn_154_meta_t in firmware/main/radio154.h
 _META = struct.Struct("<BBbBQ")  # channel, lqi, rssi_dbm, flags, timestamp_us
@@ -227,7 +262,12 @@ class CaptureSession:
         ble_filter=None,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
+        board: str = "esp32c6",
     ) -> None:
+        #: Which board's firmware version to expect, and whose toolchain
+        #: to name if it disagrees. Defaulted to the board that existed
+        #: first, so no existing caller has to say.
+        self.board = board
         self._port_name = port
         self._radio = radio
         if radio is not Radio.BLE:
@@ -330,12 +370,9 @@ class CaptureSession:
 
         info = self._command(Command.GET_INFO)
         self.firmware_version = info["value"]
-        if self.firmware_version != EXPECTED_FIRMWARE_VERSION:
+        if self.firmware_version != EXPECTED_FIRMWARE_VERSIONS[self.board]:
             raise RuntimeError(
-                f"board is running firmware version {self.firmware_version}, "
-                f"this host expects {EXPECTED_FIRMWARE_VERSION}. "
-                f"Rebuild and reflash: "
-                f"idf.py -DSN_MODE=2 build then .\flash.ps1 -Port <port>"
+                version_mismatch_message(self.board, self.firmware_version)
             )
 
         self._configure()
