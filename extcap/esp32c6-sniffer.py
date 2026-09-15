@@ -150,6 +150,8 @@ BOARDS = {
         "radios": ("802154", "ble", "wifi"),
         # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
         "antenna": True,
+        "antenna_note": ("External needs a U.FL antenna fitted. Measured "
+                         "+13 to +14 dB over the onboard one on this board"),
     },
     (0x2886, 0x0066): {
         "id": "nrf54l15",
@@ -163,6 +165,13 @@ BOARDS = {
         # Which position selects which antenna is not documented anywhere.
         # See docs/2026-09-14-nrf54l15-spike.md.
         "antenna": True,
+        # Deliberately not the C6's +13 dB figure: that was measured on the
+        # C6 and is a property of its switch and antennas, not of this one.
+        # Which position selects which antenna is not known here either.
+        "antenna_note": ("External needs an IPEX antenna fitted. Which "
+                         "position selects which antenna is not yet "
+                         "established on this board, and the gain "
+                         "difference has not been measured"),
     },
 }
 
@@ -204,7 +213,7 @@ def find_board_ports() -> list[tuple[str, str]]:
     return found
 
 
-def default_port() -> str:
+def default_port(board_id: str | None = None) -> str:
     """The port to offer in the dialog: found, not assumed.
 
     A hardcoded COM3 is a guess that is wrong as often as it is right. The
@@ -213,12 +222,19 @@ def default_port() -> str:
     and could as easily have taken COM3 -- and on Linux and macOS the name is
     not a COM port at all.
 
+    `board_id` narrows it to that board's own ports. Without it, an nRF's
+    dialog would default to whichever board enumerated first, which with a C6
+    also attached is a confident wrong answer in a required field: the port of
+    a different board entirely.
+
     Falls back to the platform's usual name when no board is attached, so the
     dialog shows something sensible rather than an empty required field. The
     field stays free text: a selector would be empty, and therefore unusable,
     for anyone configuring the interface before plugging the board in.
     """
     found = find_board_ports()
+    if board_id is not None:
+        found = [pair for pair in found if pair[1] == board_id]
     return found[0][0] if found else DEFAULT_PORT
 
 
@@ -381,6 +397,21 @@ def split_interface(name: str) -> tuple[str, str | None]:
     return base, (port if separator else None)
 
 
+def board_for_interface(name: str) -> dict:
+    """The BOARDS entry behind an interface name, qualified or not.
+
+    Takes the qualified form too, because print_config and print_dlts are
+    handed whatever Wireshark names them, and that carries the port once more
+    than one board is attached.
+    """
+    radio_name = split_interface(name)[0]
+    board_id = INTERFACES[radio_name]["board"]
+    for board in BOARDS.values():
+        if board["id"] == board_id:
+            return board
+    raise KeyError(f"no board for interface {name}")
+
+
 def board_interfaces() -> list[tuple[str, str]]:
     """Every (interface value, display name) to advertise.
 
@@ -502,22 +533,23 @@ def print_dlts(interface: str) -> None:
 
 def print_config(interface: str, reload_option: str | None = None,
                  port: str | None = None) -> None:
-    spec = INTERFACES[interface]
+    spec = INTERFACES[split_interface(interface)[0]]
+    board = board_for_interface(interface)
     # No baud rate option. This is a USB CDC virtual port with no physical line
     # rate, so the setting is discarded; other projects expose one inherited
     # from bridge-chip designs, which misleads anyone who tries to tune it.
     # The default is looked up each time Wireshark opens this dialog, so a
     # board that moved between runs, or is on a machine that never had a COM3,
     # still shows the right port without anybody editing anything.
-    detected = [port for port, _board in find_board_ports()]
+    detected = [p for p, b in find_board_ports() if b == board["id"]]
     if detected:
         found_note = f"Found: {', '.join(detected)}. "
     else:
         found_note = ("No board found. Check the cable is data-capable: a "
                       "charge-only one enumerates nothing. ")
     print(f"arg {{number=0}}{{call=--port}}{{display=Serial port}}"
-          f"{{type=string}}{{default={default_port()}}}"
-          f"{{tooltip={found_note}Detected by USB id 303A:1001, so this is "
+          f"{{type=string}}{{default={default_port(board['id'])}}}"
+          f"{{tooltip={found_note}Detected by USB id {board['usb']}, so this is "
           f"filled in for you; change it only if you have more than one "
           f"board}}{{required=true}}")
     if spec["min"] is not None:
@@ -550,12 +582,14 @@ def print_config(interface: str, reload_option: str | None = None,
             print(f"value {{arg=1}}{{value={channel}}}"
                   f"{{display={channel_label(interface, channel)}"
                   f"{scanned.get(channel, '')}}}")
-    print("arg {number=2}{call=--antenna}{display=Antenna}"
-          "{type=selector}{default=0}"
-          "{tooltip=External needs a U.FL antenna fitted. Measured +13 to +14 dB "
-          "over the onboard one on this board}")
-    print("value {arg=2}{value=0}{display=Onboard ceramic}")
-    print("value {arg=2}{value=1}{display=External U.FL}")
+    # Only where there is a switch to throw. A selector on a board with one
+    # hardwired antenna would look like a setting, be set, and change nothing.
+    if board["antenna"]:
+        print(f"arg {{number=2}}{{call=--antenna}}{{display=Antenna}}"
+              f"{{type=selector}}{{default=0}}"
+              f"{{tooltip={board['antenna_note']}}}")
+        print("value {arg=2}{value=0}{display=Onboard ceramic}")
+        print("value {arg=2}{value=1}{display=External U.FL}")
 
     if interface == INTERFACE:
         print("arg {number=3}{call=--keys}{display=Zigbee key file}"
