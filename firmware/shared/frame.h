@@ -11,6 +11,12 @@ extern "C" {
  * authoritative definition. Byte-identity is enforced by the golden vectors in
  * host/tests/vectors/golden.json.
  *
+ * This file is compiled into BOTH firmwares -- the ESP-IDF build under
+ * firmware/main and the Zephyr build for the nRF54L15 -- so the two boards
+ * cannot drift from each other. It must therefore depend on nothing but
+ * <stddef.h>, <stdint.h> and <string.h>. Adding an SDK header here breaks the
+ * other board's build, and that is the point.
+ *
  * Header is 10 bytes, little-endian:
  *   0  2  magic 0x5AC6
  *   2  1  type
