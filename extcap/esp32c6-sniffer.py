@@ -144,6 +144,9 @@ BOARDS = {
         "id": "esp32c6",
         "display": "ESP32-C6",
         "usb": "303A:1001",
+        # Written into the pcapng section header. A capture that describes
+        # itself must describe the right board.
+        "hardware": "Seeed Studio XIAO ESP32-C6",
         # Order is load-bearing: it is the order interfaces appear in
         # Wireshark's list, and it reproduces the order the hand-written
         # INTERFACES table used before this was generated.
@@ -157,6 +160,7 @@ BOARDS = {
         "id": "nrf54l15",
         "display": "nRF54L15",
         "usb": "2886:0066",
+        "hardware": "Seeed Studio XIAO nRF54L15",
         # No Wi-Fi radio exists on this part, and BLE waits for firmware.
         "radios": ("802154",),
         # The same arrangement as the C6's, found while spiking this board:
@@ -985,7 +989,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         spec = INTERFACES[interface]
         writer = PcapngWriter(
             pipe, session_linktype,
-            hardware="Seeed Studio XIAO ESP32-C6",
+            hardware=board_for_interface(interface)["hardware"],
             os_name=f"{platform.system()} {platform.release()}",
             application="esp32c6-sniffer extcap",
             # The name Wireshark used, not the bare radio: with two boards

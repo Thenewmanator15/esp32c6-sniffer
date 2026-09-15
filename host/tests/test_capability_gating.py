@@ -111,3 +111,13 @@ def test_the_antenna_tooltip_does_not_borrow_another_boards_measurement(
     assert "+13 to +14 dB" in c6
     assert "+13 to +14 dB" not in nrf
     assert "not been measured" in nrf
+
+
+def test_each_board_names_its_own_hardware_for_the_capture_file():
+    """The pcapng section header carries the hardware string, and a capture
+    that describes itself must describe the right board. This was hardcoded to
+    the C6, so an nRF capture claimed to have come from an ESP32-C6 -- wrong
+    in the one field a reader would trust to tell them otherwise."""
+    assert "ESP32-C6" in plugin.BOARDS[(0x303A, 0x1001)]["hardware"]
+    assert "nRF54L15" in plugin.BOARDS[(0x2886, 0x0066)]["hardware"]
+    assert "ESP32-C6" not in plugin.BOARDS[(0x2886, 0x0066)]["hardware"]

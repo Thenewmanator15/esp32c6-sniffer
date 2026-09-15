@@ -13,6 +13,8 @@ project(nrf54l15_sniffer)
 target_sources(app PRIVATE
     src/main.c
     src/link.c
+    src/radio154.c
+    src/control.c
     ../firmware/shared/frame.c
 )
 target_include_directories(app PRIVATE ../firmware/shared)

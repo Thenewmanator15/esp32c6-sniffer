@@ -6,8 +6,10 @@
 
 #include <zephyr/kernel.h>
 
+#include "control.h"
 #include "frame.h"
 #include "link.h"
+#include "radio154.h"
 
 /* Wire format this firmware speaks. Must match the nrf54l15 entry in
  * EXPECTED_FIRMWARE_VERSIONS in host/src/esp32c6_sniffer/capture.py; the host
@@ -38,6 +40,7 @@ uint32_t sn_firmware_version(void)
 static void conformance_burst(void)
 {
 	static uint8_t all_bytes[256];
+
 	for (int i = 0; i < 256; i++) {
 		all_bytes[i] = (uint8_t)i;
 	}
@@ -58,6 +61,50 @@ static void conformance_burst(void)
 }
 #endif
 
+#if SN_MODE == SN_MODE_CAPTURE
+/* Published once a second, in the short form of the stats payload the host
+ * already decodes: five link counters then three for the radio, as
+ * sn_link_stats_t and sn_154_stats_t are laid out in the ESP-IDF firmware.
+ * The host reads it as "<8I" and zero-fills the Wi-Fi counters it knows this
+ * board does not have.
+ *
+ * The counters left at zero are left at zero deliberately. This link has no
+ * ring buffer to overflow and does not detect short writes, so reporting
+ * anything but zero would invent a measurement. */
+struct __attribute__((packed)) sn_stats_short {
+	uint32_t frames_sent;
+	uint32_t frames_dropped_ringfull;
+	uint32_t short_writes;
+	uint32_t tx_stalls;
+	uint32_t bytes_sent;
+	uint32_t frames_captured;
+	uint32_t isr_queue_full;
+	uint32_t link_rejected;
+};
+
+static void stats_tick(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(stats_work, stats_tick);
+
+static void stats_tick(struct k_work *work)
+{
+	ARG_UNUSED(work);
+
+	const struct sn_stats_short stats = {
+		.frames_sent = sn_link_frames_sent(),
+		.frames_dropped_ringfull = 0u,
+		.short_writes = 0u,
+		.tx_stalls = 0u,
+		.bytes_sent = sn_link_bytes_sent(),
+		.frames_captured = sn_radio154_captured(),
+		.isr_queue_full = 0u,
+		.link_rejected = sn_radio154_dropped(),
+	};
+
+	sn_link_send(SN_FRAME_STATS, (const uint8_t *)&stats, sizeof(stats));
+	k_work_schedule(&stats_work, K_SECONDS(1));
+}
+#endif
+
 int main(void)
 {
 	if (sn_link_init() != 0) {
@@ -66,6 +113,22 @@ int main(void)
 
 #if SN_MODE == SN_MODE_CONFORMANCE
 	conformance_burst();
+#elif SN_MODE == SN_MODE_CAPTURE
+	if (sn_radio154_init() != 0) {
+		return -1;
+	}
+	sn_link_set_command_handler(sn_control_handle);
+
+	/* The radio is NOT started here. For 802.15.4 the host sends no
+	 * separate START -- SET_CHANNEL starts it, as capture.py's _configure
+	 * says -- and starting at boot would capture on the default channel
+	 * throughout the handshake and then attribute those frames to
+	 * whichever channel was finally asked for. */
+	k_work_schedule(&stats_work, K_SECONDS(1));
+
+	while (true) {
+		k_sleep(K_FOREVER);
+	}
 #endif
 	return 0;
 }
