@@ -17,6 +17,8 @@
 
 #include "control.h"
 
+#include <zephyr/logging/log.h>
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,6 +26,8 @@
 #include "frame.h"
 #include "link.h"
 #include "radio154.h"
+
+LOG_MODULE_REGISTER(control, LOG_LEVEL_INF);
 
 #define SN_CMD_PAYLOAD_LEN   5
 #define SN_REPLY_PAYLOAD_LEN 6
@@ -77,9 +81,18 @@ void sn_control_handle(const uint8_t *payload, size_t len)
 			reply(command, SN_STATUS_BAD_VALUE, value);
 			break;
 		}
-		reply(command,
-		      sn_radio154_start() == 0 ? SN_STATUS_OK : SN_STATUS_FAILED,
-		      value);
+		/* Worth saying out loud. The operator picked a channel and the
+		 * capture is about to be attributed to it, so a mismatch
+		 * between what was asked for and what the radio took is the
+		 * kind of thing that should be visible rather than inferred. */
+		if (sn_radio154_start() != 0) {
+			LOG_ERR("channel %u set but the radio would not start",
+				(unsigned)value);
+			reply(command, SN_STATUS_FAILED, value);
+			break;
+		}
+		LOG_INF("channel %u, receiving", (unsigned)value);
+		reply(command, SN_STATUS_OK, value);
 		break;
 
 	case SN_CMD_START:

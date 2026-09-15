@@ -5,6 +5,7 @@
  */
 
 #include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
 
 #include "control.h"
 #include "frame.h"
@@ -17,6 +18,8 @@
  * its metadata differently and every field would then decode to a confident
  * wrong number rather than an error. */
 #define SN_FIRMWARE_VERSION 1u
+
+LOG_MODULE_REGISTER(sniffer, LOG_LEVEL_INF);
 
 #ifndef SN_MODE
 #define SN_MODE 0
@@ -118,6 +121,11 @@ int main(void)
 		return -1;
 	}
 	sn_link_set_command_handler(sn_control_handle);
+
+	/* Travels as a LOG frame, not as bytes on the UART. If this ever
+	 * appears as raw text in a capture, the backend is not installed and
+	 * the data path is being corrupted. */
+	LOG_INF("link up, mode=%d, firmware=%u", SN_MODE, SN_FIRMWARE_VERSION);
 
 	/* The radio is NOT started here. For 802.15.4 the host sends no
 	 * separate START -- SET_CHANNEL starts it, as capture.py's _configure

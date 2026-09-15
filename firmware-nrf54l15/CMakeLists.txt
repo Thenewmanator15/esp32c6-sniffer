@@ -15,6 +15,7 @@ target_sources(app PRIVATE
     src/link.c
     src/radio154.c
     src/control.c
+    src/log_backend_sn.c
     ../firmware/shared/frame.c
 )
 target_include_directories(app PRIVATE ../firmware/shared)
