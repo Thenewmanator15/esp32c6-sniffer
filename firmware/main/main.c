@@ -398,6 +398,13 @@ static void emit_conformance_vectors(void)
     sn_usb_link_send(SN_FRAME_LOG, (const uint8_t *)logmsg, sizeof(logmsg) - 1);
 }
 
+/* Both handlers below service capture-only features -- the BLE advertising
+ * filter and the Wi-Fi credentials -- and reach for state that only the
+ * capture build declares. They were left outside the guard, which broke every
+ * other build: SN_MODE=0 and SN_MODE=1 failed to compile at s_ssid and
+ * sn_radio_ble_set_filter. The conformance build is the one the host's golden
+ * vectors need, so the byte-identity test could not be run at all. */
+#if SN_MODE == SN_MODE_CAPTURE
 static void on_ble_filter(const uint8_t *payload, size_t len)
 {
     const esp_err_t err = sn_radio_ble_set_filter(payload, len);
@@ -435,6 +442,7 @@ static void on_credentials(const uint8_t *payload, size_t len)
     ESP_LOGI(TAG, "credentials for \"%s\" received, passphrase %u characters",
              s_ssid, (unsigned)pass_len);
 }
+#endif /* SN_MODE == SN_MODE_CAPTURE */
 
 void app_main(void)
 {
@@ -479,8 +487,10 @@ void app_main(void)
     sn_log_sink_install();
 
     sn_control_set_handler(on_command);
+#if SN_MODE == SN_MODE_CAPTURE
     sn_control_set_credentials_handler(on_credentials);
     sn_control_set_ble_filter_handler(on_ble_filter);
+#endif
     ESP_ERROR_CHECK(sn_control_start());
 
     ESP_LOGI(TAG, "link up, mode=%d", SN_MODE);
