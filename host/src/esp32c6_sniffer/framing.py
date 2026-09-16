@@ -51,6 +51,15 @@ class FrameType(IntEnum):
     TRACE = 10
     #: Host to board: BLE addresses to restrict scanning to.
     BLE_FILTER = 11
+    #: Several captured packets in one frame, with delta-coded metadata. Cuts
+    #: per-packet overhead from 22 bytes to about 5.6, which is what makes BLE
+    #: connection-following fit through the nRF54L15's 94 kB/s UART bridge.
+    #: Layout is authoritative in esp32c6_sniffer.batch.
+    PACKET_BATCH = 12
+    #: The board's outbound ring: how much is queued, the most it has held,
+    #: and its capacity. Occupancy only -- drops travel in STATS already, and
+    #: counting them here too would double them in the pcapng statistics.
+    LINK = 13
 
 
 @dataclass(frozen=True)

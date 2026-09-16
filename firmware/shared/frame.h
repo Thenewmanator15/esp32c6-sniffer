@@ -61,6 +61,20 @@ typedef enum {
      * and an address is six. Payload is N x (address type, 6 bytes),
      * and an empty payload clears the restriction. */
     SN_FRAME_BLE_FILTER = 11,
+
+    /* Several captured packets in one frame with delta-coded metadata:
+     * a 10-byte batch header (u64 base timestamp, u8 channel, u8 count)
+     * then count entries of (u16 dt_us, u8 lqi, i8 rssi, u8 len, psdu).
+     * Cuts per-packet overhead from 22 bytes to about 5.6, which is what
+     * lets BLE connection-following fit through a 94 kB/s UART bridge.
+     * Authoritative layout: host/src/esp32c6_sniffer/batch.py. */
+    SN_FRAME_PACKET_BATCH = 12,
+
+    /* The outbound ring's occupancy: u32 queued bytes, u32 high-water
+     * mark, u32 capacity. Occupancy ONLY -- frames refused because the
+     * ring was full are already counted in STATS, and counting them here
+     * as well would double them in the pcapng statistics. */
+    SN_FRAME_LINK = 13,
 } sn_frame_type_t;
 
 /* CRC-16/CCITT-FALSE: poly 0x1021, init 0xFFFF, no reflection, no final XOR.

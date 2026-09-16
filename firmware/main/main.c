@@ -396,6 +396,24 @@ static void emit_conformance_vectors(void)
     sn_usb_link_send(SN_FRAME_PACKET, all_bytes, sizeof(all_bytes));
     sn_usb_link_send(SN_FRAME_PACKET, (const uint8_t *)wrap, sizeof(wrap) - 1);
     sn_usb_link_send(SN_FRAME_LOG, (const uint8_t *)logmsg, sizeof(logmsg) - 1);
+
+    /* Two more, added with PACKET_BATCH and LINK. The C6 never EMITS these in
+     * a capture -- its capture path is unchanged -- but it emits them here so
+     * one set of golden vectors keeps holding both boards' encoders to the
+     * same bytes. Payloads mirror golden.json exactly: a three-entry batch on
+     * channel 25 (base 1000000 us, deltas 0/450/2550, the last a real ACK),
+     * and a ring 48000 bytes deep with a 128 KB high-water mark of 192 KB. */
+    static const uint8_t batch_three[] = {
+        0x40, 0x42, 0x0f, 0x00, 0x00, 0x00, 0x00, 0x00, 0x19, 0x03,
+        0x00, 0x00, 0xc8, 0xc4, 0x05, 0x68, 0x65, 0x6c, 0x6c, 0x6f,
+        0xc2, 0x01, 0xc7, 0xc3, 0x05, 0x0a, 0x0d, 0x0a, 0x00, 0xff,
+        0xf6, 0x09, 0x00, 0x9e, 0x05, 0x02, 0x00, 0x1e, 0x00, 0xf2,
+    };
+    static const uint8_t link_status[] = {
+        0x80, 0xbb, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00,
+    };
+    sn_usb_link_send(SN_FRAME_PACKET_BATCH, batch_three, sizeof(batch_three));
+    sn_usb_link_send(SN_FRAME_LINK, link_status, sizeof(link_status));
 }
 
 /* Both handlers below service capture-only features -- the BLE advertising

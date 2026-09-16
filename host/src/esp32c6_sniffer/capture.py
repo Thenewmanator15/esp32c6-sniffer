@@ -31,6 +31,7 @@ from .control import (
     decode_reply,
     encode_command,
 )
+from .batch import BatchError, decode_link, decode_packet_batch
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
 from .ble import LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record
@@ -218,6 +219,17 @@ class CaptureStats:
     fw_csi_records: int = 0
     fw_csi_dropped: int = 0
     csi_malformed: int = 0
+    #: The board's outbound ring, from its LINK frames. `link_queued` is how
+    #: far behind real time the host is -- divide by the drain rate for
+    #: seconds -- and `link_high_water` is the worst it got this session.
+    #: Zero across the board on a firmware that does not send LINK.
+    link_queued: int = 0
+    link_high_water: int = 0
+    link_capacity: int = 0
+    #: PACKET_BATCH frames that could not be decoded whole. Counted rather
+    #: than raised, and never half-decoded: several frames with confident
+    #: wrong timestamps is worse than one frame reported lost.
+    batches_malformed: int = 0
     #: Frames whose metadata could not be turned into a record: an impossible
     #: channel, a length that cannot be right. Counted rather than raised,
     #: because one bad frame must not end a capture.
@@ -719,23 +731,72 @@ class CaptureSession:
                             self.stats.csi_malformed += 1
                     continue
 
-                if frame.ftype is not FrameType.PACKET:
+                if frame.ftype is FrameType.LINK:
+                    self._update_link(frame.payload)
                     continue
 
-                # Length is checked inside _build_record, which knows which
-                # metadata layout applies. The two happen to be the same size,
-                # so a shared check here would look correct and stop being so
-                # the moment either changes.
-                built = self._build_record(frame.payload)
-                if built is None:
+                # A batch is several packets sharing one header. Each entry
+                # is expanded into exactly the payload a PACKET frame would
+                # have carried and then handled by the same code, so a
+                # batched capture cannot decode differently from a plain one.
+                if frame.ftype is FrameType.PACKET_BATCH:
+                    payloads = self._expand_batch(frame.payload)
+                elif frame.ftype is FrameType.PACKET:
+                    payloads = (frame.payload,)
+                else:
                     continue
-                record, body_len, device_us, original_len = built
 
-                self.stats.frames += 1
-                self.stats.bytes_captured += body_len
-                self.stats.resyncs = self._parser.resync_count
-                self.stats.bytes_discarded = self._parser.bytes_discarded
-                yield record, self._anchor(device_us), original_len
+                for payload in payloads:
+                    # Length is checked inside _build_record, which knows
+                    # which metadata layout applies. The two happen to be the
+                    # same size, so a shared check here would look correct and
+                    # stop being so the moment either changes.
+                    built = self._build_record(payload)
+                    if built is None:
+                        continue
+                    record, body_len, device_us, original_len = built
+
+                    self.stats.frames += 1
+                    self.stats.bytes_captured += body_len
+                    self.stats.resyncs = self._parser.resync_count
+                    self.stats.bytes_discarded = self._parser.bytes_discarded
+                    yield record, self._anchor(device_us), original_len
+
+    def _expand_batch(self, payload: bytes) -> tuple[bytes, ...]:
+        """Turns a PACKET_BATCH into the PACKET payloads it stands for.
+
+        Each entry becomes `_META` plus its PSDU -- byte for byte what the
+        board would have sent as a single PACKET -- so everything downstream,
+        from `_build_record` to the timestamp anchor, is reused rather than
+        duplicated. The channel comes from the batch header (one per batch),
+        flags are zero (never set on either board; the drivers strip the FCS
+        first), and timestamps are already absolute: the delta coding stays
+        inside `batch.decode_packet_batch`.
+
+        A batch that will not decode whole is dropped whole and counted.
+        """
+        try:
+            channel, entries = decode_packet_batch(payload)
+        except BatchError:
+            self.stats.batches_malformed += 1
+            return ()
+        return tuple(
+            _META.pack(channel, entry.lqi, entry.rssi_dbm, 0, entry.timestamp_us)
+            + entry.psdu
+            for entry in entries
+        )
+
+    def _update_link(self, payload: bytes) -> None:
+        """The board's outbound ring, so the toolbar can say how far behind
+        real time the host is. A malformed one is ignored: it carries no
+        capture data, and a wrong occupancy is worse than none."""
+        try:
+            status = decode_link(payload)
+        except BatchError:
+            return
+        self.stats.link_queued = status.queued_bytes
+        self.stats.link_high_water = status.high_water
+        self.stats.link_capacity = status.capacity
 
     def _update_stats(self, payload: bytes) -> None:
         """Copies the board's counters into stats, from the active radio.
