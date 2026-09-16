@@ -263,11 +263,16 @@ class CaptureSession:
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
         board: str = "esp32c6",
+        baud: int = 115200,
     ) -> None:
         #: Which board's firmware version to expect, and whose toolchain
         #: to name if it disagrees. Defaulted to the board that existed
         #: first, so no existing caller has to say.
         self.board = board
+        #: The C6 is a USB CDC virtual port and discards this. The nRF54L15
+        #: has no USB controller, so its link is a real UART through the
+        #: board's SAMD11 and the rate has to match the firmware's.
+        self.baud = baud
         self._port_name = port
         self._radio = radio
         if radio is not Radio.BLE:
@@ -384,7 +389,7 @@ class CaptureSession:
         ser = None
         while time.monotonic() < deadline:
             try:
-                ser = serial.Serial(self._port_name, 115200,
+                ser = serial.Serial(self._port_name, self.baud,
                                     timeout=self._timeout)
                 break
             except (OSError, serial.SerialException) as exc:

@@ -147,6 +147,9 @@ BOARDS = {
         # Written into the pcapng section header. A capture that describes
         # itself must describe the right board.
         "hardware": "Seeed Studio XIAO ESP32-C6",
+        # A USB CDC virtual port with no physical line rate: the setting is
+        # discarded, and the dialog deliberately offers no baud option.
+        "baud": 115200,
         # Order is load-bearing: it is the order interfaces appear in
         # Wireshark's list, and it reproduces the order the hand-written
         # INTERFACES table used before this was generated.
@@ -161,6 +164,13 @@ BOARDS = {
         "display": "nRF54L15",
         "usb": "2886:0066",
         "hardware": "Seeed Studio XIAO nRF54L15",
+        # A real UART rate here, not a formality. This part has no USB
+        # controller, so the host is reached over a UART bridged by the
+        # board's SAMD11, and 1 Mbaud is the UARTE's ceiling. The board
+        # default of 115200 carries 11.7 kB/s against the ~31 kB/s an
+        # 802.15.4 channel can produce. Must match the overlay in
+        # firmware-nrf54l15/boards/.
+        "baud": 1000000,
         # No Wi-Fi radio exists on this part, and BLE waits for firmware.
         "radios": ("802154",),
         # The same arrangement as the C6's, found while spiking this board:
@@ -1089,6 +1099,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ble_phys=ble_phys,
                             ble_filter=filter_addresses,
                             board=board_for_interface(interface)["id"],
+                            baud=board_for_interface(interface)["baud"],
                             csi_sink=on_csi if csi_file else None) as session:
             thread = None
             if fp_in is not None:

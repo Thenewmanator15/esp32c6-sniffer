@@ -25,3 +25,8 @@ void sn_link_set_command_handler(sn_command_handler_t handler);
  * knows what actually reached the wire. */
 uint32_t sn_link_frames_sent(void);
 uint32_t sn_link_bytes_sent(void);
+
+/* Frames refused because the outbound ring was full. Real loss, reported to
+ * the host rather than hidden: a sniffer that quietly discards is worse than
+ * one that says how much it discarded. */
+uint32_t sn_link_frames_dropped(void);

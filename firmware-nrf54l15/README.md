@@ -36,9 +36,25 @@ The board target needs its SoC and cpucluster qualifiers. A bare
 `xiao_nrf54l15` does not resolve.
 
 ```powershell
-west build --no-sysbuild -b xiao_nrf54l15/nrf54l15/cpuapp -d G:\dev\scratch\nrf\bsn <this directory> --pristine -- -DSN_MODE=0
-west flash -d G:\dev\scratch\nrf\bsn --runner openocd
+$env:ZEPHYR_BASE = "C:\path\to\ncs\v3.4.0\zephyr"   # your NCS workspace
+cd $env:ZEPHYR_BASE\..                             # west must run inside it
+west build --no-sysbuild -b xiao_nrf54l15/nrf54l15/cpuapp -d G:\dev\scratch\nrf\bcap <this directory> --pristine -- -DSN_MODE=2
+west flash -d G:\dev\scratch\nrf\bcap --runner openocd
 ```
+
+**`west build` must run inside the west workspace.** `ncsenv.ps1` does not set
+`ZEPHYR_BASE`, and outside the workspace the error names neither it nor the
+directory, it only says
+
+    west: unknown command "build"; do you need to run this inside a workspace?
+
+**openocd is not on `PATH` after `winget install`.** It stays in the WinGet
+package store, so `west flash` reports only `required program openocd not
+found` until it is added by hand:
+
+    $env:PATH = "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\" +
+        "xpack-dev-tools.openocd-xpack_Microsoft.Winget.Source_8wekyb3d8bbwe\" +
+        "xpack-openocd-0.12.0-7\bin;$env:PATH"
 
 **Keep the build directory short.** Zephyr appends a deep
 `zephyr/include/generated/...` tree, and a long build path pushes the real
@@ -69,7 +85,7 @@ Mirrors `firmware/main`, so both boards are driven the same way.
 With the board attached, from `host/`:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_conformance.py -v -m hardware --port COM4
+.\.venv\Scripts\python.exe -m pytest tests\test_conformance.py -v -m hardware --port COM4 --baud 1000000
 ```
 
 No test code is specific to this board. The suite takes a `--port` and does
@@ -92,7 +108,13 @@ directly and cannot run on this part for exactly that reason.
 
 `uart20` defaults to 115200 baud, about 11.5 kB/s. An 802.15.4 channel can
 produce roughly 31 kB/s, so that default is not merely slow, it is
-insufficient for capture. Raising it is a measurement nobody has made yet.
+insufficient for capture. It is raised to 1 Mbaud -- the UARTE's ceiling on
+this part -- by the overlay in `boards/`, which the host must match; the
+extcap does, from the `baud` field in its `BOARDS` table.
+
+That measures 94.3 kB/s end to end, 94% of line rate, using EasyDMA rather
+than per-byte `uart_poll_out`. The numbers and how they were taken are in
+[docs/2026-09-14-nrf54l15-spike.md](../docs/2026-09-14-nrf54l15-spike.md).
 
 ## Why the console and shell are off
 

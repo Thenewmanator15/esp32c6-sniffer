@@ -4,6 +4,11 @@ import serial
 
 def pytest_addoption(parser):
     parser.addoption("--port", default="COM3", help="serial port of the board")
+    # The C6 is a USB CDC virtual port and ignores this. The nRF54L15 has no
+    # USB controller, so its link is a real UART through the board's SAMD11
+    # and the rate has to match the firmware's: --port COM4 --baud 1000000.
+    parser.addoption("--baud", type=int, default=115200,
+                     help="serial rate; 1000000 for the nRF54L15")
 
 
 def pytest_configure(config):
@@ -21,8 +26,9 @@ def sniffer_port(request):
     is using the board, as only one thing can".
     """
     port = request.config.getoption("--port")
+    baud = request.config.getoption("--baud")
     try:
-        ser = serial.Serial(port, 115200, timeout=0.2)
+        ser = serial.Serial(port, baud, timeout=0.2)
     except serial.SerialException as exc:
         text = str(exc)
         if "Access is denied" in text or "PermissionError" in text:

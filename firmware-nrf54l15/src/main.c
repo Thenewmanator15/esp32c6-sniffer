@@ -71,9 +71,11 @@ static void conformance_burst(void)
  * The host reads it as "<8I" and zero-fills the Wi-Fi counters it knows this
  * board does not have.
  *
- * The counters left at zero are left at zero deliberately. This link has no
- * ring buffer to overflow and does not detect short writes, so reporting
- * anything but zero would invent a measurement. */
+ * frames_dropped_ringfull is now a real measurement: the outbound ring can
+ * fill if the host stops draining, and a frame refused at that point is loss
+ * the operator should be told about. The rest stay zero deliberately -- this
+ * link does not detect short writes or transmit stalls, so reporting anything
+ * but zero for those would invent a measurement. */
 struct __attribute__((packed)) sn_stats_short {
 	uint32_t frames_sent;
 	uint32_t frames_dropped_ringfull;
@@ -94,7 +96,7 @@ static void stats_tick(struct k_work *work)
 
 	const struct sn_stats_short stats = {
 		.frames_sent = sn_link_frames_sent(),
-		.frames_dropped_ringfull = 0u,
+		.frames_dropped_ringfull = sn_link_frames_dropped(),
 		.short_writes = 0u,
 		.tx_stalls = 0u,
 		.bytes_sent = sn_link_bytes_sent(),

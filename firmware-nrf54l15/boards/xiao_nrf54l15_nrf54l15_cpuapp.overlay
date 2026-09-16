@@ -1,0 +1,14 @@
+/* The link to the host, as fast as this part can drive it.
+ *
+ * 1 Mbaud is the UARTE's ceiling on the nRF54L15 -- the register definitions
+ * top out there for every instance and every core clock -- so this is the
+ * most the USB-C socket can be given. The board default of 115200 carries
+ * 11.7 kB/s against the ~31 kB/s an 802.15.4 channel can produce, which is
+ * not enough for a busy network.
+ *
+ * Measured on this path: 94.3 kB/s, 94% of line rate, with EasyDMA.
+ * See docs/2026-09-14-nrf54l15-spike.md.
+ */
+&uart20 {
+	current-speed = <1000000>;
+};
