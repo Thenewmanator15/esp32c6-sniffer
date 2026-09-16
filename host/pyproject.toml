@@ -20,7 +20,10 @@ classifiers = [
 dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+# build is what extcap/package-release.py shells out to for the wheel that
+# ships in a release. Declared rather than assumed, so the release path
+# works from a fresh clone and in CI without a separate install step.
+dev = ["pytest>=8.0", "build>=1.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

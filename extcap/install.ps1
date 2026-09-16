@@ -7,8 +7,21 @@
 # it needs no administrator rights and survives a Wireshark upgrade.
 #
 # Wireshark executes .bat or .exe from that directory, never .py, so a launcher
-# is generated pointing at this project's virtual environment. That environment
-# supplies pyserial, which Wireshark's own Python (if any) would not have.
+# is generated pointing at a Python that has pyserial and this project's
+# package. Wireshark's own Python, if any, has neither.
+#
+# Two layouts run this script and it detects which:
+#
+#   repository -- host\.venv exists, and the launcher points straight at it.
+#                 The package is copied beside the plugin so it resolves
+#                 without the repository layout.
+#   release    -- the script sits in an unpacked release zip beside a wheel.
+#                 A virtual environment is created inside the extcap
+#                 directory and the wheel installed into it, so the plugin
+#                 owns its dependencies and the system Python is untouched.
+#
+# The release layout has no lib\ directory: the wheel puts the package in the
+# environment's site-packages, where a plain import finds it.
 
 param(
     [switch]$Uninstall
@@ -22,15 +35,16 @@ $pluginName = 'esp32c6-sniffer'
 $venvPython = Join-Path $repo 'host\.venv\Scripts\python.exe'
 $package    = Join-Path $repo 'host\src\esp32c6_sniffer'
 
-$targetPy  = Join-Path $extcapDir "$pluginName.py"
-$targetBat = Join-Path $extcapDir "$pluginName.bat"
-$targetLib = Join-Path $extcapDir 'lib\esp32c6_sniffer'
+$targetPy   = Join-Path $extcapDir "$pluginName.py"
+$targetBat  = Join-Path $extcapDir "$pluginName.bat"
+$targetLib  = Join-Path $extcapDir 'lib\esp32c6_sniffer'
+$targetVenv = Join-Path $extcapDir "$pluginName-venv"
 
 if ($Uninstall) {
     $profileRoot = Join-Path $env:APPDATA 'Wireshark\profiles'
     $profiles = @('ESP32-C6 802.15.4', 'ESP32-C6 Wi-Fi', 'ESP32-C6 BLE',
                   'ESP32-C6 Sniffer')   # the last is the superseded single one
-    $paths = @($targetPy, $targetBat, $targetLib)
+    $paths = @($targetPy, $targetBat, $targetLib, $targetVenv)
     $paths += $profiles | ForEach-Object { Join-Path $profileRoot $_ }
     foreach ($p in $paths) {
         if (Test-Path $p) { Remove-Item $p -Recurse -Force; Write-Host "removed $p" }
@@ -39,12 +53,47 @@ if ($Uninstall) {
     return
 }
 
-if (-not (Test-Path $venvPython)) {
-    throw "Project virtual environment not found at $venvPython. Create it with: cd host; py -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e `".[dev]`""
-}
-if (-not (Test-Path $package)) { throw "Package not found at $package" }
-
 New-Item -ItemType Directory -Force -Path $extcapDir | Out-Null
+
+# Which layout is this? The repository's virtual environment wins where it
+# exists, so a developer's install keeps working exactly as before.
+$wheel = Get-ChildItem -Path $PSScriptRoot -Filter 'esp32c6_sniffer-*.whl' -ErrorAction SilentlyContinue |
+         Select-Object -First 1
+
+if (Test-Path $venvPython) {
+    $interpreter = $venvPython
+    $fromWheel = $false
+    if (-not (Test-Path $package)) { throw "Package not found at $package" }
+    # Installing from a clone over a previous release install leaves that
+    # environment behind with nothing pointing at it: a few tens of megabytes
+    # that look load-bearing to anyone who finds them later.
+    if (Test-Path $targetVenv) {
+        Remove-Item $targetVenv -Recurse -Force
+        Write-Host "removed the superseded $targetVenv"
+    }
+} elseif ($wheel) {
+    # A release install. Build the environment the plugin will run in, rather
+    # than installing into whatever Python happens to be on PATH: Wireshark
+    # launches this with no shell and no activated environment, so the
+    # interpreter has to be named by absolute path and has to be stable.
+    $bootstrap = (Get-Command py, python3, python -ErrorAction SilentlyContinue |
+                  Select-Object -First 1).Source
+    if (-not $bootstrap) {
+        throw "No Python found on PATH. Install Python 3.10 or newer from python.org, then re-run this script."
+    }
+    Write-Host "creating $targetVenv"
+    & $bootstrap -m venv $targetVenv
+    if ($LASTEXITCODE -ne 0) { throw "could not create a virtual environment at $targetVenv" }
+    $interpreter = Join-Path $targetVenv 'Scripts\python.exe'
+    & $interpreter -m pip install --quiet --upgrade pip
+    & $interpreter -m pip install --quiet $wheel.FullName
+    if ($LASTEXITCODE -ne 0) { throw "could not install $($wheel.Name) into $targetVenv" }
+    Write-Host "installed $($wheel.Name)"
+    $fromWheel = $true
+} else {
+    throw "Neither a project virtual environment nor a release wheel was found. In a clone: cd host; py -m venv .venv; .\.venv\Scripts\python.exe -m pip install -e `".[dev]`". From a release: run this script from the unpacked zip, which carries the wheel beside it."
+}
+
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $targetLib) | Out-Null
 
 Copy-Item (Join-Path $PSScriptRoot "$pluginName.py") $targetPy -Force
@@ -52,14 +101,20 @@ Write-Host "installed $targetPy"
 
 # Copy the package next to the plugin so it resolves without the repository
 # layout. The plugin adds its own lib/ directory to the import path.
+#
+# A wheel install skips this: the package is already in the environment's
+# site-packages, and a second copy on sys.path would shadow it -- silently
+# serving a stale package after an upgrade that only replaced the wheel.
 if (Test-Path $targetLib) { Remove-Item $targetLib -Recurse -Force }
-Copy-Item $package $targetLib -Recurse -Force
-Write-Host "installed $targetLib"
+if (-not $fromWheel) {
+    Copy-Item $package $targetLib -Recurse -Force
+    Write-Host "installed $targetLib"
+}
 
 @"
 @echo off
 rem Generated by extcap\install.ps1. Re-run that script to regenerate.
-"$venvPython" "%~dp0$pluginName.py" %*
+"$interpreter" "%~dp0$pluginName.py" %*
 "@ | Set-Content -Path $targetBat -Encoding ascii
 Write-Host "installed $targetBat"
 
@@ -82,7 +137,12 @@ if (Test-Path $old) {
     Write-Host "removed the superseded '$old'"
 }
 
+# A clone keeps them at the top level; a release zip carries them beside this
+# script, because the zip has no repository around it.
 $profilesSrc = Join-Path $repo 'wireshark-profiles'
+if (-not (Test-Path $profilesSrc)) {
+    $profilesSrc = Join-Path $PSScriptRoot 'profiles'
+}
 if (Test-Path $profilesSrc) {
     foreach ($dir in Get-ChildItem $profilesSrc -Directory) {
         $dst = Join-Path $profileRoot $dir.Name

@@ -1,6 +1,6 @@
 # Using the Wireshark plugin
 
-A task-oriented guide. For installation see the [README](../README.md#install);
+A task-oriented guide. For installation see the [README](../README.md#install-from-a-release);
 this assumes the firmware is flashed, `extcap\install.ps1` has been run and
 Wireshark has been restarted.
 

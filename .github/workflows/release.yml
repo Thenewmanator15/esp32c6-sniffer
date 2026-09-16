@@ -1,0 +1,266 @@
+# Builds a release: both firmwares, the Wireshark plugin, and the host wheel.
+#
+# The point of building the firmware here rather than uploading a local build
+# is that the binary in a release and the source at that tag cannot drift.
+# A hand-assembled release is right until the one time somebody tags after
+# building, and the mismatch it produces is invisible -- the host refuses to
+# open a capture with "firmware version N, expected M" and the user has no way
+# to tell which half is wrong.
+#
+# It is also the only thing that builds both firmwares on every tag. The test
+# workflow compiles neither: it holds frame.c to the golden vectors through
+# the Python encoder, which catches wire-format drift but not a firmware that
+# stopped compiling.
+#
+# Triggered by a v* tag. workflow_dispatch builds everything and uploads the
+# artifacts without publishing, which is how to find out whether a toolchain
+# image has moved under us before a tag is in the open.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write     # creating the release and uploading assets
+
+jobs:
+  esp32c6:
+    name: firmware (ESP32-C6)
+    runs-on: ubuntu-latest
+    # v6.1 is the floor: on v6.0.2 this board's Wi-Fi receiver hears nothing.
+    # See firmware/idf-env.ps1, which enforces the same floor locally.
+    container: espressif/idf:release-v6.1
+    steps:
+      - uses: actions/checkout@v4
+
+      # The checkout is owned by a different uid than the container's user, so
+      # git refuses it as "dubious ownership". idf.py asks git for the version
+      # it stamps into the build, so this surfaces as a build failure rather
+      # than anything mentioning ownership.
+      - name: Let git read the checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Build
+        shell: bash
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          idf.py -DSN_MODE=2 build
+
+      - name: Merge into one image
+        shell: bash
+        working-directory: firmware
+        run: |
+          . "$IDF_PATH/export.sh"
+          # One file flashed at 0x0 rather than three at 0x0/0x8000/0x10000.
+          # A user with the wrong offset gets a board that enumerates and
+          # never answers, which looks like a broken plugin.
+          idf.py merge-bin -o esp32c6.bin
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32c6
+          path: firmware/esp32c6.bin
+          if-no-files-found: error
+
+  nrf54l15:
+    name: firmware (nRF54L15)
+    runs-on: ubuntu-latest
+    container: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
+    env:
+      # The toolchain image carries the compiler and the Zephyr SDK but not
+      # the sources, so the workspace is built here.
+      NCS_VERSION: v3.4.0
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sniffer
+
+      # Same dubious-ownership problem as the IDF job, and west runs git for
+      # every project in the workspace, so it is refused everywhere at once.
+      - name: Let git read the checkout
+        run: git config --global --add safe.directory '*'
+
+      # The workspace is several GB and identical for every build at a given
+      # NCS version, so it is worth more than it costs to cache.
+      - name: Cache the west workspace
+        id: ncs-cache
+        uses: actions/cache@v4
+        with:
+          path: ncs
+          key: ncs-${{ env.NCS_VERSION }}
+
+      - name: Fetch the SDK
+        if: steps.ncs-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ncs && cd ncs
+          west init -m https://github.com/nrfconnect/sdk-nrf --mr "$NCS_VERSION" .
+          west update --narrow -o=--depth=1
+          west zephyr-export
+
+      - name: Build
+        shell: bash
+        run: |
+          cd ncs
+          # west resolves the board and the modules from the workspace it is
+          # run inside; outside one it reports only "unknown command build".
+          west build --no-sysbuild \
+            -b xiao_nrf54l15/nrf54l15/cpuapp \
+            -d "$GITHUB_WORKSPACE/build-nrf" \
+            "$GITHUB_WORKSPACE/sniffer/firmware-nrf54l15" \
+            --pristine -- -DSN_MODE=2
+          cp "$GITHUB_WORKSPACE/build-nrf/zephyr/zephyr.hex" \
+             "$GITHUB_WORKSPACE/nrf54l15.hex"
+
+      # Shipped beside the hex because flashing this board needs it: the
+      # image is written by a board-specific `nrf54l-load` proc defined in
+      # this file, not by openocd's generic flash command.
+      - name: Collect the openocd config
+        shell: bash
+        run: |
+          cp ncs/zephyr/boards/seeed/xiao_nrf54l15/support/openocd.cfg \
+             "$GITHUB_WORKSPACE/openocd.cfg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-nrf54l15
+          path: |
+            nrf54l15.hex
+            openocd.cfg
+          if-no-files-found: error
+
+  plugin:
+    name: Wireshark plugin and wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the host package
+        working-directory: host
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      # A release whose plugin fails its own suite is not worth publishing,
+      # and this is the last point at which that is cheap to notice.
+      - name: Run the suite
+        working-directory: host
+        run: python -m pytest -q -m "not hardware"
+
+      - name: Check the version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          pkg="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("host/pyproject.toml").read_text())["project"]["version"])')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "tag v$tag does not match host/pyproject.toml version $pkg" >&2
+            exit 1
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          # An `&& ...` one-liner here would take the step down under `set -e`
+          # on exactly the path that matters: on a tag the test is false, the
+          # list returns 1, and the shell exits before packaging anything.
+          if [ "$version" = "$GITHUB_REF" ]; then
+            version="$(git rev-parse --short HEAD)"
+          fi
+          python extcap/package-release.py --version "$version" --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: [esp32c6, nrf54l15, plugin]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Lay out the assets
+        shell: bash
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          mkdir -p release
+          cp "artifacts/firmware-esp32c6/esp32c6.bin"      "release/esp32c6-$version.bin"
+          cp "artifacts/firmware-nrf54l15/nrf54l15.hex"    "release/nrf54l15-$version.hex"
+          cp "artifacts/firmware-nrf54l15/openocd.cfg"     "release/openocd.cfg"
+          cp artifacts/plugin/*.zip artifacts/plugin/*.whl  release/
+          cd release && sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          version="${GITHUB_REF#refs/tags/}"
+          notes="$(cat <<EOF
+          Passive tri-radio sniffer for Wireshark. Nothing here transmits.
+
+          ## Install
+
+          1. Flash the board you have (below).
+          2. Unpack \`esp32c6-sniffer-plugin-$version.zip\` and run \`install.ps1\`
+             (Windows) or \`install.sh\` (Linux/macOS). It builds its own Python
+             environment from the bundled wheel and leaves your system Python
+             alone. Python 3.10 or newer must be on PATH.
+          3. Restart Wireshark. The interfaces appear on the welcome screen.
+
+          ## Flash an ESP32-C6
+
+          One image at offset zero, so there are no offsets to get wrong:
+
+          \`\`\`
+          pip install esptool
+          esptool --chip esp32c6 -p COM3 -b 460800 \\
+            --before default-reset --after hard-reset \\
+            write-flash --flash-mode dio --flash-size 4MB --flash-freq 80m \\
+            0x0 esp32c6-$version.bin
+          \`\`\`
+
+          If it will not sync: hold BOOT, tap RESET, release BOOT, retry.
+
+          ## Flash an nRF54L15
+
+          This board has a SAMD11 running CMSIS-DAP, so openocd is the runner;
+          a SEGGER probe is not needed and \`nrfjprog\` will not find it. The
+          \`openocd.cfg\` here is the board's own -- the write goes through a
+          board-specific \`nrf54l-load\` defined in it:
+
+          \`\`\`
+          openocd -f openocd.cfg -c init -c targets -c "reset init" \\
+            -c "nrf54l-load nrf54l15-$version.hex" -c "reset run" -c shutdown
+          \`\`\`
+
+          The nRF54L15 link runs at 1 Mbaud. The plugin already knows; nothing
+          to configure.
+
+          ## Verify
+
+          \`\`\`
+          tshark -D
+          \`\`\`
+
+          Checksums are in \`SHA256SUMS\`.
+          EOF
+          )"
+          gh release create "$version" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$version" \
+            --notes "$notes"

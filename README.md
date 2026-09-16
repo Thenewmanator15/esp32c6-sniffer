@@ -12,7 +12,7 @@ networks and devices you own or are authorised to test.
 
 ---
 
-**Contents** — [What you need](#what-you-need) · [Install](#install) ·
+**Contents** — [What you need](#what-you-need) · [Install](#install-from-a-release) ·
 [Using it in Wireshark](#using-it-in-wireshark) · [What it does](#what-it-does) ·
 [What it will not do](#honest-capability-ceilings) · [Testing](#testing) ·
 [Licence](#licence)
@@ -28,7 +28,7 @@ when nothing arrives.
 |---|---|
 | Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +13 to +14 dB better. |
 | Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
-| Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards. |
+| Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards, and not needed at all if you [install from a release](#install-from-a-release). |
 | Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. Matter dissection additionally needs **4.2 or later**, the release that introduced it. |
 
 On ESP-IDF v6.0.2 the Wi-Fi receiver on this board hears nothing even with the
@@ -36,7 +36,31 @@ RF switch driven correctly. That is measured, not folklore, and it is why the
 version matters — see
 [the postmortem](docs/2026-09-05-wifi-investigation-postmortem.md).
 
-## Install
+## Install from a release
+
+The quickest route, and the one that needs no toolchain: every release carries
+prebuilt firmware for both boards, the Wireshark plugin and the host package.
+
+1. Download the assets from the
+   [latest release](https://github.com/Thenewmanator15/esp32c6-sniffer/releases/latest).
+2. Flash the board you have. The exact command is in the release notes —
+   `esptool` for the ESP32-C6, `openocd` for the nRF54L15, which ships with the
+   board's own `openocd.cfg` because the write goes through a board-specific
+   load command rather than openocd's generic one.
+3. Unpack `esp32c6-sniffer-plugin-*.zip` and run `install.ps1` (Windows) or
+   `install.sh` (Linux/macOS). It builds a Python environment beside the plugin
+   from the bundled wheel, so your system Python is left alone.
+4. Restart Wireshark.
+
+The firmware and the plugin in one release are built from the same commit,
+which matters: the host refuses to open a capture when the firmware version
+disagrees with what it expects, because an older board packs its metadata
+differently and every field would decode to a confident wrong number.
+
+Build from source instead if you are changing the firmware, or want a mode
+other than capture.
+
+## Install from source
 
 Three steps: build and flash the firmware, set up the host package, install the
 Wireshark plugin.
@@ -241,7 +265,7 @@ including several that would have silently corrupted or crippled captures.
 
 ## Capturing
 
-Flash and install the plugin together, as in [Install](#install) above. The two
+Flash and install the plugin together, as in [Install](#install-from-source) above. The two
 halves share a wire format, and the host checks the board's reported firmware
 version when a capture opens: a mismatch stops with a message naming both
 versions rather than decoding older metadata into confident nonsense.
