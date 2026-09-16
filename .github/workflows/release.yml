@@ -58,12 +58,16 @@ jobs:
           # One file flashed at 0x0 rather than three at 0x0/0x8000/0x10000.
           # A user with the wrong offset gets a board that enumerates and
           # never answers, which looks like a broken plugin.
+          #
+          # -o is relative to the BUILD directory, not the working one:
+          # "Merged binary esp32c6.bin will be created in the build
+          # directory". Naming firmware/esp32c6.bin below found nothing.
           idf.py merge-bin -o esp32c6.bin
 
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-esp32c6
-          path: firmware/esp32c6.bin
+          path: firmware/build/esp32c6.bin
           if-no-files-found: error
 
   nrf54l15:
