@@ -1,7 +1,7 @@
 /* The XIAO nRF54L15 half of the sniffer.
  *
  * Speaks the same wire format as the ESP32-C6 firmware, by compiling the same
- * frame.c rather than reimplementing it. See firmware/shared/frame.h.
+ * frame.c rather than reimplementing it. See shared/frame.h.
  */
 
 #include <zephyr/kernel.h>

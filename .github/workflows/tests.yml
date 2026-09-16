@@ -6,7 +6,7 @@
 # to get wrong quietly -- the golden vectors in host/tests/vectors/golden.json,
 # which hold the C frame encoder to byte-identical output with the Python one.
 #
-# That guarantee is about to carry more weight. firmware/shared/frame.c is
+# That guarantee is about to carry more weight. shared/frame.c is
 # compiled into two firmwares, the ESP-IDF build and the Zephyr build for the
 # nRF54L15, so drift between them is a wire-format bug on one board and not the
 # other. Nobody would notice by hand.

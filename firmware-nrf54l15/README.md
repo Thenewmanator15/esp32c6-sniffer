@@ -1,7 +1,7 @@
 # nRF54L15 firmware
 
 The Seeed XIAO nRF54L15 half of the sniffer. Speaks the same wire format as
-the ESP32-C6 firmware by compiling the same `firmware/shared/frame.c`, so the
+the ESP32-C6 firmware by compiling the same `shared/frame.c`, so the
 two boards cannot drift from each other.
 
 Separate from `firmware/` because ESP-IDF and Zephyr cannot share a build
@@ -94,7 +94,7 @@ vectors holds both boards.
 
 ## Rules for the shared source
 
-`firmware/shared/frame.c` and `firmware/shared/commands.h` are compiled into
+`shared/frame.c` and `shared/commands.h` are compiled into
 both firmwares and must depend on nothing but `<stddef.h>`, `<stdint.h>` and
 `<string.h>`. Adding an SDK header to either breaks the other board's build --
 which is the mechanism working, not failing.
