@@ -60,7 +60,7 @@ def test_both_boards_declare_an_antenna_switch():
     """The C6 carries an FM8625H on GPIO3/GPIO14. The spike found the XIAO
     nRF54L15 has the same arrangement -- rfsw_pwr on gpio2.3 powering the
     switch, rfsw_ctl on gpio2.5 selecting the antenna -- which the design had
-    originally denied. See docs/2026-09-14-nrf54l15-spike.md."""
+    originally denied. See https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md."""
     assert plugin.BOARDS[(0x303A, 0x1001)]["antenna"] is True
     assert plugin.BOARDS[(0x2886, 0x0066)]["antenna"] is True
 

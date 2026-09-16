@@ -78,7 +78,7 @@ MAX_CLOCK_SKEW_S = 60.0
 
 #: Wire format each board's firmware speaks. The C6 figure matches
 #: SN_FIRMWARE_VERSION in firmware/main/main.c; the nRF figure matches
-#: SN_FIRMWARE_VERSION in firmware-nrf54l15/src/main.c.
+#: SN_FIRMWARE_VERSION in nrf54l15-sniffer's src/main.c.
 #:
 #: Checked at open() because the failure it prevents is silent: an older board
 #: packs its metadata differently, so every field would decode to a confident

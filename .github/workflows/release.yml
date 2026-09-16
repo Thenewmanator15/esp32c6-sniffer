@@ -1,4 +1,6 @@
-# Builds a release: both firmwares, the Wireshark plugin, and the host wheel.
+# Builds a release: the ESP32-C6 firmware, the Wireshark plugin, and the host
+# wheel. The nRF54L15 firmware has its own repository and its own release;
+# the plugin published here speaks to both boards.
 #
 # The point of building the firmware here rather than uploading a local build
 # is that the binary in a release and the source at that tag cannot drift.
@@ -7,10 +9,10 @@
 # open a capture with "firmware version N, expected M" and the user has no way
 # to tell which half is wrong.
 #
-# It is also the only thing that builds both firmwares on every tag. The test
-# workflow compiles neither: it holds frame.c to the golden vectors through
-# the Python encoder, which catches wire-format drift but not a firmware that
-# stopped compiling.
+# It is also the only thing that compiles the firmware on every tag. The test
+# workflow does not: it holds frame.c to the golden vectors through the Python
+# encoder, which catches wire-format drift but not a firmware that stopped
+# compiling.
 #
 # Triggered by a v* tag. workflow_dispatch builds everything and uploads the
 # artifacts without publishing, which is how to find out whether a toolchain
@@ -34,7 +36,12 @@ jobs:
     # See firmware/idf-env.ps1, which enforces the same floor locally.
     container: espressif/idf:release-v6.1
     steps:
+      # shared/ is a submodule and frame.c is compiled from it. Without this
+      # the checkout is missing that file and the build fails at compile time
+      # rather than silently -- which is the arrangement working.
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       # The checkout is owned by a different uid than the container's user, so
       # git refuses it as "dubious ownership". idf.py asks git for the version
@@ -68,73 +75,6 @@ jobs:
         with:
           name: firmware-esp32c6
           path: firmware/build/esp32c6.bin
-          if-no-files-found: error
-
-  nrf54l15:
-    name: firmware (nRF54L15)
-    runs-on: ubuntu-latest
-    container: ghcr.io/nrfconnect/sdk-nrf-toolchain:v3.4.0
-    env:
-      # The toolchain image carries the compiler and the Zephyr SDK but not
-      # the sources, so the workspace is built here.
-      NCS_VERSION: v3.4.0
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          path: sniffer
-
-      # Same dubious-ownership problem as the IDF job, and west runs git for
-      # every project in the workspace, so it is refused everywhere at once.
-      - name: Let git read the checkout
-        run: git config --global --add safe.directory '*'
-
-      # The workspace is several GB and identical for every build at a given
-      # NCS version, so it is worth more than it costs to cache.
-      - name: Cache the west workspace
-        id: ncs-cache
-        uses: actions/cache@v4
-        with:
-          path: ncs
-          key: ncs-${{ env.NCS_VERSION }}
-
-      - name: Fetch the SDK
-        if: steps.ncs-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: |
-          mkdir -p ncs && cd ncs
-          west init -m https://github.com/nrfconnect/sdk-nrf --mr "$NCS_VERSION" .
-          west update --narrow -o=--depth=1
-          west zephyr-export
-
-      - name: Build
-        shell: bash
-        run: |
-          cd ncs
-          # west resolves the board and the modules from the workspace it is
-          # run inside; outside one it reports only "unknown command build".
-          west build --no-sysbuild \
-            -b xiao_nrf54l15/nrf54l15/cpuapp \
-            -d "$GITHUB_WORKSPACE/build-nrf" \
-            "$GITHUB_WORKSPACE/sniffer/firmware-nrf54l15" \
-            --pristine -- -DSN_MODE=2
-          cp "$GITHUB_WORKSPACE/build-nrf/zephyr/zephyr.hex" \
-             "$GITHUB_WORKSPACE/nrf54l15.hex"
-
-      # Shipped beside the hex because flashing this board needs it: the
-      # image is written by a board-specific `nrf54l-load` proc defined in
-      # this file, not by openocd's generic flash command.
-      - name: Collect the openocd config
-        shell: bash
-        run: |
-          cp ncs/zephyr/boards/seeed/xiao_nrf54l15/support/openocd.cfg \
-             "$GITHUB_WORKSPACE/openocd.cfg"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: firmware-nrf54l15
-          path: |
-            nrf54l15.hex
-            openocd.cfg
           if-no-files-found: error
 
   plugin:
@@ -188,7 +128,7 @@ jobs:
 
   publish:
     name: publish
-    needs: [esp32c6, nrf54l15, plugin]
+    needs: [esp32c6, plugin]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -202,8 +142,6 @@ jobs:
           version="${GITHUB_REF#refs/tags/}"
           mkdir -p release
           cp "artifacts/firmware-esp32c6/esp32c6.bin"      "release/esp32c6-$version.bin"
-          cp "artifacts/firmware-nrf54l15/nrf54l15.hex"    "release/nrf54l15-$version.hex"
-          cp "artifacts/firmware-nrf54l15/openocd.cfg"     "release/openocd.cfg"
           cp artifacts/plugin/*.zip artifacts/plugin/*.whl  release/
           cd release && sha256sum * > SHA256SUMS
           cat SHA256SUMS
@@ -219,7 +157,7 @@ jobs:
 
           ## Install
 
-          1. Flash the board you have (below).
+          1. Flash the board you have (below). One plugin covers both.
           2. Unpack \`esp32c6-sniffer-plugin-$version.zip\` and run \`install.ps1\`
              (Windows) or \`install.sh\` (Linux/macOS). It builds its own Python
              environment from the bundled wheel and leaves your system Python
@@ -242,18 +180,10 @@ jobs:
 
           ## Flash an nRF54L15
 
-          This board has a SAMD11 running CMSIS-DAP, so openocd is the runner;
-          a SEGGER probe is not needed and \`nrfjprog\` will not find it. The
-          \`openocd.cfg\` here is the board's own -- the write goes through a
-          board-specific \`nrf54l-load\` defined in it:
-
-          \`\`\`
-          openocd -f openocd.cfg -c init -c targets -c "reset init" \\
-            -c "nrf54l-load nrf54l15-$version.hex" -c "reset run" -c shutdown
-          \`\`\`
-
-          The nRF54L15 link runs at 1 Mbaud. The plugin already knows; nothing
-          to configure.
+          Its firmware has its own repository and its own releases:
+          [nrf54l15-sniffer](https://github.com/Thenewmanator15/nrf54l15-sniffer/releases/latest).
+          The plugin in this release speaks to that board too -- install it
+          from here either way, and take the hex from there.
 
           ## Verify
 

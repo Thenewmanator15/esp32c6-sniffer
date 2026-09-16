@@ -39,23 +39,30 @@ version matters — see
 ## Install from a release
 
 The quickest route, and the one that needs no toolchain: every release carries
-prebuilt firmware for both boards, the Wireshark plugin and the host package.
+prebuilt ESP32-C6 firmware, the Wireshark plugin and the host package.
 
 1. Download the assets from the
    [latest release](https://github.com/Thenewmanator15/esp32c6-sniffer/releases/latest).
-2. Flash the board you have. The exact command is in the release notes —
-   `esptool` for the ESP32-C6, `openocd` for the nRF54L15, which ships with the
-   board's own `openocd.cfg` because the write goes through a board-specific
-   load command rather than openocd's generic one.
+2. Flash the board you have. The ESP32-C6 image is here and the exact
+   `esptool` command is in the release notes. The nRF54L15's firmware has its
+   own repository and its own releases —
+   [nrf54l15-sniffer](https://github.com/Thenewmanator15/nrf54l15-sniffer/releases/latest)
+   — but the plugin below covers both boards, so install it from here either
+   way.
 3. Unpack `esp32c6-sniffer-plugin-*.zip` and run `install.ps1` (Windows) or
    `install.sh` (Linux/macOS). It builds a Python environment beside the plugin
    from the bundled wheel, so your system Python is left alone.
 4. Restart Wireshark.
 
-The firmware and the plugin in one release are built from the same commit,
-which matters: the host refuses to open a capture when the firmware version
-disagrees with what it expects, because an older board packs its metadata
-differently and every field would decode to a confident wrong number.
+The ESP32-C6 firmware and the plugin in one release are built from the same
+commit, which matters: the host refuses to open a capture when the firmware
+version disagrees with what it expects, because an older board packs its
+metadata differently and every field would decode to a confident wrong number.
+
+That agreement is checked at build time for this board and spans two
+repositories for the nRF54L15, so if its capture is refused for a version
+mismatch, take a newer hex from its releases rather than assuming the plugin
+is at fault.
 
 Build from source instead if you are changing the firmware, or want a mode
 other than capture.
@@ -64,6 +71,17 @@ other than capture.
 
 Three steps: build and flash the firmware, set up the host package, install the
 Wireshark plugin.
+
+Clone with submodules — the firmware compiles `shared/frame.c` out of
+[sniffer-wire-format](https://github.com/Thenewmanator15/sniffer-wire-format),
+which the nRF54L15 firmware compiles too, so neither board can drift from the
+other:
+
+```bash
+git clone --recurse-submodules https://github.com/Thenewmanator15/esp32c6-sniffer
+```
+
+An existing clone catches up with `git submodule update --init`.
 
 **1. Firmware** (once, and again only when the firmware changes)
 

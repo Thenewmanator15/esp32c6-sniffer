@@ -55,7 +55,7 @@ def test_the_nrf_offers_an_antenna_too(no_boards, capsys):
     """The spike found this board has the same arrangement as the C6: a
     powered RF switch selecting between an onboard ceramic antenna and an
     external IPEX connector. The design originally claimed it had neither.
-    See docs/2026-09-14-nrf54l15-spike.md."""
+    See https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md."""
     assert "--antenna" in config_for("nrf54l15-802154", capsys)
 
 

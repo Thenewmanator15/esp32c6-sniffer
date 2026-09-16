@@ -169,7 +169,7 @@ BOARDS = {
         # board's SAMD11, and 1 Mbaud is the UARTE's ceiling. The board
         # default of 115200 carries 11.7 kB/s against the ~31 kB/s an
         # 802.15.4 channel can produce. Must match the overlay in
-        # firmware-nrf54l15/boards/.
+        # the boards/ overlay in nrf54l15-sniffer.
         "baud": 1000000,
         # No Wi-Fi radio exists on this part, and BLE waits for firmware.
         "radios": ("802154",),
@@ -177,7 +177,7 @@ BOARDS = {
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.
         # Which position selects which antenna is not documented anywhere.
-        # See docs/2026-09-14-nrf54l15-spike.md.
+        # See https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md.
         "antenna": True,
         # Deliberately not the C6's +13 dB figure: that was measured on the
         # C6 and is a property of its switch and antennas, not of this one.
