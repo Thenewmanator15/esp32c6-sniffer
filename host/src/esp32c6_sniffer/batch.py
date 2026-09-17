@@ -44,8 +44,14 @@ BLE_BATCH payload, little-endian::
                                       first entry, from base_timestamp_us
               2   orig_len            H4 length before any truncation
               1   flags               SN_BLE_FLAG_TRUNCATED is bit 0
-              1   len                 bytes actually carried
+              2   len                 bytes actually carried
               len hci                 starting with the H4 packet-type byte
+
+``len`` is sixteen bits because an HCI event does not fit in eight. Its own
+parameter-length field is a byte, so the H4 packet reaches 258 bytes: one type
+byte, a two-byte event header, and up to 255 of parameters. An eight-bit field
+wrapped modulo 256 and the decoder lost alignment mid-batch, which surfaced as
+trailing bytes rather than as anything naming the length.
 
 There is no channel. BLE advertises on three and the controller rotates
 them without reporting which one it heard, so there is nothing to state.
@@ -73,7 +79,7 @@ from dataclasses import dataclass
 BATCH_HEADER = struct.Struct("<QBB")   # base_timestamp_us, channel, count
 BATCH_ENTRY = struct.Struct("<HBbB")   # dt_us, lqi, rssi_dbm, len
 BLE_BATCH_HEADER = struct.Struct("<QB")     # base_timestamp_us, count
-BLE_BATCH_ENTRY = struct.Struct("<HHBB")    # dt_us, orig_len, flags, len
+BLE_BATCH_ENTRY = struct.Struct("<HHBH")    # dt_us, orig_len, flags, len
 LINK_STATUS = struct.Struct("<III")    # queued_bytes, high_water, capacity
 
 BATCH_HEADER_LEN = BATCH_HEADER.size
@@ -86,6 +92,9 @@ BLE_BATCH_ENTRY_LEN = BLE_BATCH_ENTRY.size
 MAX_BATCH_ENTRIES = 32
 #: The largest H4 packet a board forwards, matching SN_BLE_MAX_PACKET in both
 #: firmwares. Longer events are truncated and flagged rather than dropped.
+#: An HCI event cannot actually exceed 258 -- a type byte, a two-byte header
+#: and a parameter length that is itself only a byte -- so this is headroom
+#: rather than a limit anything reaches.
 MAX_HCI = 300
 #: An 802.15.4 PSDU is at most 127 bytes.
 MAX_PSDU = 127

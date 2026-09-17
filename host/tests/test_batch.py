@@ -180,7 +180,10 @@ def test_ble_per_packet_overhead_is_what_the_design_claims():
     encoded = encode_ble_batch(entries)
     overhead = (len(encoded) - 32 * len(hci) + 10) / 32   # +10: frame header
     assert overhead < 22, overhead
-    assert overhead == pytest.approx(6.6, abs=0.1), overhead
+    # 32 entries x 7 bytes, plus the 9-byte batch header and the 10-byte frame
+    # header, over 32 packets. The entry grew from 6 to 7 when the length
+    # field had to widen to carry a full-size HCI event.
+    assert overhead == pytest.approx(7.6, abs=0.1), overhead
 
 
 def test_a_single_ble_entry_costs_more_than_not_batching():
@@ -238,3 +241,17 @@ def test_a_ble_batch_is_not_decodable_as_an_802154_batch():
         return
     assert [e.psdu for e in entries] != [e.hci for e in
                                          decode_ble_batch(encoded)]
+
+
+def test_an_hci_packet_longer_than_255_bytes_survives_a_batch():
+    """The length field is sixteen bits for this reason. An HCI event reaches
+    258 bytes -- a type byte, a two-byte header and up to 255 of parameters --
+    and an eight-bit length wrapped modulo 256, so the decoder lost alignment
+    part-way through a batch and reported trailing bytes. Nothing named the
+    length, and every earlier test here used a short payload."""
+    big = b"\x04\x3e\xff" + b"q" * 255          # 258 bytes, the true maximum
+    assert len(big) == 258
+    entries = [ble_entry(1_000_000, big), ble_entry(1_000_400, big)]
+    back = decode_ble_batch(encode_ble_batch(entries))
+    assert [len(e.hci) for e in back] == [258, 258]
+    assert [e.hci for e in back] == [big, big]
