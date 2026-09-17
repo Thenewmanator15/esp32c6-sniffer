@@ -45,10 +45,14 @@ static const char *TAG = "radio_ble";
 #define LE_SUBEVENT_PERIODIC_REPORT     0x0F
 #define LE_SUBEVENT_SYNC_LOST           0x10
 
-/* Concurrent periodic syncs. The controller supports a small number and each
- * costs radio time it would otherwise spend scanning, so this is deliberately
- * low rather than as many as it will take. */
-#define MAX_PERIODIC_SYNCS 2
+/* Concurrent periodic syncs. Not a preference: it is what the controller is
+ * built for. CONFIG_BT_LE_MAX_PERIODIC_SYNCS defaults to 1 and
+ * sdkconfig.defaults does not raise it, so a second sync is refused -- and a
+ * refusal leaves the count where it was, so every later repeat of that
+ * train's advertisement asks again. Raising this means raising the
+ * controller's figure first; the two have to agree or the difference is spent
+ * on commands that cannot succeed. */
+#define MAX_PERIODIC_SYNCS 1
 
 /* Scan interval and window are in units of 0.625 ms. */
 #define SCAN_UNITS_PER_MS 8 / 5

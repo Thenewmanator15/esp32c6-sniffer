@@ -517,7 +517,11 @@ specific to the 802.15.4 driver.
 Auracast broadcasts. A periodic advertiser announces its train in an extended
 advertisement, and the contents are only visible after synchronising to it. It
 is off by default, because syncing costs radio time that would otherwise be
-spent scanning, and capped at two concurrent syncs.
+spent scanning, and limited to one train at a time. That limit is a ceiling
+rather than a policy: both controllers are configured for a single periodic
+sync -- `CONFIG_BT_LE_MAX_PERIODIC_SYNCS` on the C6 and
+`CONFIG_BT_PER_ADV_SYNC_MAX` on the nRF54L15, each defaulting to 1 -- so a
+second one is refused by a controller built to hold exactly one.
 
 Measured here: 1342 advertising reports processed, and **no periodic
 advertisers at all** -- seen 0, synced 0. Nothing in range broadcasts one. The
