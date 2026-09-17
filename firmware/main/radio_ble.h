@@ -48,6 +48,11 @@ typedef struct __attribute__((packed)) {
  * anything past this is truncated and flagged rather than dropped. */
 #define SN_BLE_MAX_PACKET 300
 
+/* Counters are APPENDED to this struct, never reordered or removed. It goes
+ * out in the STATS frame behind the link, 802.15.4 and Wi-Fi blocks, and the
+ * host reads all four by position, deciding from the payload's length how
+ * many counters a given firmware sent. Moving one silently renames every
+ * figure after it. */
 typedef struct {
     uint32_t hci_packets;      /* HCI packets received from the controller */
     uint32_t adv_reports;      /* of those, LE advertising reports */
@@ -59,6 +64,9 @@ typedef struct {
     uint32_t periodic_seen;     /* advertisers announcing a periodic train */
     uint32_t periodic_synced;   /* syncs the controller established */
     uint32_t periodic_reports;  /* periodic advertising reports received */
+    uint32_t periodic_refused;  /* create-sync commands the controller said
+                                 * no to. Should stay zero: the cap matches
+                                 * the one sync the controller holds. */
 } sn_ble_stats_t;
 
 /* Brings up the controller and starts passive scanning.
@@ -116,7 +124,7 @@ esp_err_t sn_radio_ble_set_phys(uint8_t phys);
  * carried by a periodic train, not by ordinary advertisements.
  *
  * Syncing costs radio time that would otherwise be spent scanning, so it is
- * off by default and capped at a small number of concurrent syncs. */
+ * off by default, and one train at a time is all the controller holds. */
 esp_err_t sn_radio_ble_set_periodic(bool enable);
 
 #define SN_BLE_DEFAULT_INTERVAL_MS 60

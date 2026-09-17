@@ -51,6 +51,11 @@ def session_154(channel: int = 25) -> CaptureSession:
     return CaptureSession("COM_UNUSED", channel=channel, radio=Radio.IEEE802154)
 
 
+def ble_session() -> CaptureSession:
+    """No channel: the controller rotates the three advertising channels."""
+    return CaptureSession("COM_UNUSED", channel=0, radio=Radio.BLE)
+
+
 def wifi_payload(body: bytes, on_air_len: int, *, channel=6, rssi=-55,
                  noise=-96, flags=0, timestamp=1234, rate=0xB,
                  phy=PhyFormat.G, siga1=0, siga2=0) -> bytes:
@@ -216,6 +221,96 @@ def test_old_short_stats_frame_still_parses():
     s._update_stats(struct.pack("<8I", 10, 0, 0, 0, 4096, 42, 0, 0))
     assert s.stats.fw_frames_captured == 42
     assert s.stats.lossless
+
+
+def _stats_blob_ble(link, radio154, wifi, ble):
+    """The whole layout, BLE block included: 5 + 3 + 12 + 11 counters."""
+    return struct.pack("<31I", *link, *radio154, *wifi, *ble)
+
+
+#: A BLE block with nothing wrong in it, for tests that vary one field.
+BLE_QUIET = (1500, 1342, 1500, 0, 0, 0, 0, 0, 0, 0, 0)
+
+
+def test_ble_session_reads_the_ble_counters():
+    """The BLE block sits last and was shipped before anything read it, so a
+    BLE capture reported the 802.15.4 counters of a stopped radio."""
+    s = ble_session()
+    s._update_stats(_stats_blob_ble(
+        link=(10, 0, 0, 0, 4096),
+        radio154=(0, 0, 0),
+        wifi=(0,) * 12,
+        ble=(1500, 1342, 1490, 4, 6, 4, 1, 3, 1, 88, 2),
+    ))
+    assert s.stats.fw_frames_captured == 1500
+    assert s.stats.fw_frames_truncated == 4
+    assert s.stats.fw_isr_queue_full == 6
+    assert s.stats.fw_link_rejected == 4
+    assert s.stats.fw_ble_adv_reports == 1342
+    assert s.stats.fw_ble_command_timeouts == 1
+    assert s.stats.fw_ble_periodic_seen == 3
+    assert s.stats.fw_ble_periodic_synced == 1
+    assert s.stats.fw_ble_periodic_reports == 88
+    assert s.stats.fw_ble_periodic_refused == 2
+
+
+def test_a_lossy_ble_capture_is_not_reported_lossless():
+    """The defect this exists to prevent. The BLE drop counters were on the
+    wire and unread, so `dropped` in the file's statistics block came from
+    the 802.15.4 block -- stopped, and therefore zero, no matter what the BLE
+    radio threw away."""
+    s = ble_session()
+    s._update_stats(_stats_blob_ble(
+        link=(10, 0, 0, 0, 4096),
+        radio154=(0, 0, 0),
+        wifi=(0,) * 12,
+        ble=(1500, 1342, 1400, 0, 60, 40, 0, 0, 0, 0, 0),
+    ))
+    assert s.stats.fw_isr_queue_full == 60
+    assert s.stats.fw_link_rejected == 40
+    assert not s.stats.lossless
+
+
+def test_ble_truncation_alone_is_not_counted_as_loss():
+    """An oversized HCI packet is truncated and flagged, not dropped."""
+    s = ble_session()
+    s._update_stats(_stats_blob_ble(
+        link=(10, 0, 0, 0, 4096),
+        radio154=(0, 0, 0),
+        wifi=(0,) * 12,
+        ble=(1500, 1342, 1500, 12, 0, 0, 0, 0, 0, 0, 0),
+    ))
+    assert s.stats.fw_frames_truncated == 12
+    assert s.stats.lossless
+
+
+def test_ble_stats_without_the_refused_counter_still_parse():
+    """Firmware that shipped the BLE block before periodic_refused existed
+    sends thirty counters, not thirty-one."""
+    s = ble_session()
+    s._update_stats(struct.pack(
+        "<30I", 10, 0, 0, 0, 4096, 0, 0, 0, *(0,) * 12,
+        1500, 1342, 1500, 0, 0, 0, 0, 5, 1, 40,
+    ))
+    assert s.stats.fw_frames_captured == 1500
+    assert s.stats.fw_ble_periodic_seen == 5
+    assert s.stats.fw_ble_periodic_reports == 40
+    assert s.stats.fw_ble_periodic_refused == 0
+
+
+def test_the_wifi_block_still_parses_beside_a_ble_one():
+    """Adding a block at the end must not move the ones before it."""
+    s = wifi_session()
+    s._update_stats(_stats_blob_ble(
+        link=(10, 1, 0, 2, 4096),
+        radio154=(0, 0, 0),
+        wifi=(500, 0, 0, 480, 470, 7, 3, 90000, 0, 0, 0, 0),
+        ble=BLE_QUIET,
+    ))
+    assert s.stats.fw_frames_captured == 480
+    assert s.stats.fw_isr_queue_full == 7
+    assert s.stats.fw_link_rejected == 3
+    assert not s.stats.lossless
 
 
 def test_pcap_declares_the_truncation_end_to_end():

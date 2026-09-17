@@ -143,14 +143,28 @@ FCS_LEN = 4
 
 
 # The capture build emits this once a second: sn_link_stats_t (5 x uint32),
-# then sn_154_stats_t (3), then sn_80211_stats_t (8). Older firmware sent only
-# the first two blocks, so the short form is still accepted.
+# then sn_154_stats_t (3), then sn_80211_stats_t (12), then sn_ble_stats_t
+# (11). Older firmware sent only the first two blocks, so the short form is
+# still accepted.
 _STATS = struct.Struct("<8I")
 _STATS_FULL = struct.Struct("<16I")
 # Firmware 2 added the stall and recovery counters to the Wi-Fi block, and
 # firmware 4 the CSI counters.
 _STATS_V2 = struct.Struct("<18I")
 _STATS_V4 = struct.Struct("<20I")
+# The BLE block, which the board sent for a release before anything here read
+# it, and then periodic_refused appended to the end of it.
+_STATS_BLE = struct.Struct("<30I")
+_STATS_V5 = struct.Struct("<31I")
+
+#: Widest first: the first tier the payload is long enough for wins, and
+#: counters a shorter firmware does not send read as zero. Every block has
+#: only ever been appended to, so length alone identifies how much arrived.
+#: Held as a table because the padding used to be counted by hand at each
+#: branch, which made appending a counter a chance to get it silently wrong.
+_STATS_TIERS = (_STATS_V5, _STATS_BLE, _STATS_V4, _STATS_V2, _STATS_FULL,
+                _STATS)
+_STATS_COUNTERS = _STATS_V5.size // 4
 
 
 #: PHY formats that carry HE-SIG-A rather than HT-SIG.
@@ -221,6 +235,18 @@ class CaptureStats:
     fw_csi_records: int = 0
     fw_csi_dropped: int = 0
     csi_malformed: int = 0
+    # BLE only. `adv_reports` is the subset of HCI packets that were
+    # advertising reports, so an empty room and a deaf radio are different
+    # numbers rather than the same zero.
+    fw_ble_adv_reports: int = 0
+    fw_ble_command_timeouts: int = 0
+    # Periodic advertising, which is off unless asked for. `refused` is the
+    # controller declining a sync: it holds one at a time, and a refusal
+    # leaves the board trying again on the next advertisement.
+    fw_ble_periodic_seen: int = 0
+    fw_ble_periodic_synced: int = 0
+    fw_ble_periodic_reports: int = 0
+    fw_ble_periodic_refused: int = 0
     #: The board's outbound ring, from its LINK frames. `link_queued` is how
     #: far behind real time the host is -- divide by the drain rate for
     #: seconds -- and `link_high_water` is the worst it got this session.
@@ -839,18 +865,17 @@ class CaptureSession:
     def _update_stats(self, payload: bytes) -> None:
         """Copies the board's counters into stats, from the active radio.
 
-        Reading the 802.15.4 block during a Wi-Fi capture is how a lossy
-        capture would report itself lossless: those counters stay at zero
-        because that radio is stopped.
+        Reading the 802.15.4 block during a Wi-Fi or BLE capture is how a
+        lossy capture would report itself lossless: those counters stay at
+        zero because that radio is stopped. BLE did exactly that until the
+        block at the end of the frame was read -- it was on the wire for a
+        release, unread, while the drops it counted went unreported.
         """
-        if len(payload) >= _STATS_V4.size:
-            values = _STATS_V4.unpack_from(payload)
-        elif len(payload) >= _STATS_V2.size:
-            values = _STATS_V2.unpack_from(payload) + (0, 0)
-        elif len(payload) >= _STATS_FULL.size:
-            values = _STATS_FULL.unpack_from(payload) + (0,) * 4
-        elif len(payload) >= _STATS.size:
-            values = _STATS.unpack_from(payload) + (0,) * 12
+        for tier in _STATS_TIERS:
+            if len(payload) >= tier.size:
+                values = tier.unpack_from(payload)
+                values += (0,) * (_STATS_COUNTERS - len(values))
+                break
         else:
             return
 
@@ -877,6 +902,24 @@ class CaptureSession:
                 self.stats.fw_csi_records,
                 self.stats.fw_csi_dropped,
             ) = values[8:20]
+        elif self._radio is Radio.BLE:
+            # hci_packets is what the controller handed over, which is what
+            # this radio captures; forwarded is that figure less the two drop
+            # counters, so it is read and discarded rather than stored twice.
+            # oversized is truncation and deliberately not loss, as on Wi-Fi.
+            (
+                self.stats.fw_frames_captured,
+                self.stats.fw_ble_adv_reports,
+                _forwarded,
+                self.stats.fw_frames_truncated,
+                self.stats.fw_isr_queue_full,
+                self.stats.fw_link_rejected,
+                self.stats.fw_ble_command_timeouts,
+                self.stats.fw_ble_periodic_seen,
+                self.stats.fw_ble_periodic_synced,
+                self.stats.fw_ble_periodic_reports,
+                self.stats.fw_ble_periodic_refused,
+            ) = values[20:31]
         else:
             (
                 self.stats.fw_frames_captured,

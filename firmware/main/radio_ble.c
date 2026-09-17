@@ -609,9 +609,12 @@ static void sync_task(void *arg)
             ESP_LOGI(TAG, "syncing to a periodic train, SID %u",
                      (unsigned)request.sid);
         } else {
-            /* A refusal is ordinary: the controller rejects a duplicate sync
-             * to an advertiser it already follows, and every repeat of that
-             * advertisement queues another request. */
+            /* Counted, not shrugged off. With the cap matching the single
+             * sync the controller holds this should stay at zero; anything
+             * else means create-sync commands are being spent on something
+             * that cannot succeed, and at this log level nobody would see
+             * it. The host reports the figure once a second. */
+            s_stats.periodic_refused++;
             ESP_LOGD(TAG, "periodic sync refused: %s", esp_err_to_name(err));
         }
     }

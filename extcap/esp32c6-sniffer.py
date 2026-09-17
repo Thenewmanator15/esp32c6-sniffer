@@ -1272,6 +1272,19 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             # Not loss: the snapshot length is deliberate, and
                             # what it cuts is encrypted payload.
                             extra += (f", {s.fw_frames_truncated} truncated")
+                        if radio is Radio.BLE and s.fw_ble_periodic_seen:
+                            extra += (f", periodic {s.fw_ble_periodic_seen} "
+                                      f"seen/{s.fw_ble_periodic_synced} "
+                                      f"synced/{s.fw_ble_periodic_reports} "
+                                      f"reports")
+                        if s.fw_ble_periodic_refused:
+                            # The controller was asked for a sync and said no.
+                            # It holds one at a time, so this is the board
+                            # spending create-sync commands on something that
+                            # cannot succeed -- worth seeing, and invisible
+                            # until the BLE counters were read at all.
+                            extra += (f", {s.fw_ble_periodic_refused} periodic "
+                                      f"syncs refused")
                         if s.lossless:
                             log(f"ch {session._channel}: {s.frames} frames, "
                                 f"no loss{extra}")
