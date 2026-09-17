@@ -254,3 +254,12 @@ means capturing at the moment a device joins.
 | BLE | **Advertisements only.** It cannot follow connections; this is a scanner, not a link-layer sniffer. |
 
 The three cannot capture simultaneously.
+
+**Why the BLE Name column is often empty.** The scan is passive -- the radio
+never transmits, which is the point -- so it never sends a scan request and
+never receives the scan response a name usually travels in. A name appears only
+when the advertiser puts one in the advertisement itself, and plenty do not: on
+a 328-frame sample here, ten distinct advertisers and not one broadcast a name.
+The `Named` button and the Name column are correct and will simply match
+nothing. An empty column means nobody nearby is announcing a name, not that
+something is broken.
