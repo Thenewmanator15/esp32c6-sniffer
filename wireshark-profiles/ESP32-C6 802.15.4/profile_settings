@@ -1,14 +1,24 @@
 # "ESP32-C6 802.15.4" profile settings file for Wireshark.
 #
-# Selects this profile automatically for an 802.15.4 capture from this
-# sniffer, so its columns, colouring and filter buttons are right without
-# anyone remembering to right-click the status bar first.
+# Selects this profile automatically for an 802.15.4 capture -- Zigbee,
+# Thread or Matter -- from any board this project supports.
 #
-# The filter matches on the interface NAME rather than on a dissector, so it
-# works from the first frame and cannot claim another radio's capture. It
-# works at all because our captures name their interface: the pcapng writer
-# puts if_name in the interface header. A classic pcap has nowhere to put it,
-# which is why a file from anywhere else matches none of these profiles.
+# Selection is by RADIO, not by board. The filter names the dissector these
+# columns read their values from, so the profile follows what is being sniffed
+# rather than which hardware sniffed it. Any board this project gains is
+# covered the day it captures, with nothing to remember.
+#
+# It was a list of interface names until the nRF54L15 arrived and was left off
+# it. The failure mode is quiet, which is what makes it worth avoiding: the
+# capture dissects perfectly and the only symptom is Wireshark's default
+# columns, so channel, RSSI and LQI sit in every frame and show in none.
+#
+# Exclusivity is kept, which was the reason for naming interfaces in the first
+# place. Measured across one capture from each radio, every filter below
+# matches its own and neither of the others.
+#
+# wpan is the 802.15.4 dissector; the columns read the wpan-tap header it
+# sits above, which has no filterable protocol name of its own.
 
 # Automatically switch to this profile if this display filter matches
-auto_switch_filter: frame.interface_name contains "esp32c6-802154"
+auto_switch_filter: wpan

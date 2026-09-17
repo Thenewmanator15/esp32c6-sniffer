@@ -24,11 +24,25 @@ PROFILE_ROOT = Path(__file__).resolve().parents[2] / "wireshark-profiles"
 # One per radio. A filter button belongs to a profile rather than to an
 # interface, so a single shared profile showed Zigbee, Thread and 802.11ax
 # buttons to everyone regardless of what they were capturing.
+#
+# The value is the dissector each profile switches on. It used to be the
+# interface name, and that is why these tests changed: keying on hardware
+# meant every new board had to be added here and to three profile files, and
+# when the nRF54L15 was not, nothing failed. These tests passed for two
+# releases over a profile that never loaded for that board -- its captures
+# dissected perfectly and showed Wireshark's default columns, so channel,
+# RSSI and LQI were in every frame and displayed in none.
+#
+# Keying on the radio removes the list that could be incomplete.
 EXPECTED_PROFILES = {
-    "ESP32-C6 802.15.4": "esp32c6-802154",
-    "ESP32-C6 Wi-Fi": "esp32c6-wifi",
-    "ESP32-C6 BLE": "esp32c6-ble",
+    "ESP32-C6 802.15.4": "wpan",
+    "ESP32-C6 Wi-Fi": "radiotap",
+    "ESP32-C6 BLE": "bthci_evt",
 }
+
+#: What a board-keyed filter looks like, so the regression cannot return
+#: quietly. Any board name would do; these are the two that have existed.
+BOARD_PREFIXES = ("esp32c6-", "nrf54l15-")
 
 
 def profile_dirs() -> list[Path]:
@@ -48,24 +62,59 @@ def test_expected_profiles_are_present():
     assert {p.name for p in profile_dirs()} == set(EXPECTED_PROFILES)
 
 
-@pytest.mark.parametrize("name,interface", sorted(EXPECTED_PROFILES.items()))
-def test_profile_switches_on_its_own_interface(name, interface):
-    """Each profile must claim its own radio and no other.
-
-    The filter matches the interface name rather than a dissector so that it
-    works from the first frame, before anything has been decoded.
-    """
-    settings = PROFILE_ROOT / name / "profile_settings"
-    lines = content_lines(settings)
+def _switch_filter(name: str) -> str:
+    lines = content_lines(PROFILE_ROOT / name / "profile_settings")
     matching = [ln for ln in lines if ln.startswith("auto_switch_filter:")]
     assert len(matching) == 1, f"{name}: expected one auto_switch_filter, got {matching}"
-    assert f'"{interface}"' in matching[0], matching[0]
+    return matching[0].split(":", 1)[1].strip()
 
-    # A profile that also matched another radio's interface would fight with
-    # that radio's own profile, and which one won would depend on load order.
-    others = set(EXPECTED_PROFILES.values()) - {interface}
-    for other in others:
-        assert other not in matching[0], f"{name} also claims {other}"
+
+@pytest.mark.parametrize("name,dissector", sorted(EXPECTED_PROFILES.items()))
+def test_profile_switches_on_its_own_radio(name, dissector):
+    """Each profile must claim its own radio and no other.
+
+    The filter names a dissector rather than an interface, so it follows what
+    is being sniffed rather than which board did the sniffing. Both boards'
+    802.15.4 captures decode through `wpan` from the first frame, so nothing
+    is lost by not naming them.
+    """
+    expression = _switch_filter(name)
+    assert expression == dissector, f"{name}: {expression!r}"
+
+    # A profile that also matched another radio would fight with that radio's
+    # own profile, and which one won would depend on load order. Measured on
+    # one capture per radio: each filter matches its own and neither other.
+    for other in set(EXPECTED_PROFILES.values()) - {dissector}:
+        assert other not in expression, f"{name} also claims {other}"
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED_PROFILES))
+def test_profile_is_not_keyed_to_a_board(name):
+    """The regression that made this worth testing, named so it cannot return.
+
+    A filter naming an interface works until a board is added and left out of
+    it, and then fails silently: the profile simply never loads.
+    """
+    expression = _switch_filter(name)
+    for prefix in BOARD_PREFIXES:
+        assert prefix not in expression, (
+            f"{name} switches on the board {prefix!r} rather than the radio: "
+            f"{expression!r}. A new board would not load this profile."
+        )
+
+
+@pytest.mark.parametrize("name,dissector", sorted(EXPECTED_PROFILES.items()))
+def test_profile_switches_on_the_layer_it_displays(name, dissector):
+    """The filter and the columns must name the same layer.
+
+    A profile that switches on one dissector and renders fields from another
+    can load for a capture it has nothing to say about, which is the same
+    silent-blank-columns failure by a different route.
+    """
+    preferences = (PROFILE_ROOT / name / "preferences").read_text(encoding="utf-8")
+    assert f"{dissector}." in preferences or f"{dissector}-" in preferences, (
+        f"{name} switches on {dissector!r} but no column reads a {dissector} field"
+    )
 
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_PROFILES))
