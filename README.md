@@ -528,9 +528,21 @@ advertisers at all** -- seen 0, synced 0. Nothing in range broadcasts one. The
 detection path ran on every report without incident; there is simply nothing to
 follow in this room.
 
+**Where a sync leads differs by board.** A periodic train carrying an Auracast
+broadcast also carries BIGInfo: the announcement of the isochronous group the
+audio itself travels in. The nRF54L15 reads it and joins that group, and the
+audio arrives as ISO packets which Wireshark's HCI dissector reads like
+anything else. The C6 stops at the announcement, and cannot do otherwise —
+see [the ceilings](#honest-capability-ceilings).
+
 The C6 is Bluetooth 5.0 LE, certified to 5.3. Bluetooth 6.0 features such as
 Channel Sounding are not present in this silicon: its `soc_caps.h` defines
-`SOC_BLE_50_SUPPORTED` and no BLE 6 capability at all.
+`SOC_BLE_50_SUPPORTED` and no BLE 6 capability at all. Of the 5.4 additions,
+the one this part does expose is Periodic Advertising with Responses —
+`SOC_BLE_PERIODIC_ADV_WITH_RESPONSE` is defined and
+`CONFIG_BT_LE_PERIODIC_ADV_WITH_RESPONSE_ENABLED` defaults to off — so if PAwR
+is ever wanted here, the silicon is not what stands in the way. Nothing in
+this firmware asks for it.
 
 ### Verifying the 11ax decoder
 
@@ -757,7 +769,25 @@ Two further limits worth stating plainly:
 |---|---|
 | 802.15.4 | Strong. Full promiscuous capture with RSSI, LQI and channel. |
 | Wi-Fi | Good. Full payloads except MIMO frames. 2.4 GHz only. Encrypted payloads stay encrypted. |
-| BLE | Weak. Advertisements only. It cannot follow connections; this is a scanner, not a link-layer sniffer. |
+| BLE, ESP32-C6 | Weak. Advertisements only, and an LE Audio broadcast it can name but never hear. |
+| BLE, nRF54L15 | Weak, and a little more: advertisements, plus the audio of a broadcast it follows. |
+
+Neither board follows a connection: this is a scanner, not a link-layer
+sniffer. Two further BLE ceilings are silicon rather than configuration, and
+neither of them moves.
+
+**The C6 cannot capture LE Audio.** It sees the periodic train announcing an
+Auracast broadcast and reports the BIGInfo describing the group, and there it
+stops: isochronous channels are absent from the part. ESP-IDF's `soc_caps.h`
+defines `SOC_BLE_ISO` for the C5, C61, H2, H21 and H4, and not for the C6.
+The nRF54L15 takes the next step, syncing to the group and forwarding the
+stream itself.
+
+**Neither board does direction finding.** AoA and AoD need a receiver for the
+Constant Tone Extension. The C6 has no `SOC_BLE_CTE_SUPPORTED`, and the
+SoftDevice Controller offers `sdc_support_le_connectionless_cte_transmitter`
+with no receiving counterpart — so the antenna array that would be the next
+question never becomes one.
 
 The three radios share one RF front end and **cannot** capture simultaneously.
 
