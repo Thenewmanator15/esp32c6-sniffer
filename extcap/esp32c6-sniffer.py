@@ -156,6 +156,7 @@ BOARDS = {
         "radios": ("802154", "ble", "wifi"),
         # The controller's accept list, loaded before a scan starts.
         "ble_filter": True,
+        "ble_periodic": True,
         # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
         "antenna": True,
         "antenna_note": ("External needs a U.FL antenna fitted. Measured "
@@ -182,6 +183,7 @@ BOARDS = {
         # from 300 packets across six advertisers to 113 from one, and the
         # wire traffic to 43% of unfiltered.
         "ble_filter": True,
+        "ble_periodic": True,
         # The same arrangement as the C6's, found while spiking this board:
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.
@@ -705,6 +707,14 @@ def print_config(interface: str, reload_option: str | None = None,
                   "advertiser here produced half of everything a survey heard, so "
                   "this is the difference between watching a device and watching "
                   "a room. Leave empty to hear everything}")
+        if board_for_interface(interface)["ble_periodic"]:
+            print("arg {number=7}{call=--ble-periodic}"
+                  "{display=Follow periodic advertising}"
+                  "{type=boolflag}{default=false}"
+                  "{tooltip=Syncs to periodic advertising trains as they are "
+                  "seen, which is how LE Audio and Auracast broadcasts become "
+                  "visible. Off by default because syncing spends receive "
+                  "windows that would otherwise go to advertisements}")
         print("arg {number=5}{call=--ble-phys}{display=Advertising PHYs}"
               "{type=selector}{default=1}"
               "{tooltip=Extended scanning reports both legacy and BLE 5 "
@@ -870,7 +880,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                key_file: str | None = None,
                thread_file: str | None = None,
                interface_label: str | None = None,
-               ble_filter: str | None = None) -> int:
+               ble_filter: str | None = None,
+               ble_periodic: bool = False) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -1130,6 +1141,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ble_window_ms=ble_window,
                             ble_phys=ble_phys,
                             ble_filter=filter_addresses,
+                            ble_periodic=ble_periodic,
                             board=board_for_interface(interface)["id"],
                             baud=board_for_interface(interface)["baud"],
                             csi_sink=on_csi if csi_file else None) as session:
@@ -1324,6 +1336,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
     parser.add_argument("--ble-filter", dest="ble_filter", default=None)
+    parser.add_argument("--ble-periodic", dest="ble_periodic",
+                        action="store_true")
     args, unknown = parser.parse_known_args(argv)
 
     # Wireshark shows a capture-filter box for extcap interfaces and passes
@@ -1430,7 +1444,8 @@ def main(argv: list[str] | None = None) -> int:
                               args.ble_phys, args.key_file,
                               args.thread_file,
                               interface_label=args.extcap_interface,
-                              ble_filter=args.ble_filter)
+                              ble_filter=args.ble_filter,
+                      ble_periodic=args.ble_periodic)
         except (OSError, RuntimeError) as exc:
             # Almost always the wrong serial port, which used to reach the
             # user as a Python traceback in a Wireshark dialog. Name the port

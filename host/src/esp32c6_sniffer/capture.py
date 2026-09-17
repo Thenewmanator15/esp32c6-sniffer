@@ -273,6 +273,7 @@ class CaptureSession:
         ble_interval_ms: int = 0,
         ble_window_ms: int = 0,
         ble_phys: int | None = None,
+        ble_periodic: bool = False,
         ble_filter=None,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
@@ -317,6 +318,11 @@ class CaptureSession:
         # None leaves the board's default (extended, 1M). 0 forces legacy
         # scanning, which is how the two are compared.
         self._ble_phys = ble_phys
+        #: Follow periodic advertising trains as they are noticed. Off by
+        #: default: syncing spends receive windows the scanner would
+        #: otherwise give to advertisements, so a capture that does not want
+        #: periodic traffic should not pay for it.
+        self._ble_periodic = ble_periodic
         #: BLE addresses to restrict scanning to, filtered by the
         #: controller so the rest never cross the link.
         self._ble_filter = list(ble_filter or [])
@@ -458,6 +464,11 @@ class CaptureSession:
             # itself, so START is what begins a capture here.
             if self._ble_phys is not None:
                 self._command(Command.SET_BLE_PHYS, self._ble_phys)
+            # Before START, because the firmware reads it on the path that
+            # sees each advertisement and a train missed is a train not
+            # followed.
+            if self._ble_periodic:
+                self._command(Command.SET_BLE_PERIODIC, 1)
             if self._ble_interval_ms or self._ble_window_ms:
                 self._command(
                     Command.SET_BLE_SCAN,
