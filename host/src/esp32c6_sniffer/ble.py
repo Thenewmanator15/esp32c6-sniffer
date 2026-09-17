@@ -51,6 +51,18 @@ LE_SUBEVENT_ADV_REPORT = 0x02
 LE_SUBEVENT_EXT_ADV_REPORT = 0x0D
 
 
+def build_payload(timestamp_us: int, orig_len: int, flags: int,
+                  hci: bytes) -> bytes:
+    """The PACKET payload a board would have sent for one BLE packet.
+
+    Exists so a batch can be expanded into exactly what an unbatched capture
+    would have carried, without the metadata layout escaping this module. A
+    batched capture then cannot decode differently from a plain one, because
+    after this point it is not distinguishable from one.
+    """
+    return _META.pack(timestamp_us, orig_len, flags, 0) + hci
+
+
 def build_ble_record(payload: bytes):
     """Turns one BLE frame payload into (pcap record, hci_len, timestamp_us).
 

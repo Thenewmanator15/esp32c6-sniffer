@@ -12,7 +12,8 @@ import pytest
 from esp32c6_sniffer import batch
 from esp32c6_sniffer.batch import (BatchEntry, BatchError, LinkStatus,
                                    decode_link, decode_packet_batch,
-                                   encode_link, encode_packet_batch)
+                                   encode_link, encode_packet_batch,
+    BleBatchEntry, encode_ble_batch, decode_ble_batch)
 from esp32c6_sniffer.capture import _META, META_LEN
 
 
@@ -132,3 +133,108 @@ def test_link_status_is_twelve_bytes():
 def test_a_link_payload_of_the_wrong_length_is_refused():
     with pytest.raises(BatchError):
         decode_link(b"\x00" * 11)
+
+
+# ---------------------------------------------------------------- BLE batches
+
+def ble_entry(ts, payload=b"\x04\x3e\x2b" + b"z" * 42, flags=0, orig=None):
+    hci = bytes(payload)
+    return BleBatchEntry(ts, orig if orig is not None else len(hci), flags, hci)
+
+
+def test_a_ble_batch_round_trips_exactly():
+    entries = [ble_entry(1_000_000), ble_entry(1_000_450), ble_entry(1_003_000)]
+    back = decode_ble_batch(encode_ble_batch(entries))
+    assert [(e.timestamp_us, e.orig_len, e.flags, e.hci) for e in back] == [
+        (e.timestamp_us, e.orig_len, e.flags, e.hci) for e in entries
+    ]
+
+
+def test_ble_timestamps_are_absolute_on_the_way_out():
+    """The delta coding is an encoding detail and must never leak."""
+    entries = [ble_entry(5_000_000), ble_entry(5_000_017)]
+    back = decode_ble_batch(encode_ble_batch(entries))
+    assert [e.timestamp_us for e in back] == [5_000_000, 5_000_017]
+
+
+def test_a_ble_batch_entry_becomes_the_payload_the_existing_decoder_accepts():
+    """The whole point: after expansion a batched capture is not
+    distinguishable from an unbatched one, so nothing downstream can decode
+    the two differently."""
+    from esp32c6_sniffer.ble import build_payload, build_ble_record
+
+    entry = ble_entry(7_654_321)
+    payload = build_payload(entry.timestamp_us, entry.orig_len,
+                            entry.flags, entry.hci)
+    record, hci_len, timestamp_us = build_ble_record(payload)
+    assert timestamp_us == 7_654_321
+    assert hci_len == len(entry.hci)
+    assert record.endswith(entry.hci)
+
+
+def test_ble_per_packet_overhead_is_what_the_design_claims():
+    """A full batch must beat the 22 bytes an unbatched BLE packet costs --
+    10 of frame header and 12 of metadata -- or it is not worth having."""
+    hci = b"\x04\x3e\x2b" + b"z" * 42
+    entries = [ble_entry(1_000_000 + i * 1000, hci) for i in range(32)]
+    encoded = encode_ble_batch(entries)
+    overhead = (len(encoded) - 32 * len(hci) + 10) / 32   # +10: frame header
+    assert overhead < 22, overhead
+    assert overhead == pytest.approx(6.6, abs=0.1), overhead
+
+
+def test_a_single_ble_entry_costs_more_than_not_batching():
+    """Which is why both firmwares send a batch of one as a plain PACKET."""
+    hci = b"\x04\x3e\x2b" + b"z" * 42
+    encoded = encode_ble_batch([ble_entry(1_000_000, hci)])
+    assert len(encoded) - len(hci) + 10 > 22
+
+
+@pytest.mark.parametrize("count", [0, 33])
+def test_ble_count_bounds_are_enforced(count):
+    entries = [ble_entry(1_000_000 + i * 1000) for i in range(count)]
+    with pytest.raises(BatchError):
+        encode_ble_batch(entries)
+
+
+def test_a_ble_delta_too_wide_for_sixteen_bits_is_refused_not_truncated():
+    entries = [ble_entry(1_000_000), ble_entry(1_000_000 + 0x10000)]
+    with pytest.raises(BatchError):
+        encode_ble_batch(entries)
+
+
+def test_ble_timestamps_going_backwards_are_refused():
+    with pytest.raises(BatchError):
+        encode_ble_batch([ble_entry(1_000_000), ble_entry(999_999)])
+
+
+def test_an_orig_len_smaller_than_the_bytes_carried_is_refused():
+    """orig_len says what was received before truncation, so it can exceed
+    what is carried but never fall short of it."""
+    with pytest.raises(BatchError):
+        encode_ble_batch([ble_entry(1_000_000, b"\x04\x3e\x05abc", orig=2)])
+
+
+def test_a_truncated_ble_batch_raises_rather_than_yielding_a_partial_one():
+    encoded = encode_ble_batch([ble_entry(1_000_000), ble_entry(1_000_450)])
+    with pytest.raises(BatchError):
+        decode_ble_batch(encoded[:-5])
+
+
+def test_ble_trailing_bytes_are_an_error():
+    encoded = encode_ble_batch([ble_entry(1_000_000)])
+    with pytest.raises(BatchError):
+        decode_ble_batch(encoded + b"\x00")
+
+
+def test_a_ble_batch_is_not_decodable_as_an_802154_batch():
+    """The two layouts share a module and must not share a decoder. Reading
+    one as the other is exactly the confident-wrong-number failure the frame
+    types exist to prevent."""
+    encoded = encode_ble_batch([ble_entry(1_000_000), ble_entry(1_000_450)])
+    try:
+        channel, entries = decode_packet_batch(encoded)
+    except BatchError:
+        return
+    assert [e.psdu for e in entries] != [e.hci for e in
+                                         decode_ble_batch(encoded)]

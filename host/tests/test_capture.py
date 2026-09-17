@@ -438,10 +438,10 @@ def test_a_length_below_the_frame_is_rejected():
 def test_each_board_has_its_own_expected_firmware_version():
     from esp32c6_sniffer.capture import EXPECTED_FIRMWARE_VERSIONS
     assert EXPECTED_FIRMWARE_VERSIONS["esp32c6"] == 6
-    # 2 since the nRF54L15 gained BLE: a board still on 1 answers SET_RADIO
-    # for BLE with BAD_VALUE, and the capture would fail with a refusal from
-    # the board rather than with the version mismatch that explains it.
-    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 2
+    # 3 since that board began batching BLE. A host without BLE_BATCH skips
+    # the frame type it does not know, so an unbumped mismatch would present
+    # as a capture that runs happily and shows nothing at all.
+    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 3
 
 
 def test_the_old_constant_still_names_the_c6():

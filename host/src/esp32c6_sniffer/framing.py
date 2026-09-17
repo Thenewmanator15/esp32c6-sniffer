@@ -56,6 +56,11 @@ class FrameType(IntEnum):
     #: connection-following fit through the nRF54L15's 94 kB/s UART bridge.
     #: Layout is authoritative in esp32c6_sniffer.batch.
     PACKET_BATCH = 12
+    #: Several captured BLE packets in one frame. Its own type rather than a
+    #: variant of PACKET_BATCH: an 802.15.4 entry carries a channel, an LQI
+    #: and an RSSI, and a BLE entry carries an HCI event that already holds
+    #: all of that in its own header.
+    BLE_BATCH = 14
     #: The board's outbound ring: how much is queued, the most it has held,
     #: and its capacity. Occupancy only -- drops travel in STATS already, and
     #: counting them here too would double them in the pcapng statistics.

@@ -31,10 +31,12 @@ from .control import (
     decode_reply,
     encode_command,
 )
-from .batch import BatchError, decode_link, decode_packet_batch
+from .batch import (BatchError, decode_ble_batch, decode_link,
+                    decode_packet_batch)
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
-from .ble import LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record
+from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
+                  build_payload as build_ble_payload)
 from .csi import parse_csi_record
 from .recovery import ensure_wifi_ready
 from .radiotap import (
@@ -85,7 +87,7 @@ MAX_CLOCK_SKEW_S = 60.0
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
     "esp32c6": 6,
-    "nrf54l15": 2,
+    "nrf54l15": 3,
 }
 
 #: How to reflash each board, quoted back to the operator on a mismatch.
@@ -739,7 +741,9 @@ class CaptureSession:
                 # is expanded into exactly the payload a PACKET frame would
                 # have carried and then handled by the same code, so a
                 # batched capture cannot decode differently from a plain one.
-                if frame.ftype is FrameType.PACKET_BATCH:
+                if frame.ftype is FrameType.BLE_BATCH:
+                    payloads = self._expand_ble_batch(frame.payload)
+                elif frame.ftype is FrameType.PACKET_BATCH:
                     payloads = self._expand_batch(frame.payload)
                 elif frame.ftype is FrameType.PACKET:
                     payloads = (frame.payload,)
@@ -783,6 +787,29 @@ class CaptureSession:
         return tuple(
             _META.pack(channel, entry.lqi, entry.rssi_dbm, 0, entry.timestamp_us)
             + entry.psdu
+            for entry in entries
+        )
+
+    def _expand_ble_batch(self, payload: bytes) -> tuple[bytes, ...]:
+        """Turns a BLE_BATCH into the PACKET payloads it stands for.
+
+        Each entry becomes byte for byte what the board would have sent as a
+        single BLE PACKET, so `_build_record` and the timestamp anchor are
+        reused rather than duplicated and a batched capture cannot decode
+        differently from a plain one.
+
+        Counted against the same `batches_malformed` as an 802.15.4 batch: it
+        is the same failure -- a frame that would not decode whole, dropped
+        whole rather than half-believed.
+        """
+        try:
+            entries = decode_ble_batch(payload)
+        except BatchError:
+            self.stats.batches_malformed += 1
+            return ()
+        return tuple(
+            build_ble_payload(entry.timestamp_us, entry.orig_len,
+                              entry.flags, entry.hci)
             for entry in entries
         )
 
