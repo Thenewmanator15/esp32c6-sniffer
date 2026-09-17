@@ -170,9 +170,28 @@ static int vhci_receive(uint8_t *data, uint16_t len)
     if (data[0] == H4_EVENT && len >= 4 && data[1] == EVENT_LE_META) {
         if (data[3] == LE_SUBEVENT_PERIODIC_REPORT) {
             s_stats.periodic_reports++;
-        } else if (data[3] == LE_SUBEVENT_SYNC_ESTABLISHED && len >= 6 &&
-                   data[4] == 0x00) {
-            s_stats.periodic_synced++;
+        } else if (data[3] == LE_SUBEVENT_SYNC_ESTABLISHED && len >= 6) {
+            /* Its first parameter is a status, so this one event reports the
+             * success and the failure both. The failure has to give the slot
+             * back: the count went up when the controller accepted the
+             * command, and a sync that was accepted and then never
+             * established -- the ten-second timeout expiring is the ordinary
+             * way -- would hold the single sync this controller has for the
+             * rest of the capture. */
+            if (data[4] == 0x00) {
+                s_stats.periodic_synced++;
+            } else {
+                s_stats.periodic_refused++;
+                if (s_sync_count > 0) {
+                    s_sync_count--;
+                }
+            }
+        } else if (data[3] == LE_SUBEVENT_SYNC_LOST) {
+            /* The train went away. The slot goes back with it, or nothing
+             * ever replaces it. */
+            if (s_sync_count > 0) {
+                s_sync_count--;
+            }
         }
     }
 
