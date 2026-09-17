@@ -33,7 +33,10 @@ def load_plugin():
 plugin = load_plugin()
 
 C6_RADIOS = {"esp32c6-802154", "esp32c6-wifi", "esp32c6-ble"}
-NRF_RADIOS = {"nrf54l15-802154"}
+#: Both radios the nRF54L15 firmware has. Wi-Fi is deliberately absent:
+#: the part has no Wi-Fi radio at all, which is what
+#: test_a_board_only_gets_the_radios_its_firmware_has exists to hold.
+NRF_RADIOS = {"nrf54l15-802154", "nrf54l15-ble"}
 
 
 def with_boards(monkeypatch, found):
@@ -71,7 +74,7 @@ def test_two_boards_qualify_every_name_by_port(monkeypatch):
     assert values == {f"{radio}@COM3" for radio in C6_RADIOS} | {
         f"{radio}@COM4" for radio in NRF_RADIOS
     }
-    assert len(entries) == 4
+    assert len(entries) == 5
 
 
 def test_a_radio_is_never_advertised_on_the_wrong_board(monkeypatch):
@@ -86,12 +89,11 @@ def test_a_radio_is_never_advertised_on_the_wrong_board(monkeypatch):
 
 
 def test_a_board_only_gets_the_radios_its_firmware_has(monkeypatch):
-    """Four interfaces, not six. There is no Wi-Fi radio on the nRF54L15 at
-    all, and its BLE radio has no firmware behind it yet."""
+    """Five interfaces, not six. There is no Wi-Fi radio on the nRF54L15 at
+    all, so that one can never appear however the firmware grows."""
     with_boards(monkeypatch, [("COM3", "esp32c6"), ("COM4", "nrf54l15")])
     values = {value for value, _display in plugin.board_interfaces()}
     assert "nrf54l15-wifi@COM4" not in values
-    assert "nrf54l15-ble@COM4" not in values
 
 
 def test_two_c6s_still_give_one_set_each(monkeypatch):

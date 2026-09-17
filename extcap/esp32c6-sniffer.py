@@ -154,6 +154,8 @@ BOARDS = {
         # Wireshark's list, and it reproduces the order the hand-written
         # INTERFACES table used before this was generated.
         "radios": ("802154", "ble", "wifi"),
+        # The controller's accept list, loaded before a scan starts.
+        "ble_filter": True,
         # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
         "antenna": True,
         "antenna_note": ("External needs a U.FL antenna fitted. Measured "
@@ -171,8 +173,15 @@ BOARDS = {
         # 802.15.4 channel can produce. Must match the overlay in
         # the boards/ overlay in nrf54l15-sniffer.
         "baud": 1000000,
-        # No Wi-Fi radio exists on this part, and BLE waits for firmware.
-        "radios": ("802154",),
+        # No Wi-Fi radio exists on this part -- within the nRF54L family a
+        # USB device controller and Wi-Fi are both absent. BLE is the
+        # controller's own, driven over HCI exactly as the C6's is.
+        "radios": ("802154", "ble"),
+        # No accept list in this firmware. The option is therefore not
+        # offered: the host sends the addresses as a frame this board ignores,
+        # so it would filter nothing while looking like it had. A control that
+        # silently does nothing is worse than one that is absent.
+        "ble_filter": False,
         # The same arrangement as the C6's, found while spiking this board:
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.
@@ -318,6 +327,31 @@ def _build_interfaces() -> dict:
 
 INTERFACES = _build_interfaces()
 
+
+def radio_kind(name: str) -> str:
+    """Which RADIO an interface drives, whatever board it belongs to.
+
+    The comparisons this replaced tested the interface name against the C6's,
+    so `nrf54l15-ble` fell through to the 802.15.4 branch and a BLE capture
+    died asking for channel 0 in the 802.15.4 range. Board-keyed matching had
+    already caused the same class of failure in the Wireshark profiles; this
+    asks the generated table what the interface is instead of guessing from
+    what it is called.
+
+    Takes the port-qualified form too, because that is what Wireshark passes
+    once more than one board is attached.
+    """
+    return INTERFACES[split_interface(name)[0]]["radio"]
+
+
+def is_wifi(name: str) -> bool:
+    return radio_kind(name) == "wifi"
+
+
+def is_ble(name: str) -> bool:
+    return radio_kind(name) == "ble"
+
+
 # Toolbar control numbers. Ordering in the toolbar follows these.
 CTRL_ARG_CHANNEL = 0
 CTRL_ARG_ANTENNA = 1
@@ -353,7 +387,7 @@ def wifi_frequency_mhz(channel: int) -> int:
 
 
 def channel_label(interface: str, channel: int) -> str:
-    if interface == WIFI_INTERFACE:
+    if is_wifi(interface):
         return f"{channel} ({wifi_frequency_mhz(channel)} MHz)"
     return f"{channel} ({channel_frequency_mhz(channel)} MHz)"
 
@@ -569,7 +603,7 @@ def print_config(interface: str, reload_option: str | None = None,
     if spec["min"] is not None:
         hint = (
             "Wi-Fi in the UK mostly sits on 1, 6 and 11"
-            if interface == WIFI_INTERFACE
+            if is_wifi(interface)
             else "Zigbee commonly uses 11, 15, 20 and 25"
         )
         # Reloadable on Wi-Fi only, where a scan can say which channels have
@@ -577,7 +611,7 @@ def print_config(interface: str, reload_option: str | None = None,
         # measure energy, but that is the spectrum tool's job and it does not
         # belong behind a dropdown that blocks the dialog while it runs.
         reload_note = ""
-        if interface == WIFI_INTERFACE:
+        if is_wifi(interface):
             reload_note = ("{reload=true}{placeholder=Reload to scan for "
                            "networks}")
         print(f"arg {{number=1}}{{call=--channel}}{{display=Channel}}"
@@ -590,7 +624,7 @@ def print_config(interface: str, reload_option: str | None = None,
         # not a separate mode; treating it as one printed a bare value list
         # that Wireshark had not asked for.
         scanned = {}
-        if reload_option == "channel" and interface == WIFI_INTERFACE:
+        if reload_option == "channel" and is_wifi(interface):
             scanned = scanned_channel_labels(interface, port or default_port())
         for channel in range(spec["min"], spec["max"] + 1):
             print(f"value {{arg=1}}{{value={channel}}}"
@@ -648,7 +682,7 @@ def print_config(interface: str, reload_option: str | None = None,
               "there are no beacons to catch, so the dwell has to be long "
               "enough for ordinary traffic to happen}")
 
-    if interface == BLE_INTERFACE:
+    if is_ble(interface):
         print("arg {number=3}{call=--ble-interval}{display=Scan interval (ms)}"
               "{type=integer}{range=10,10240}{default=60}"
               "{tooltip=How often the controller starts a scan window}")
@@ -656,19 +690,21 @@ def print_config(interface: str, reload_option: str | None = None,
               "{type=integer}{range=10,10240}{default=60}"
               "{tooltip=How long it listens each time. Equal to the interval "
               "means continuous listening, which is what a sniffer wants}")
-        print("arg {number=6}{call=--ble-filter}{display=Only these devices}"
-              "{type=string}"
-              "{placeholder=aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66}"
-              # Checked in the dialog, so a mistyped address is caught before
-              # Wireshark commits to a capture rather than after, when the
-              # message has nowhere useful to appear.
-              r"{validation=^\s*$|^\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
-              r"(\s*[, ]\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})*\s*$}"
-              "{tooltip=Restricts scanning to up to eight addresses, filtered "
-              "by the controller so the rest never cross the USB link. One "
-              "advertiser here produced half of everything a survey heard, so "
-              "this is the difference between watching a device and watching "
-              "a room. Leave empty to hear everything}")
+        if board_for_interface(interface)["ble_filter"]:
+            print("arg {number=6}{call=--ble-filter}"
+                  "{display=Only these devices}"
+                  "{type=string}"
+                  "{placeholder=aa:bb:cc:dd:ee:ff, 11:22:33:44:55:66}"
+                  # Checked in the dialog, so a mistyped address is caught before
+                  # Wireshark commits to a capture rather than after, when the
+                  # message has nowhere useful to appear.
+                  r"{validation=^\s*$|^\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
+                  r"(\s*[, ]\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})*\s*$}"
+                  "{tooltip=Restricts scanning to up to eight addresses, filtered "
+                  "by the controller so the rest never cross the USB link. One "
+                  "advertiser here produced half of everything a survey heard, so "
+                  "this is the difference between watching a device and watching "
+                  "a room. Leave empty to hear everything}")
         print("arg {number=5}{call=--ble-phys}{display=Advertising PHYs}"
               "{type=selector}{default=1}"
               "{tooltip=Extended scanning reports both legacy and BLE 5 "
@@ -681,7 +717,7 @@ def print_config(interface: str, reload_option: str | None = None,
               "extended advertisements}")
         return
 
-    if interface != WIFI_INTERFACE:
+    if not is_wifi(interface):
         return
 
     # Wi-Fi only. A busy 802.11 channel produces roughly 25x what the USB link
@@ -844,12 +880,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     from esp32c6_sniffer.eapol import HandshakeTracker
     from esp32c6_sniffer.pcapng import PcapngWriter
 
-    if interface == WIFI_INTERFACE:
-        radio = Radio.WIFI
-    elif interface == BLE_INTERFACE:
-        radio = Radio.BLE
-    else:
-        radio = Radio.IEEE802154
+    radio = {"wifi": Radio.WIFI,
+             "ble": Radio.BLE}.get(radio_kind(interface), Radio.IEEE802154)
     # Snapshot length and frame filter apply to Wi-Fi only; sending them on an
     # 802.15.4 capture would be silently ignored, which is worse than not
     # sending them.

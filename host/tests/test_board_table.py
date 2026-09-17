@@ -49,11 +49,13 @@ def test_the_nrf_has_no_wifi_radio():
 
 
 def test_a_boards_radios_are_what_its_firmware_implements():
-    """Not what the silicon can do. The nRF54L15 has a BLE radio; it gets a BLE
-    interface when there is firmware behind it and not before, because an
-    interface that cannot capture is worse than an absent one -- it is
-    selectable, and it fails after the operator has committed to a capture."""
-    assert plugin.BOARDS[(0x2886, 0x0066)]["radios"] == ("802154",)
+    """Not what the silicon can do. An interface that cannot capture is worse
+    than an absent one -- it is selectable, and it fails after the operator has
+    committed to a capture.
+
+    The nRF54L15 gained its BLE interface when firmware appeared behind it and
+    not before. Wi-Fi never will: the part has no Wi-Fi radio."""
+    assert plugin.BOARDS[(0x2886, 0x0066)]["radios"] == ("802154", "ble")
 
 
 def test_both_boards_declare_an_antenna_switch():
