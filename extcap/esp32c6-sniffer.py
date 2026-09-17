@@ -177,11 +177,11 @@ BOARDS = {
         # USB device controller and Wi-Fi are both absent. BLE is the
         # controller's own, driven over HCI exactly as the C6's is.
         "radios": ("802154", "ble"),
-        # No accept list in this firmware. The option is therefore not
-        # offered: the host sends the addresses as a frame this board ignores,
-        # so it would filter nothing while looking like it had. A control that
-        # silently does nothing is worse than one that is absent.
-        "ble_filter": False,
+        # The controller's accept list, loaded before a scan starts.
+        # Measured on this board: filtering to one advertiser took a capture
+        # from 300 packets across six advertisers to 113 from one, and the
+        # wire traffic to 43% of unfiltered.
+        "ble_filter": True,
         # The same arrangement as the C6's, found while spiking this board:
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.
