@@ -94,10 +94,37 @@ roughly twenty-five times what the USB link carries.
 | Option | Default | Notes |
 |---|---|---|
 | **Scan interval** / **window** | 60 / 60 ms | Equal values mean continuous listening, which is what a sniffer wants. Measured: 670 reports at 60/60 against 59 at 50/500, so a low duty cycle costs you most of the traffic. |
-| **Advertising PHYs** | Extended | Extended scanning reports legacy advertisements too. Legacy-only cannot see BLE 5 extended advertisements at all, and exists so the difference can be measured. |
+| **Advertising PHYs** | Extended, 1M | Extended scanning reports legacy advertisements too. Legacy-only cannot see BLE 5 extended advertisements at all, and exists so the difference can be measured. Adding **Coded** buys long range and costs 1M coverage: the controller time-shares between the two rather than hearing both. |
+| **Only these devices** | empty | Up to eight addresses, comma- or space-separated — a ninth is refused with a message saying how many the controller's accept list holds, rather than quietly dropped. The **controller** does the filtering, so everything else never crosses the USB link at all — and the address is checked in the dialog, before Wireshark commits to a capture rather than after. One advertiser here was half of everything a survey heard, which is the difference between watching a device and watching a room. |
+| **Follow periodic advertising** | Off | Described below; it is the only BLE option that changes what the radio does rather than what it keeps. |
 
 There is **no channel option** for BLE: the controller rotates the three
 advertising channels itself, so offering one would be a promise it cannot keep.
+
+**Following periodic advertising.** A periodic advertiser announces its train
+in an ordinary extended advertisement, and what the train *carries* stays
+invisible until you synchronise to it. That is how LE Audio and Auracast
+broadcasts are found at all: the broadcast is in the train, not in the
+advertisements announcing it.
+
+It is off by default because a sync spends receive windows that would
+otherwise go to advertisements, and it follows **one train at a time** — the
+controller is built to hold a single periodic sync, so a second is refused
+rather than queued.
+
+Turning it on may visibly change nothing, and that is a real answer rather
+than a fault: no periodic advertiser has been in range here yet, across 1342
+advertising reports. The toolbar log is where to look. With the option on it
+adds `periodic 3 seen/1 synced/88 reports` to the once-a-second line, and says
+nothing at all when there is nothing to follow — so an empty room reads as an
+empty room. If the controller ever refuses a sync the line says that too, and
+it is worth reporting: it means the firmware and the controller disagree about
+how many syncs there are to give.
+
+The ESP32-C6 stops at the announcement. It will report the BIGInfo describing
+an Auracast broadcast and cannot receive the audio, because isochronous
+channels are absent from the part — the nRF54L15 is the board that goes
+further. See [the capability ceilings](../README.md#honest-capability-ceilings).
 
 ## The toolbar: retuning without restarting
 
