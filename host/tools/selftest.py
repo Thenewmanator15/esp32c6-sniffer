@@ -382,8 +382,67 @@ def check_ble(port: str) -> None:
             record("BLE decode integrity",
                    PASS if session.stats.malformed_metadata == 0 else FAIL,
                    f"{session.stats.malformed_metadata} malformed")
+
+            stats = session.stats
+            # Whether the counters ARRIVED is asked before what they say,
+            # and that order is the whole point of this check. The board has
+            # always sent a BLE block; the host read one block short of it
+            # and fell through to the 802.15.4 counters of a stopped radio.
+            # Every figure was therefore zero, `lossless` was true, and it
+            # was true for the one reason that proves nothing.
+            #
+            # Packets reached the host, so a board reporting none captured is
+            # the block not being read. It is not a quiet room: a quiet room
+            # was ruled out two lines above.
+            if stats.fw_frames_captured == 0:
+                record("BLE drop counters", FAIL,
+                       f"{frames} packets arrived and the board reports 0 "
+                       f"captured -- the BLE stats block is not being read")
+                return
+            record("BLE drop counters",
+                   PASS if stats.lossless else FAIL,
+                   f"hci={stats.fw_frames_captured} "
+                   f"adv={stats.fw_ble_adv_reports} "
+                   f"queue={stats.fw_isr_queue_full} "
+                   f"link={stats.fw_link_rejected}")
     except Exception as exc:
         record("BLE capture", FAIL, repr(exc))
+
+
+def check_ble_periodic(port: str) -> None:
+    """Following periodic trains, and the sync accounting underneath it.
+
+    The figure that matters is refusals. The firmware caps concurrent syncs
+    and the controller is built for a number of its own, and when those
+    disagree -- they did, two against one -- every repeat of a train's
+    advertisement spends a create-sync command that cannot succeed, quietly,
+    at a log level nobody runs at.
+
+    A room with no periodic advertiser in it cannot answer the question, so
+    that is a SKIP. It has been every room so far.
+    """
+    try:
+        with CaptureSession(port, channel=0, radio=Radio.BLE,
+                            ble_periodic=True) as session:
+            drain(session, 15)
+            stats = session.stats
+
+            if stats.fw_ble_periodic_refused:
+                record("BLE periodic sync", FAIL,
+                       f"{stats.fw_ble_periodic_refused} syncs refused by the "
+                       f"controller -- the firmware cap and the controller's "
+                       f"configured sync count disagree")
+                return
+            if stats.fw_ble_periodic_seen == 0:
+                record("BLE periodic sync", SKIP,
+                       "nothing within range advertises a periodic train")
+                return
+            record("BLE periodic sync", PASS,
+                   f"seen={stats.fw_ble_periodic_seen} "
+                   f"synced={stats.fw_ble_periodic_synced} "
+                   f"reports={stats.fw_ble_periodic_reports}, none refused")
+    except Exception as exc:
+        record("BLE periodic sync", FAIL, repr(exc))
 
 
 def check_ble_leaves_the_front_end_alone(port: str) -> None:
@@ -459,6 +518,7 @@ def main() -> int:
     print()
     print("Bluetooth LE")
     check_ble(args.port)
+    check_ble_periodic(args.port)
     check_ble_leaves_the_front_end_alone(args.port)
 
     passed = sum(1 for _n, o, _d in results if o == PASS)
