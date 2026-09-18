@@ -58,6 +58,64 @@ IDF_PATH or say where it is:  . .\idf-env.ps1 -IdfPath <path to esp-idf>
 # ESP-IDF's own default when unset, and where its installers put the tools.
 if (-not $IdfToolsPath) { $IdfToolsPath = "$env:USERPROFILE\.espressif" }
 
+# Checked here because export.ps1 does not check it in a way anyone can read.
+# A tools path that is missing, or present and empty, produces this:
+#
+#   ERROR: ESP-IDF Python virtual environment
+#   "H:\dev\tools\.espressif\python_env\idf6.1_py3.13_env\Scripts\python.exe"
+#   not found.
+#   InvalidOperation: ...\export.ps1:20
+#
+# which names a path and a PowerShell line number and neither of the two
+# things actually wrong: that H: is not a drive on this machine, and that
+# IDF_TOOLS_PATH said something else for the user account than it did in that
+# shell. A process inherits its environment when it starts, so a terminal
+# opened before the variable was changed carries the old value indefinitely.
+#
+# Reported rather than corrected. Preferring the user account's value would
+# fix the stale shell and break the deliberate one -- a second tools
+# directory set for this shell on purpose is a thing people do -- and this
+# script has said since it was written that an explicit value wins.
+$toolsReady = (Test-Path $IdfToolsPath) -and
+              (Test-Path (Join-Path $IdfToolsPath 'python_env'))
+if (-not $toolsReady) {
+    $why = if (Test-Path $IdfToolsPath) {
+        "That directory exists but holds no python_env, so nothing is installed in it."
+    } else {
+        "That directory does not exist."
+    }
+
+    # Only when the path came from the environment. Said about a path given
+    # as -IdfToolsPath it would be talking about a shell that had nothing to
+    # do with it, which is the kind of confident wrong answer this whole
+    # check exists to stop.
+    $fromEnvironment = $IdfToolsPath -eq $env:IDF_TOOLS_PATH
+    $userValue = [Environment]::GetEnvironmentVariable('IDF_TOOLS_PATH', 'User')
+    $stale = ""
+    if ($fromEnvironment -and $userValue -and $userValue -ne $IdfToolsPath) {
+        $stale = @"
+
+
+IDF_TOOLS_PATH is '$IdfToolsPath' in this shell and '$userValue' for your
+user account. A process keeps the environment it started with, so a terminal
+-- or an application -- opened before that variable changed still carries the
+old one. Restarting it is the whole fix.
+"@
+    }
+
+    throw @"
+ESP-IDF tools not found at:
+  $IdfToolsPath
+
+$why$stale
+
+Install them for this project's target:
+  & "$found\install.ps1" esp32c6
+
+Or point somewhere they already are:  . .\idf-env.ps1 -IdfToolsPath <path>
+"@
+}
+
 $env:IDF_PATH       = $found
 $env:IDF_TOOLS_PATH = $IdfToolsPath
 
