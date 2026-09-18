@@ -62,15 +62,15 @@ if (-not $IdfToolsPath) { $IdfToolsPath = "$env:USERPROFILE\.espressif" }
 # A tools path that is missing, or present and empty, produces this:
 #
 #   ERROR: ESP-IDF Python virtual environment
-#   "H:\dev\tools\.espressif\python_env\idf6.1_py3.13_env\Scripts\python.exe"
+#   "<IDF_TOOLS_PATH>\python_env\idf6.1_py3.13_env\Scripts\python.exe"
 #   not found.
 #   InvalidOperation: ...\export.ps1:20
 #
 # which names a path and a PowerShell line number and neither of the two
-# things actually wrong: that H: is not a drive on this machine, and that
-# IDF_TOOLS_PATH said something else for the user account than it did in that
-# shell. A process inherits its environment when it starts, so a terminal
-# opened before the variable was changed carries the old value indefinitely.
+# things actually wrong: that the drive in that path no longer exists, and
+# that IDF_TOOLS_PATH said something else for the user account than it did in
+# the shell asking. A process inherits its environment when it starts, so a
+# terminal opened before the variable changed carries the old value forever.
 #
 # Reported rather than corrected. Preferring the user account's value would
 # fix the stale shell and break the deliberate one -- a second tools
