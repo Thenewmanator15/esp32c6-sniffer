@@ -143,9 +143,14 @@ FCS_LEN = 4
 
 
 # The capture build emits this once a second: sn_link_stats_t (5 x uint32),
-# then sn_154_stats_t (3), then sn_80211_stats_t (12), then sn_ble_stats_t
+# then sn_154_stats_t (3), then sn_80211_stats_t (13), then sn_ble_stats_t
 # (11). Older firmware sent only the first two blocks, so the short form is
 # still accepted.
+#
+# Thirteen, not twelve: fcs_length_unknown was appended to the Wi-Fi block and
+# nothing here read it. Being last it shifted nothing before it, so Wi-Fi went
+# on decoding correctly and the miscount stayed invisible -- until the BLE
+# block was read at an offset computed from it, and came out one short.
 _STATS = struct.Struct("<8I")
 _STATS_FULL = struct.Struct("<16I")
 # Firmware 2 added the stall and recovery counters to the Wi-Fi block, and
@@ -154,8 +159,8 @@ _STATS_V2 = struct.Struct("<18I")
 _STATS_V4 = struct.Struct("<20I")
 # The BLE block, which the board sent for a release before anything here read
 # it, and then periodic_refused appended to the end of it.
-_STATS_BLE = struct.Struct("<30I")
-_STATS_V5 = struct.Struct("<31I")
+_STATS_BLE = struct.Struct("<31I")
+_STATS_V5 = struct.Struct("<32I")
 
 #: Widest first: the first tier the payload is long enough for wins, and
 #: counters a shorter firmware does not send read as zero. Every block has
@@ -165,6 +170,14 @@ _STATS_V5 = struct.Struct("<31I")
 _STATS_TIERS = (_STATS_V5, _STATS_BLE, _STATS_V4, _STATS_V2, _STATS_FULL,
                 _STATS)
 _STATS_COUNTERS = _STATS_V5.size // 4
+
+#: Where each radio's block begins, counting the blocks in front of it. Named
+#: rather than written into the slices because they were written into the
+#: slices once, one of them was wrong by a single counter, and the BLE figures
+#: it produced were plausible enough to read as real. test_stats_layout.py
+#: checks both against the firmware headers.
+_WIFI_BLOCK_AT = 8
+_BLE_BLOCK_AT = 21
 
 
 #: PHY formats that carry HE-SIG-A rather than HT-SIG.
@@ -901,7 +914,8 @@ class CaptureSession:
                 self.stats.fw_recoveries,
                 self.stats.fw_csi_records,
                 self.stats.fw_csi_dropped,
-            ) = values[8:20]
+                _fcs_length_unknown,
+            ) = values[_WIFI_BLOCK_AT:_BLE_BLOCK_AT]
         elif self._radio is Radio.BLE:
             # hci_packets is what the controller handed over, which is what
             # this radio captures; forwarded is that figure less the two drop
@@ -919,7 +933,7 @@ class CaptureSession:
                 self.stats.fw_ble_periodic_synced,
                 self.stats.fw_ble_periodic_reports,
                 self.stats.fw_ble_periodic_refused,
-            ) = values[20:31]
+            ) = values[_BLE_BLOCK_AT:_STATS_COUNTERS]
         else:
             (
                 self.stats.fw_frames_captured,

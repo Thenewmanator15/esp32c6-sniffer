@@ -1,24 +1,32 @@
-"""The STATS frame is positional, and its last block is defined in firmware.
+"""The STATS frame is positional, and every block in it is defined in firmware.
 
-The host unpacks four blocks by position and decides from the payload's
-length how many counters arrived. Nothing in this repository compiles the
-firmware, so a counter inserted rather than appended would be caught by
-nobody: every figure after it would decode as its neighbour, confidently and
-wrongly. That is what happened to the BLE block once already -- it was sent
-for a release and read by no one.
+The host unpacks four blocks by position and decides from the payload's length
+how many counters arrived. Nothing in this repository compiles the firmware,
+so a counter inserted rather than appended would be caught by nobody: every
+figure after it decodes as its neighbour, confidently and wrongly.
 
-So the order is read back out of the headers and compared with the order the
-host assigns in.
+Both halves of that have now happened. The BLE block was sent for a release
+and read by no one. Then fcs_length_unknown, appended to the Wi-Fi block and
+never read, made the Wi-Fi block thirteen counters wide while this file said
+twelve -- so the BLE block was read one counter early and reported a board
+that had captured nothing.
+
+Which is why the widths below are read out of the headers rather than written
+down here. A number written down is the thing that was wrong.
 """
 import pathlib
 import re
 
 import pytest
 
-from esp32c6_sniffer.capture import _STATS_V5
+from esp32c6_sniffer.capture import (
+    _BLE_BLOCK_AT,
+    _STATS_V5,
+    _WIFI_BLOCK_AT,
+)
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-C6_HEADER = ROOT / "firmware" / "main" / "radio_ble.h"
+MAIN = ROOT / "firmware" / "main"
 #: A separate repository, and a sibling of this one by convention only.
 NRF_HEADER = ROOT.parent / "nrf54l15-sniffer" / "src" / "radio_ble.h"
 
@@ -37,32 +45,67 @@ BLE_FIELDS = [
     "periodic_refused",
 ]
 
-#: Link, 802.15.4 and Wi-Fi, which sit in front of it.
-BLOCKS_BEFORE_BLE = 5 + 3 + 12
 
+def counters_before(header: pathlib.Path, closing: str) -> list[str]:
+    """The uint32_t members of the struct ending at `closing`.
 
-def fields_of(header: pathlib.Path, opening: str, closing: str) -> list[str]:
-    """The uint32_t members of one struct, in declaration order.
-
-    The two firmwares spell the same block differently -- a typedef on the
-    C6, a plain struct on the nRF -- so each says where its own begins.
+    Anchored on the closing tag because the opening is not distinctive: every
+    one of these headers declares a packed metadata struct as well, and both
+    begin `typedef struct`. These structs do not nest, so the last opening
+    before the close is the one that belongs to it.
     """
     text = header.read_text(encoding="utf-8")
-    body = text.split(opening, 1)[1].split(closing, 1)[0]
+    assert closing in text, f"{header.name} no longer declares {closing}"
+    body = text.split(closing)[0]
+    body = body[body.rfind("typedef struct"):]
     return re.findall(r"uint32_t\s+(\w+)\s*;", body)
 
 
+def counters_between(header: pathlib.Path, opening: str,
+                     closing: str) -> list[str]:
+    """The same, for a plain struct whose opening names it."""
+    text = header.read_text(encoding="utf-8")
+    assert opening in text, f"{header.name} no longer declares {opening}"
+    return re.findall(r"uint32_t\s+(\w+)\s*;",
+                      text.split(opening, 1)[1].split(closing, 1)[0])
+
+
+def blocks() -> dict[str, list[str]]:
+    return {
+        "link": counters_before(MAIN / "usb_link.h", "} sn_link_stats_t;"),
+        "154": counters_before(MAIN / "radio154.h", "} sn_154_stats_t;"),
+        "wifi": counters_before(MAIN / "radio80211.h", "} sn_80211_stats_t;"),
+        "ble": counters_before(MAIN / "radio_ble.h", "} sn_ble_stats_t;"),
+    }
+
+
 def test_the_c6_declares_the_ble_block_as_the_host_unpacks_it():
-    assert fields_of(C6_HEADER, "typedef struct {",
-                     "} sn_ble_stats_t;") == BLE_FIELDS
+    assert blocks()["ble"] == BLE_FIELDS
+
+
+def test_the_wifi_block_begins_where_the_host_looks_for_it():
+    found = blocks()
+    assert _WIFI_BLOCK_AT == len(found["link"]) + len(found["154"])
+
+
+def test_the_ble_block_begins_where_the_host_looks_for_it():
+    """The one that was wrong. fcs_length_unknown made the Wi-Fi block
+    thirteen wide, and reading BLE from twenty gave every counter its
+    neighbour's value -- a board reporting zero captured while packets
+    arrived."""
+    found = blocks()
+    assert _BLE_BLOCK_AT == sum(
+        len(found[name]) for name in ("link", "154", "wifi"))
+
+
+def test_the_widest_tier_holds_every_block():
+    found = blocks()
+    assert _STATS_V5.size // 4 == sum(len(f) for f in found.values())
 
 
 @pytest.mark.skipif(not NRF_HEADER.exists(),
                     reason="the nRF54L15 firmware is a separate repository")
 def test_the_nrf_declares_the_same_ble_block():
     """Both boards send one block that the host reads with one branch."""
-    assert fields_of(NRF_HEADER, "struct sn_ble_stats {", "};") == BLE_FIELDS
-
-
-def test_the_widest_tier_is_as_wide_as_the_four_blocks():
-    assert _STATS_V5.size // 4 == BLOCKS_BEFORE_BLE + len(BLE_FIELDS)
+    assert counters_between(NRF_HEADER, "struct sn_ble_stats {",
+                            "};") == BLE_FIELDS

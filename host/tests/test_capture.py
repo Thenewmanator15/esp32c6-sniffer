@@ -16,6 +16,9 @@ from esp32c6_sniffer.capture import (
     channel_range,
     WIFI_CHANNEL_MAX,
     WIFI_CHANNEL_MIN,
+    _BLE_BLOCK_AT,
+    _STATS_COUNTERS,
+    _WIFI_BLOCK_AT,
 )
 from esp32c6_sniffer.control import Radio
 from esp32c6_sniffer.pcap import PcapWriter
@@ -224,9 +227,22 @@ def test_old_short_stats_frame_still_parses():
 
 
 def _stats_blob_ble(link, radio154, wifi, ble):
-    """The whole layout, BLE block included: 5 + 3 + 12 + 11 counters."""
-    return struct.pack("<31I", *link, *radio154, *wifi, *ble)
+    """The whole layout, BLE block included.
 
+    The width is asserted rather than written into the format string. It was
+    written in once, as 31, and the Wi-Fi block turned out to be thirteen
+    counters rather than twelve -- so these tests agreed with the host and
+    both disagreed with the board.
+    """
+    values = (*link, *radio154, *wifi, *ble)
+    assert len(values) == _STATS_COUNTERS, (
+        f"{len(values)} counters, the frame holds {_STATS_COUNTERS}")
+    return struct.pack(f"<{len(values)}I", *values)
+
+
+#: An idle Wi-Fi block of the right width, for the BLE tests that only need
+#: the space in front of the BLE block to be the right size.
+WIFI_IDLE = (0,) * (_BLE_BLOCK_AT - _WIFI_BLOCK_AT)
 
 #: A BLE block with nothing wrong in it, for tests that vary one field.
 BLE_QUIET = (1500, 1342, 1500, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -239,7 +255,7 @@ def test_ble_session_reads_the_ble_counters():
     s._update_stats(_stats_blob_ble(
         link=(10, 0, 0, 0, 4096),
         radio154=(0, 0, 0),
-        wifi=(0,) * 12,
+        wifi=WIFI_IDLE,
         ble=(1500, 1342, 1490, 4, 6, 4, 1, 3, 1, 88, 2),
     ))
     assert s.stats.fw_frames_captured == 1500
@@ -263,7 +279,7 @@ def test_a_lossy_ble_capture_is_not_reported_lossless():
     s._update_stats(_stats_blob_ble(
         link=(10, 0, 0, 0, 4096),
         radio154=(0, 0, 0),
-        wifi=(0,) * 12,
+        wifi=WIFI_IDLE,
         ble=(1500, 1342, 1400, 0, 60, 40, 0, 0, 0, 0, 0),
     ))
     assert s.stats.fw_isr_queue_full == 60
@@ -277,7 +293,7 @@ def test_ble_truncation_alone_is_not_counted_as_loss():
     s._update_stats(_stats_blob_ble(
         link=(10, 0, 0, 0, 4096),
         radio154=(0, 0, 0),
-        wifi=(0,) * 12,
+        wifi=WIFI_IDLE,
         ble=(1500, 1342, 1500, 12, 0, 0, 0, 0, 0, 0, 0),
     ))
     assert s.stats.fw_frames_truncated == 12
@@ -289,7 +305,7 @@ def test_ble_stats_without_the_refused_counter_still_parse():
     sends thirty counters, not thirty-one."""
     s = ble_session()
     s._update_stats(struct.pack(
-        "<30I", 10, 0, 0, 0, 4096, 0, 0, 0, *(0,) * 12,
+        f"<{_STATS_COUNTERS - 1}I", 10, 0, 0, 0, 4096, 0, 0, 0, *WIFI_IDLE,
         1500, 1342, 1500, 0, 0, 0, 0, 5, 1, 40,
     ))
     assert s.stats.fw_frames_captured == 1500
@@ -304,7 +320,7 @@ def test_the_wifi_block_still_parses_beside_a_ble_one():
     s._update_stats(_stats_blob_ble(
         link=(10, 1, 0, 2, 4096),
         radio154=(0, 0, 0),
-        wifi=(500, 0, 0, 480, 470, 7, 3, 90000, 0, 0, 0, 0),
+        wifi=(500, 0, 0, 480, 470, 7, 3, 90000, 0, 0, 0, 0, 0),
         ble=BLE_QUIET,
     ))
     assert s.stats.fw_frames_captured == 480
