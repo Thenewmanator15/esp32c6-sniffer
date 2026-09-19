@@ -85,3 +85,64 @@ def test_sequence_tracker_handles_wraparound():
     tracker.observe(65534)
     assert tracker.observe(1) == 2
     assert tracker.total_missed == 2
+
+
+def test_a_frame_truncated_in_transit_is_dropped_not_spliced():
+    """The nRF54L15's SAMD11 bridge holds 319 bytes and drops the tail of a
+    burst past that while its USB side is stalled. The header survives and
+    declares the full length, and the next frame's bytes arrive to fill it --
+    so without a check the damaged frame decodes with the start of the next
+    frame as the end of its payload, and the next frame is lost in its place.
+    Measured on the board: 6 of 13 such BLE batches decoded as valid."""
+    first = encode_frame(FrameType.PACKET, 1, b"A" * 40)
+    damaged = encode_frame(FrameType.PACKET, 2, b"B" * 60)[:10 + 25]
+    following = encode_frame(FrameType.PACKET, 3, b"C" * 80)
+    after = encode_frame(FrameType.PACKET, 4, b"D" * 10)
+
+    parser = StreamParser()
+    frames = parser.feed(first + damaged + following + after)
+
+    assert [(f.seq, f.payload) for f in frames] == [
+        (1, b"A" * 40), (3, b"C" * 80), (4, b"D" * 10)]
+    assert parser.frames_truncated == 1
+
+
+def test_a_single_dropped_byte_is_caught_too():
+    """The bridge's other failure: one byte overrun at a random position. The
+    next header then begins on the damaged frame's last declared byte, so the
+    check has to look past the declared end for the rest of it."""
+    damaged = encode_frame(FrameType.PACKET, 7, b"B" * 60)[:-1]
+    following = encode_frame(FrameType.PACKET, 8, b"C" * 20)
+
+    parser = StreamParser()
+    frames = parser.feed(damaged + following)
+
+    assert [(f.seq, f.payload) for f in frames] == [(8, b"C" * 20)]
+    assert parser.frames_truncated == 1
+
+
+def test_a_valid_header_far_off_in_sequence_is_just_payload():
+    """A truncation is followed by the next frame, whose sequence number is
+    just ahead. A fully valid header carrying any other number is far likelier
+    to be payload that happens to look like one, and must not cost a frame."""
+    inner = encode_frame(FrameType.PACKET, 500, b"")
+    payload = b"x" * 5 + inner + b"y" * 5
+
+    parser = StreamParser()
+    frames = parser.feed(encode_frame(FrameType.PACKET, 2, payload))
+
+    assert [(f.seq, f.payload) for f in frames] == [(2, payload)]
+    assert parser.frames_truncated == 0
+
+
+def test_the_check_never_holds_a_frame_back():
+    """Only headers already wholly received are examined, so a payload ending
+    in what could be the start of one is still delivered at once rather than
+    held for bytes that may not come -- the link is often quiet for a second
+    at a time, and control replies wait on this path."""
+    payload = b"z" * 20 + b"\xc6\x5a"
+
+    parser = StreamParser()
+    frames = parser.feed(encode_frame(FrameType.CONTROL_REPLY, 9, payload))
+
+    assert [(f.seq, f.payload) for f in frames] == [(9, payload)]
