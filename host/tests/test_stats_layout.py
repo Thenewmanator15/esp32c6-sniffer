@@ -109,3 +109,38 @@ def test_the_nrf_declares_the_same_ble_block():
     """Both boards send one block that the host reads with one branch."""
     assert counters_between(NRF_HEADER, "struct sn_ble_stats {",
                             "};") == BLE_FIELDS
+
+
+#: The nRF builds its frame in main.c, not in the headers the C6 blocks come
+#: from, so its placement of each block has to be checked separately.
+NRF_MAIN = ROOT.parent / "nrf54l15-sniffer" / "src" / "main.c"
+
+
+def nrf_stats_frame() -> str:
+    text = NRF_MAIN.read_text(encoding="utf-8")
+    assert "struct sn_stats_full {" in text, "main.c no longer builds sn_stats_full"
+    return text.split("struct sn_stats_full {", 1)[1].split("};", 1)[0]
+
+
+@pytest.mark.skipif(not NRF_MAIN.exists(),
+                    reason="the nRF54L15 firmware is a separate repository")
+def test_the_nrf_leads_with_the_link_and_802154_blocks():
+    leading = nrf_stats_frame().split("wifi[", 1)[0]
+    found = blocks()
+    assert len(re.findall(r"uint32_t\s+(\w+)\s*;", leading)) == (
+        len(found["link"]) + len(found["154"]))
+
+
+@pytest.mark.skipif(not NRF_MAIN.exists(),
+                    reason="the nRF54L15 firmware is a separate repository")
+def test_the_nrf_pads_the_wifi_block_to_the_c6s_width():
+    """The nRF has no Wi-Fi radio and sends zeros in its place, so its BLE
+    block lands where the host looks only if the padding is exactly as wide
+    as the C6's real Wi-Fi block. It was twelve against thirteen after the
+    C6's width was corrected, and every nRF BLE counter read its neighbour:
+    more advertising reports than HCI packets, which a subset cannot be.
+    Checking the nRF's BLE field order, as the test above does, could not
+    see it -- the fields were right and in the wrong place."""
+    widths = re.findall(r"uint32_t\s+wifi\[(\d+)\]\s*;", nrf_stats_frame())
+    assert len(widths) == 1, "expected one wifi[] padding array"
+    assert int(widths[0]) == len(blocks()["wifi"])
