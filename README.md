@@ -532,8 +532,20 @@ which is what 80 ms predicts, with no syncs refused.
 That run found two faults the empty room had hidden. The nRF's controller sends
 only the Bluetooth 5.4 versions of the sync and report events, and both boards
 counted only the originals, so a train followed perfectly reported every figure
-as zero. Both now count either. The C6's own following has not yet been run
-against a train; its controller may send either version, and both are handled.
+as zero. Both now count either.
+
+The other direction has run too: the XIAO advertising an 80 ms train, the C6
+following it. The C6 synced in 0.3 s and took **543 reports in 45 s**, the
+advertiser's changing payload arriving intact -- and its controller sends the
+original v1 events where the nRF's sends only v2, so each board now exercises a
+different half of that handling. Resetting the advertiser mid-capture lost the
+sync after the 10-second timeout, and the C6 **synced again five seconds later**:
+possible only because a lost sync now hands back the controller's single slot.
+Before that fix it would have followed nothing more for the rest of the capture.
+
+(The advertiser was a throwaway firmware driving the controller over raw HCI,
+as the sniffer does. Zephyr's own `periodic_adv` sample faults at boot on this
+board inside the Bluetooth host stack, before it advertises anything.)
 
 **Where a sync leads differs by board.** A periodic train carrying an Auracast
 broadcast also carries BIGInfo: the announcement of the isochronous group the
