@@ -73,6 +73,18 @@ WIFI_CHANNEL_MAX = 14
 #: saved on latency.
 REPLY_POLL_S = 0.01
 
+#: Boards reached through a bridge that keeps data across a port close. The
+#: XIAO nRF54L15's SAMD11 holds the whole USB packets that were in flight when
+#: the previous session closed, and releases them in front of the next thing
+#: the board sends. The ESP32-C6 resets when its port opens and has nothing
+#: left over to hand across.
+BRIDGED_BOARDS = frozenset({"nrf54l15"})
+
+#: How long a bridged board's first GET_INFO is waited for. A reply normally
+#: arrives in milliseconds; this only decides how soon one that stale data has
+#: eaten is given up on and asked for again.
+BRIDGE_FIRST_REPLY_S = 0.5
+
 #: How far the device-derived time may drift from the host clock before the
 #: anchor is reset. Generous against real drift, which is parts per million,
 #: and tight enough to catch a restarted or corrupted counter immediately.
@@ -432,7 +444,7 @@ class CaptureSession:
 
         self._connect()
 
-        info = self._command(Command.GET_INFO)
+        info = self._handshake()
         self.firmware_version = info["value"]
         if self.firmware_version != EXPECTED_FIRMWARE_VERSIONS[self.board]:
             raise RuntimeError(
@@ -440,6 +452,41 @@ class CaptureSession:
             )
 
         self._configure()
+
+    def _handshake(self) -> dict:
+        """GET_INFO -- asked a second time on a bridged board if stale data ate
+        the first answer.
+
+        The SAMD11 on the XIAO nRF54L15 keeps whole USB packets that were in
+        flight when the previous session closed, and hands them over only when
+        the board next sends something: on opening, the reply to this. The
+        stale frame was cut at a packet boundary, so its header declares more
+        payload than arrived, and the reply fills the gap and is never seen.
+        Measured: a 143-byte batch delivered as 128, then a 16-byte reply --
+        and open() timed out after five seconds with a healthy board behind it.
+
+        The parser's truncation check cannot save it: the board keeps counting
+        frames while the port is shut, so after forty seconds closed the reply
+        was 82 sequence numbers past the stale frame, beyond what that check
+        trusts. Waiting before asking does not help either, because the stale
+        packets come out only when something new pushes them.
+
+        So the first answer is waited for briefly. If it has not come, the
+        stale packets have been pushed out by it regardless, and nothing is
+        left to eat a second one: the parser and the input buffer are cleared
+        and the question is asked again. A clean bridge answers the first time
+        and costs nothing. Other boards ask once, exactly as before.
+        """
+        if self.board not in BRIDGED_BOARDS:
+            return self._command(Command.GET_INFO)
+        try:
+            return self._command(Command.GET_INFO, timeout=BRIDGE_FIRST_REPLY_S)
+        except TimeoutError:
+            pass
+        self._serial.reset_input_buffer()
+        self._parser = StreamParser()
+        self._deferred = []
+        return self._command(Command.GET_INFO)
 
     def _connect(self) -> None:
         """Opens the port, retrying while the device re-enumerates."""
