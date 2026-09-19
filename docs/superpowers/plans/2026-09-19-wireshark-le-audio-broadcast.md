@@ -90,14 +90,14 @@ No commit. Note the `master` commit hash from Step 1 in the merge request notes 
 
 **Interfaces:**
 - Consumes: the build from Task 1.
-- Produces: the capture fixture `bt-le-audio-bap-broadcast.pcapng` containing exactly 2 extended advertising reports, 1 sync established event and 10 periodic advertising reports from the broadcaster at `21:f9:c1:cd:44:87`; the test class `TestDissectBluetoothLeAudio` with helpers `_hci_frame(cmd_text2pcap, result_file, base_env, name, hex_bytes) -> path` and `_frames(cmd_tshark, test_env, capture, display_filter) -> list[str]`, which Tasks 3 and 4 add tests to.
+- Produces: the capture fixture `bt-le-audio-bap-broadcast.pcapng` containing exactly 2 extended advertising reports, 1 sync established event and 10 periodic advertising reports from the broadcaster, whose address the capture gives (`aa:bb:cc:dd:ee:ff` stands in for it here); the test class `TestDissectBluetoothLeAudio` with helpers `_hci_frame(cmd_text2pcap, result_file, base_env, name, hex_bytes) -> path` and `_frames(cmd_tshark, test_env, capture, display_filter) -> list[str]`, which Tasks 3 and 4 add tests to.
 
 - [ ] **Step 1: Build the capture fixture**
 
 The source capture is the 30 s run recorded on 2026-09-19 at `G:\dev\scratch\nrf\base1.pcapng`. Run on Windows, with Wireshark 4.6.8:
 
 ```bash
-cd /g/dev/scratch/nrf && "/c/Program Files/Wireshark/tshark.exe" -r base1.pcapng -Y '(bthci_evt.le_meta_subevent == 0x0d && bthci_evt.bd_addr == 21:f9:c1:cd:44:87) || bthci_evt.le_meta_subevent == 0x0e || (bthci_evt.le_meta_subevent == 0x0f && bthci_evt.sync_handle == 0x0000)' -w bap-all.pcapng && "/c/Program Files/Wireshark/tshark.exe" -r bap-all.pcapng -T fields -e frame.number -e bthci_evt.le_meta_subevent | head -20
+cd /g/dev/scratch/nrf && "/c/Program Files/Wireshark/tshark.exe" -r base1.pcapng -Y '(bthci_evt.le_meta_subevent == 0x0d && bthci_evt.bd_addr == aa:bb:cc:dd:ee:ff) || bthci_evt.le_meta_subevent == 0x0e || (bthci_evt.le_meta_subevent == 0x0f && bthci_evt.sync_handle == 0x0000)' -w bap-all.pcapng && "/c/Program Files/Wireshark/tshark.exe" -r bap-all.pcapng -T fields -e frame.number -e bthci_evt.le_meta_subevent | head -20
 ```
 
 Expected: a list of frame numbers with their subevents, extended reports (0x0d) and the sync established (0x0e) before the periodic reports (0x0f).
@@ -1674,7 +1674,7 @@ Expected: a FLASH/RAM summary and no errors.
 The flash script commits the RRAM write buffer, which NCS v3.4.0's own openocd script does not (see the nRF sniffer's README).
 
 ```bash
-S=/c/Users/Work/AppData/Local/Temp/claude/G--dev-projects-esp32c6-sniffer/c6487d68-b757-46b6-adf7-eaf5cd7bc607/scratchpad && PYTHONIOENCODING=utf-8 /g/dev/projects/esp32c6-sniffer/host/.venv/Scripts/python.exe $S/flash_and_watch.py "$(cygpath -w $S/xiao_flash_commit.ps1)" 'G:\dev\scratch\nrf\bpbp\zephyr\zephyr.hex' 12 | sed 's/\x1b\[[0-9;]*m//g' | tail -20
+S=/c/Users/Work/AppData/Local/Temp/claude/G--dev-projects-esp32c6-sniffer/c6487d68-b757-46b6-adf7-eaf5cd7bc607/scratchpad && PYTHONIOENCODING=utf-8 /g/dev/projects/esp32c6-sniffer/host/.venv/Scripts/python.exe $S/flash_and_watch.py "$(cygpath -w $S/xiao_flash_commit.ps1)" G:/dev/scratch/nrf/bpbp/zephyr/zephyr.hex 12 | sed 's/\x1b\[[0-9;]*m//g' | tail -20
 ```
 
 Expected: `verified` from openocd, then the sample's console showing the broadcast starting.
@@ -1682,7 +1682,7 @@ Expected: `verified` from openocd, then the sample's console showing the broadca
 - [ ] **Step 8: Capture it with the ESP32-C6**
 
 ```bash
-cd /g/dev/projects/esp32c6-sniffer && timeout 30 host/.venv/Scripts/python.exe extcap/esp32c6-sniffer.py --capture --extcap-interface esp32c6-ble@COM3 --fifo 'G:\dev\scratch\nrf\pbp1.pcapng' --ble-periodic; "/c/Program Files/Wireshark/tshark.exe" -r G:/dev/scratch/nrf/pbp1.pcapng -Y 'btcommon.eir_ad.entry.uuid_16 == 0x1856' -T fields -e frame.number -e bthci_evt.bd_addr | head -5
+cd /g/dev/projects/esp32c6-sniffer && timeout 30 host/.venv/Scripts/python.exe extcap/esp32c6-sniffer.py --capture --extcap-interface esp32c6-ble@COM3 --fifo G:/dev/scratch/nrf/pbp1.pcapng --ble-periodic; "/c/Program Files/Wireshark/tshark.exe" -r G:/dev/scratch/nrf/pbp1.pcapng -Y 'btcommon.eir_ad.entry.uuid_16 == 0x1856' -T fields -e frame.number -e bthci_evt.bd_addr | head -5
 ```
 
 Expected: several frames, all from one address: the Public Broadcast source. If nothing appears, check the board's console again before going on.
