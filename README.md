@@ -544,8 +544,12 @@ possible only because a lost sync now hands back the controller's single slot.
 Before that fix it would have followed nothing more for the rest of the capture.
 
 (The advertiser was a throwaway firmware driving the controller over raw HCI,
-as the sniffer does. Zephyr's own `periodic_adv` sample faults at boot on this
-board inside the Bluetooth host stack, before it advertises anything.)
+as the sniffer does, because Zephyr's own `periodic_adv` sample faulted at boot
+on this board. The Bluetooth host was not at fault: NCS v3.4.0's openocd script
+for the XIAO never writes the last partial line of an image, and in that
+sample the line holds a buffer pool's pointer. With the one-line fix in
+[the nRF README](https://github.com/Thenewmanator15/nrf54l15-sniffer#build-and-flash)
+the unchanged sample boots and advertises.)
 
 **Where a sync leads differs by board.** A periodic train carrying an Auracast
 broadcast also carries BIGInfo: the announcement of the isochronous group the
