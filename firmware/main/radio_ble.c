@@ -44,6 +44,11 @@ static const char *TAG = "radio_ble";
 #define LE_SUBEVENT_SYNC_ESTABLISHED    0x0E
 #define LE_SUBEVENT_PERIODIC_REPORT     0x0F
 #define LE_SUBEVENT_SYNC_LOST           0x10
+/* The Bluetooth 5.4 versions of the same two events. A controller may send
+ * either -- the nRF54L15's sends only these -- and the status still leads, so
+ * each is handled beside its v1 twin rather than on its own. */
+#define LE_SUBEVENT_SYNC_ESTABLISHED_V2 0x24
+#define LE_SUBEVENT_PERIODIC_REPORT_V2  0x25
 
 /* Concurrent periodic syncs. Not a preference: it is what the controller is
  * built for. CONFIG_BT_LE_MAX_PERIODIC_SYNCS defaults to 1 and
@@ -168,9 +173,11 @@ static int vhci_receive(uint8_t *data, uint16_t len)
     }
 
     if (data[0] == H4_EVENT && len >= 4 && data[1] == EVENT_LE_META) {
-        if (data[3] == LE_SUBEVENT_PERIODIC_REPORT) {
+        if (data[3] == LE_SUBEVENT_PERIODIC_REPORT ||
+            data[3] == LE_SUBEVENT_PERIODIC_REPORT_V2) {
             s_stats.periodic_reports++;
-        } else if (data[3] == LE_SUBEVENT_SYNC_ESTABLISHED && len >= 6) {
+        } else if ((data[3] == LE_SUBEVENT_SYNC_ESTABLISHED ||
+                    data[3] == LE_SUBEVENT_SYNC_ESTABLISHED_V2) && len >= 6) {
             /* Its first parameter is a status, so this one event reports the
              * success and the failure both. The failure has to give the slot
              * back: the count went up when the controller accepted the

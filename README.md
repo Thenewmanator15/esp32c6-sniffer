@@ -523,10 +523,17 @@ sync -- `CONFIG_BT_LE_MAX_PERIODIC_SYNCS` on the C6 and
 `CONFIG_BT_PER_ADV_SYNC_MAX` on the nRF54L15, each defaulting to 1 -- so a
 second one is refused by a controller built to hold exactly one.
 
-Measured here: 1342 advertising reports processed, and **no periodic
-advertisers at all** -- seen 0, synced 0. Nothing in range broadcasts one. The
-detection path ran on every report without incident; there is simply nothing to
-follow in this room.
+Nothing in range broadcasts a periodic train -- 1342 advertising reports, seen
+0, synced 0 -- so one was made. An ESP32-C6 running Espressif's own
+`periodic_adv` example, advertising a train at 80 ms, was sniffed from the
+nRF54L15 with following on: **one sync, then 372 periodic reports in 30 s**,
+which is what 80 ms predicts, with no syncs refused.
+
+That run found two faults the empty room had hidden. The nRF's controller sends
+only the Bluetooth 5.4 versions of the sync and report events, and both boards
+counted only the originals, so a train followed perfectly reported every figure
+as zero. Both now count either. The C6's own following has not yet been run
+against a train; its controller may send either version, and both are handled.
 
 **Where a sync leads differs by board.** A periodic train carrying an Auracast
 broadcast also carries BIGInfo: the announcement of the isochronous group the
