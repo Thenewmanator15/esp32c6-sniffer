@@ -122,7 +122,8 @@ print("keeping", keep)
 subprocess.check_call([r"C:\Program Files\Wireshark\editcap.exe", "-r", "bap-all.pcapng",
                        "bt-le-audio-bap-broadcast.pcapng", *keep])
 EOF
-"/c/Program Files/Wireshark/tshark.exe" -r bt-le-audio-bap-broadcast.pcapng -Y 'frame.comment' -T fields -e frame.number; "/c/Program Files/Wireshark/capinfos.exe" -c -E bt-le-audio-bap-broadcast.pcapng```
+"/c/Program Files/Wireshark/tshark.exe" -r bt-le-audio-bap-broadcast.pcapng -Y 'frame.comment' -T fields -e frame.number; "/c/Program Files/Wireshark/capinfos.exe" -c -E bt-le-audio-bap-broadcast.pcapng
+```
 
 Expected: no frame numbers from the comment filter (this capture carries no comments), and `capinfos -c` reporting 13 packets.
 
