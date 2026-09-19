@@ -124,3 +124,38 @@ def test_the_capture_path_catches_the_wrapped_serial_error():
             f"RuntimeError too or a bad port still shows a traceback")
         return
     pytest.fail("do_capture is not wrapped in a try in main()")
+
+
+def test_a_board_that_did_not_answer_is_not_blamed_on_the_port():
+    """The nRF54L15's first GET_INFO could be eaten by stale data its USB
+    bridge was holding, and the failure then read "the board looks like it is
+    on: COM4" -- the port the user had just chosen, offered as though it were
+    the fix. The port was right; the board had not answered."""
+    msg = plugin.capture_failure_message(
+        "COM4", TimeoutError("no reply to GET_INFO within 5.0s"), ["COM4"])
+
+    assert "cannot capture on COM4: no reply to GET_INFO" in msg
+    assert "looks like it is on" not in msg
+    assert "the port is right" in msg
+
+
+def test_the_same_port_is_recognised_whatever_its_case():
+    """Windows port names are case-insensitive, and Wireshark keeps whatever
+    the user typed."""
+    msg = plugin.capture_failure_message("com4", TimeoutError("x"), ["COM4"])
+
+    assert "looks like it is on" not in msg
+
+
+def test_a_wrong_port_still_names_the_right_one():
+    msg = plugin.capture_failure_message("COM3", OSError("access denied"),
+                                         ["COM4"])
+
+    assert "cannot capture on COM3" in msg
+    assert "the board looks like it is on: COM4" in msg
+
+
+def test_no_board_at_all_still_says_to_check_the_cable():
+    msg = plugin.capture_failure_message("COM3", OSError("no such port"), [])
+
+    assert "data-capable" in msg

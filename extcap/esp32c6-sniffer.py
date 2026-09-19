@@ -1316,6 +1316,33 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     return 0
 
 
+def capture_failure_message(port: str, exc: Exception,
+                            found: list[str]) -> str:
+    """What Wireshark shows the user when a capture cannot start.
+
+    Names the port that failed and, if a board is somewhere else, where. A
+    board found on the very port that failed is a different fault -- it is
+    there and did not answer -- and pointing the user at the port they had
+    already chosen, as this once did, reads as the fix while being no help.
+    The nRF54L15 produced exactly that when stale data in its USB bridge ate
+    the reply to the first command of a session.
+    """
+    lines = [f"cannot capture on {port}: {exc}"]
+    if port.casefold() in {f.casefold() for f in found}:
+        lines.append(
+            f"{port} is where the board is, so the port is right: the board "
+            f"did not answer. Start the capture again; if it still does not "
+            f"answer, unplug the board and plug it back in.")
+    elif found:
+        lines.append("the board looks like it is on: " + ", ".join(found))
+    else:
+        lines.append(
+            "no ESP32-C6 found on any serial port. Check the cable is "
+            "data-capable: a charge-only one enumerates nothing and "
+            "looks exactly like a dead board.")
+    return os.linesep.join(lines) + os.linesep
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--extcap-interfaces", action="store_true")
@@ -1460,25 +1487,15 @@ def main(argv: list[str] | None = None) -> int:
                               ble_filter=args.ble_filter,
                       ble_periodic=args.ble_periodic)
         except (OSError, RuntimeError) as exc:
-            # Almost always the wrong serial port, which used to reach the
-            # user as a Python traceback in a Wireshark dialog. Name the port
-            # that failed and say which one the board is actually on.
+            # Usually the wrong serial port, which used to reach the user as a
+            # Python traceback in a Wireshark dialog.
             #
             # RuntimeError as well as OSError: the capture library wraps the
             # serial failure after exhausting its retries, so catching only
             # OSError here caught nothing and the traceback still escaped.
-            sys.stderr.write(f"cannot capture on {args.port}: {exc}"
-                             + os.linesep)
-            found = [port for port, _board in find_board_ports()]
-            if found:
-                sys.stderr.write(
-                    "the board looks like it is on: "
-                    + ", ".join(found) + os.linesep)
-            else:
-                sys.stderr.write(
-                    "no ESP32-C6 found on any serial port. Check the cable is "
-                    "data-capable: a charge-only one enumerates nothing and "
-                    "looks exactly like a dead board." + os.linesep)
+            # TimeoutError, a board that did not answer, is an OSError.
+            sys.stderr.write(capture_failure_message(
+                args.port, exc, [port for port, _board in find_board_ports()]))
             return 1
 
     print_interfaces(args.extcap_interface)
