@@ -1336,10 +1336,16 @@ def capture_failure_message(port: str, exc: Exception,
     elif found:
         lines.append("the board looks like it is on: " + ", ".join(found))
     else:
+        # Named from the board table, so a board added there is named here
+        # too. This said "no ESP32-C6 found" to nRF54L15 owners, which reads
+        # as the plugin not supporting their board at all.
+        names = [board["display"] for board in BOARDS.values()]
+        either = (names[0] if len(names) == 1
+                  else ", ".join(names[:-1]) + " or " + names[-1])
         lines.append(
-            "no ESP32-C6 found on any serial port. Check the cable is "
-            "data-capable: a charge-only one enumerates nothing and "
-            "looks exactly like a dead board.")
+            f"no {either} found on any serial port. Check the cable is "
+            f"data-capable: a charge-only one enumerates nothing and looks "
+            f"exactly like a dead board.")
     return os.linesep.join(lines) + os.linesep
 
 

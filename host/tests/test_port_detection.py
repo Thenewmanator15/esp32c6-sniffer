@@ -159,3 +159,14 @@ def test_no_board_at_all_still_says_to_check_the_cable():
     msg = plugin.capture_failure_message("COM3", OSError("no such port"), [])
 
     assert "data-capable" in msg
+
+
+def test_no_board_found_names_every_board_the_plugin_supports():
+    """It said "no ESP32-C6 found" to people with an nRF54L15, which reads as
+    the plugin not supporting their board. The names come from the board
+    table, so a board added there is named here without anyone remembering."""
+    msg = plugin.capture_failure_message("COM3", OSError("no such port"), [])
+
+    assert "no ESP32-C6 found" not in msg
+    for board in plugin.BOARDS.values():
+        assert board["display"] in msg
