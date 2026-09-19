@@ -93,10 +93,11 @@ change, and it would not affect the other two commits.
 
 A new protocol in `packet-bluetooth.c`, beside `btad_matter`:
 `proto_btad_le_audio`, "Bluetooth LE Audio Broadcast Announcements", filter
-name `btad_le_audio`. The Broadcast Audio Announcement and Public Broadcast
-Announcement dissectors in commit 3 share its fields, because metadata and
-codec configuration mean the same thing in all three. It is registered on
-`btcommon.eir_ad.entry.uuid` for `1851`.
+name `bluetooth.le_audio`, just as `btad_matter` uses `bluetooth.matter`. The
+Broadcast Audio Announcement and Public Broadcast Announcement dissectors in
+commit 3 share its fields, because metadata and codec configuration mean the
+same thing in all three. It is registered on `btcommon.eir_ad.entry.uuid` for
+`1851`.
 
 What it decodes follows the BASE definition in the Basic Audio Profile. The
 value meanings come from the Assigned Numbers document's generic-audio
@@ -105,22 +106,22 @@ types and Metadata types. The implementation takes every value from the
 current editions of both documents, and the commit message cites the editions
 and section numbers it used:
 
-- `btad_le_audio.base.presentation_delay`: 24-bit, µs.
-- `btad_le_audio.base.num_subgroups`, then one `btad_le_audio.base.subgroup`
+- `bluetooth.le_audio.base.presentation_delay`: 24-bit, µs.
+- `bluetooth.le_audio.base.num_subgroups`, then one `bluetooth.le_audio.base.subgroup`
   subtree per subgroup:
-  - `btad_le_audio.base.subgroup.num_bis`;
-  - codec ID: `btad_le_audio.codec_id.coding_format` (reusing
-    `bthci_evt_codec_id_vals`), `btad_le_audio.codec_id.company_id`,
-    `btad_le_audio.codec_id.vendor_codec_id`;
-  - `btad_le_audio.codec_config.length`, then the configuration;
-  - `btad_le_audio.metadata.length`, then the metadata;
-  - one `btad_le_audio.base.bis` subtree per BIS:
-    `btad_le_audio.base.bis.index`, `btad_le_audio.codec_config.length`, and
+  - `bluetooth.le_audio.base.subgroup.num_bis`;
+  - codec ID: `bluetooth.le_audio.codec_id.coding_format` (reusing
+    `bthci_evt_codec_id_vals`), `bluetooth.le_audio.codec_id.company_id`,
+    `bluetooth.le_audio.codec_id.vendor_codec_id`;
+  - `bluetooth.le_audio.codec_config.length`, then the configuration;
+  - `bluetooth.le_audio.metadata.length`, then the metadata;
+  - one `bluetooth.le_audio.base.bis` subtree per BIS:
+    `bluetooth.le_audio.base.bis.index`, `bluetooth.le_audio.codec_config.length`, and
     that BIS's configuration.
 
 **Codec configuration** is decoded as LTV only when the coding format is LC3
 (0x06). For any other format its layout is vendor-defined, and it is shown as
-`btad_le_audio.codec_config.raw`. For LC3:
+`bluetooth.le_audio.codec_config.raw`. For LC3:
 
 | Type | Field | Shown as |
 |---|---|---|
@@ -150,18 +151,18 @@ and section numbers it used:
 | 0xFF | `.metadata.vendor_company_id` + `.ltv.value` | company, bytes |
 | other | `.ltv.value` | bytes |
 
-All field names above are under `btad_le_audio.`. The LTV length and type are
+All field names above are under `bluetooth.le_audio.`. The LTV length and type are
 fields too (`.ltv.length`, `.codec_config.type`, `.metadata.type`), so a
 display filter can find, say, every broadcast whose metadata carries a
 language.
 
 **Bad input never reads past the service data** and never throws:
 
-- Expert info `btad_le_audio.length_overrun` (malformed, error): a declared
+- Expert info `bluetooth.le_audio.length_overrun` (malformed, error): a declared
   length (subgroup counts, `Codec_Specific_Configuration_Length`,
   `Metadata_Length`, or an LTV's length) runs past its container. Decoding of
   that container stops there.
-- Expert info `btad_le_audio.ltv.bad_length` (protocol, warning): a known type
+- Expert info `bluetooth.le_audio.ltv.bad_length` (protocol, warning): a known type
   whose value length is not the one the specification fixes. The value is
   shown as bytes.
 
@@ -169,13 +170,13 @@ language.
 
 The same protocol, registered on two more UUIDs:
 
-- `1852`, Broadcast Audio Announcement: `btad_le_audio.broadcast_id`, 24-bit,
-  hex. Any bytes after it are shown as `btad_le_audio.trailing_data`.
+- `1852`, Broadcast Audio Announcement: `bluetooth.le_audio.broadcast_id`, 24-bit,
+  hex. Any bytes after it are shown as `bluetooth.le_audio.trailing_data`.
 - `1856`, Public Broadcast Announcement, as the Public Broadcast Profile
   defines it:
-  `btad_le_audio.pba.features`, a bitmask of `.pba.features.encrypted`,
+  `bluetooth.le_audio.pba.features`, a bitmask of `.pba.features.encrypted`,
   `.pba.features.standard_quality`, `.pba.features.high_quality` and reserved
-  bits, then `btad_le_audio.metadata.length` and metadata decoded by commit 2's
+  bits, then `bluetooth.le_audio.metadata.length` and metadata decoded by commit 2's
   code.
 
 ## Testing
@@ -215,7 +216,7 @@ A new class `TestDissectBluetoothLeAudio`. Each test runs `tshark -T fields` or
    present, no `btcommon.eir_ad.entry` (built with `text2pcap`, as the suite's
    existing hand-made tests do).
 6. A BASE whose `Codec_Specific_Configuration_Length` overruns raises
-   `btad_le_audio.length_overrun`, and `_ws.malformed` is absent: the
+   `bluetooth.le_audio.length_overrun`, and `_ws.malformed` is absent: the
    dissector reported it and did not throw (`text2pcap`).
 7. A BASE with a vendor coding format (0xFF) shows `codec_config.raw` and no
    LC3 fields (`text2pcap`).
