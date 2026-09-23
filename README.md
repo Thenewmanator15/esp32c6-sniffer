@@ -862,6 +862,12 @@ by asking whether the board is still alive and still capturing. It builds its
 frames by hand, because the host library validates its own commands and would
 otherwise never let the firmware's checking be tested.
 
+`tools/link_probe.py --port COM4` asks a third question: what does the link
+itself lose? It captures normally while keeping every raw byte, then checks
+them against the board's own count of what it sent, so the loss it reports is
+exact. It is how the nRF54L15's bridge was found to cut bursts past 319 bytes;
+on the C6's USB link it should, and does, report nothing lost.
+
 Between them they have found more real defects than review did, including two
 that the ordinary tests could not see: a snapshot length that was silently
 discarded on every channel change, and a host crash on a reply the board was
