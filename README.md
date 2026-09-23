@@ -138,6 +138,13 @@ tshark -D
 
 Add `-Uninstall` or `--uninstall` to remove all of it.
 
+From a clone, what it installs is only a launcher: Wireshark runs the
+plugin straight out of the repository, so a change takes effect at the next
+capture with nothing to reinstall. (It used to copy the plugin in, and the
+copy went stale without a word — a bench here ran eleven-day-old host code
+while every test passed.) Re-run the installer only when the profiles or the
+virtual environment change.
+
 On Linux the serial port belongs to a group — `dialout` on most
 distributions, `uucp` on Arch. Without membership the board is visible and
 impossible to open, which looks exactly like a broken plugin; `install.sh`
