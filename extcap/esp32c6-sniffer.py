@@ -101,19 +101,29 @@ HOP_DWELL_MAX_MS = 10000
 #: the useful subsets are different. 802.15.4 got none of this until now, and
 #: it is the radio that needs it most: sixteen channels, no beacons to sweep
 #: for, and no way to tell which one a network is on without looking.
+#:
+#: Keyed by RADIO, and looked up through hop_sets(), never by interface name.
+#: Keyed by the C6's names, hopping existed only while it was the one board
+#: attached: a second board makes Wireshark name every interface with its
+#: port, and the option vanished -- or, for Wi-Fi, was offered and then
+#: refused. The nRF54L15 never had it.
 HOP_SETS = {
-    WIFI_INTERFACE: {
+    "wifi": {
         0: None,
         1: (1, 6, 11),
         2: tuple(range(1, 14)),
     },
-    INTERFACE: {
+    "802154": {
         0: None,
         # The four Zigbee "preferred" channels, which is where a Zigbee
         # network almost always sits, so this finds one in a quarter of the
         # time a full sweep takes.
         1: (11, 15, 20, 25),
         2: tuple(range(11, 27)),
+        # Half the band each, for two boards: one on each half sweeps all
+        # sixteen channels in the time eight take, with no dwell spent twice.
+        3: tuple(range(11, 19)),
+        4: tuple(range(19, 27)),
     },
 }
 
@@ -348,6 +358,16 @@ def radio_kind(name: str) -> str:
 
 def is_wifi(name: str) -> bool:
     return radio_kind(name) == "wifi"
+
+
+def hop_sets(name: str) -> dict:
+    """The hop sets an interface offers, whatever board or port it names.
+
+    {0: None} -- hopping off, and nothing else -- for a radio that cannot hop.
+    The dialog, the capture and its validation all ask here, so what Wireshark
+    offers is exactly what the capture accepts.
+    """
+    return HOP_SETS.get(radio_kind(name), {0: None})
 
 
 def is_ble(name: str) -> bool:
@@ -661,6 +681,11 @@ def print_config(interface: str, reload_option: str | None = None,
               "A dataset also carries the channel, and the capture moves to "
               "it, because the wrong channel gives an empty capture that "
               "looks exactly like a wrong key. For a network you own}")
+
+    if radio_kind(interface) == "802154":
+        # Every board's 802.15.4 interface, alone or port-qualified. The key
+        # and credential options above are still the C6's alone.
+        #
         # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
         # 100 ms on a handful of channels, so a survey finds the traffic in
         # seconds. Here there are sixteen channels, nothing announces itself,
@@ -677,6 +702,10 @@ def print_config(interface: str, reload_option: str | None = None,
         print("value {arg=5}{value=1}"
               "{display=11, 15, 20, 25 (Zigbee preferred)}")
         print("value {arg=5}{value=2}{display=All channels, 11-26}")
+        print("value {arg=5}{value=3}"
+              "{display=Channels 11-18 (half the band: put a second board on 19-26)}")
+        print("value {arg=5}{value=4}"
+              "{display=Channels 19-26 (half the band: put a second board on 11-18)}")
         print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
               f"{{type=integer}}{{range={HOP_DWELL_MIN_MS},{HOP_DWELL_MAX_MS}}}"
               f"{{default=2000}}"
@@ -901,7 +930,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     session_filter = (
         FrameFilter(frame_filter) if wifi and frame_filter else None
     )
-    hop_channels = HOP_SETS.get(interface, {}).get(hop)
+    hop_channels = hop_sets(interface).get(hop)
     session_bandwidth = Bandwidth(bandwidth) if wifi else None
     session_ctrl = CtrlFilter.NO_ACK if (wifi and drop_acks) else None
 
@@ -1467,7 +1496,7 @@ def main(argv: list[str] | None = None) -> int:
         # Validated against THIS radio's sets. BLE has none -- the
         # controller rotates the advertising channels itself -- so asking for
         # one there is refused rather than silently ignored.
-        if args.hop not in HOP_SETS.get(interface, {0: None}):
+        if args.hop not in hop_sets(interface):
             sys.stderr.write(
                 f"hop set {args.hop} is not offered for {interface}"
                 + os.linesep)

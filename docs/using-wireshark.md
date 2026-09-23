@@ -72,6 +72,18 @@ Click the **gear icon** beside an interface before starting, or use
 |---|---|
 | **Channel** | 11–26, each shown with its frequency. Also changeable mid-capture from the toolbar. |
 | **Zigbee key file** | Embeds your network keys *in the capture*, so it decrypts on any machine. See [Decrypting your own traffic](#decrypting-your-own-traffic). |
+| **Channel hop** | Off, the four Zigbee preferred channels (11, 15, 20, 25), all of 11–26, or one half — 11–18 or 19–26 — for sweeping with two boards (below). Each frame carries its own channel, so a hopped capture stays self-describing. |
+| **Hop dwell** | 2000 ms. Longer than Wi-Fi's, because 802.15.4 has no beacons to catch: the dwell has to be long enough for ordinary traffic to happen. |
+
+**Sweeping with two boards.** With the ESP32-C6 and the nRF54L15 both
+plugged in, give each one half of the band and capture from both at once:
+set one board's *Channel hop* to **11–18** and the other's to **19–26**,
+then select both interfaces together (Ctrl-click) and start. Wireshark merges
+them into one capture, and all sixteen channels are covered in the time eight
+take — neither board spends a dwell on a channel the other already covers.
+Measured: at a 1 s dwell the pair covered the band every 8 s, each board's
+frames stayed within its own half, and both halves' networks (15 on one, 25 on
+the other) appeared in the one capture.
 
 ### Wi-Fi
 
