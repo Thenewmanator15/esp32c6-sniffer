@@ -61,8 +61,11 @@ PRIVATE_IP = re.compile(
 SKIP_SUFFIXES = {".pcap", ".pcapng", ".png", ".bin", ".elf"}
 
 
-def tracked_text_files():
+def tracked_text_files(raw: bool = False):
     """Everything that would be published: committed files AND new ones.
+
+    raw=True reads without newline translation, so a carriage return reaches
+    the caller as itself rather than as a line break it never was.
 
     `git ls-files` alone lists only what is already committed, so a brand new
     file was invisible to this guard. A real device's address reached a test
@@ -88,7 +91,8 @@ def tracked_text_files():
         if path.name == pathlib.Path(__file__).name:
             continue
         try:
-            yield name, path.read_text(encoding="utf-8")
+            with path.open(encoding="utf-8", newline="" if raw else None) as f:
+                yield name, f.read()
         except (UnicodeDecodeError, OSError):
             continue
 

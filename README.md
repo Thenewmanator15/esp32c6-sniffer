@@ -427,7 +427,7 @@ useful second opinion.
 For BLE, `tools/ble_survey.py` summarises what is advertising nearby:
 
 ```powershell
-.\.venv\Scripts\python.exe toolsle_survey.py --port COM3 --seconds 60
+.\.venv\Scripts\python.exe tools\ble_survey.py --port COM3 --seconds 60
 ```
 
 It separates **stable addresses** from **rotating** ones, and that separation is

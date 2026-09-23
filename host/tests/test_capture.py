@@ -352,7 +352,7 @@ def test_pcap_declares_the_truncation_end_to_end():
 def test_legacy_ofdm_frame_carries_a_rate():
     """L-SIG rate code 0xB is 6 Mbit/s, which radiotap counts in 500 kbps."""
     record, _b, _us, _o = wifi_session()._build_record(
-        wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0xB,
+        wifi_payload(bytes([0x80, 0x00]) + b"\x11" * 20, 22, rate=0xB,
                      phy=PhyFormat.G)
     )
     assert present_bitmap(record) & (1 << BIT_RATE)
@@ -364,7 +364,7 @@ def test_11b_frame_is_labelled_cck_not_ofdm():
     """Assuming OFDM for every frame mislabels exactly the older access points
     whose beacons are CCK."""
     record, _b, _us, _o = wifi_session()._build_record(
-        wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0, phy=PhyFormat.B)
+        wifi_payload(bytes([0x80, 0x00]) + b"\x11" * 20, 22, rate=0, phy=PhyFormat.B)
     )
     assert channel_flags(record) & CHAN_CCK
     assert not channel_flags(record) & CHAN_OFDM
@@ -378,7 +378,7 @@ def test_ht_and_he_frames_omit_the_rate_field():
     for fmt in (PhyFormat.HT, PhyFormat.VHT, PhyFormat.HE_SU, PhyFormat.HE_MU):
         assert rate_500kbps(fmt, 0xB) is None
         record, _b, _us, _o = wifi_session()._build_record(
-            wifi_payload(bytes([0x80, 0x00]) + b"" * 20, 22, rate=0xB, phy=fmt)
+            wifi_payload(bytes([0x80, 0x00]) + b"\x11" * 20, 22, rate=0xB, phy=fmt)
         )
         assert not present_bitmap(record) & (1 << BIT_RATE), fmt
 
@@ -413,7 +413,7 @@ def test_firmware_1_stats_still_parse():
 
 
 def test_ht_frame_carries_a_decoded_mcs():
-    body = bytes([0x80, 0x00]) + b"" * 40
+    body = bytes([0x80, 0x00]) + b"\x11" * 40
     record, _b, _us, _o = wifi_session()._build_record(
         wifi_payload(body, len(body), phy=PhyFormat.HT,
                      siga1=ht_sig1(mcs=7, length=len(body) + FCS_LEN),
@@ -436,7 +436,7 @@ def test_ht_decode_is_rejected_when_the_length_disagrees():
     independently. If the two disagree, the layout assumption is wrong and no
     MCS is claimed at all.
     """
-    body = bytes([0x80, 0x00]) + b"" * 40
+    body = bytes([0x80, 0x00]) + b"\x11" * 40
     record, _b, _us, _o = wifi_session()._build_record(
         wifi_payload(body, len(body), phy=PhyFormat.HT,
                      siga1=ht_sig1(mcs=7, length=len(body) + 99))
@@ -453,7 +453,7 @@ def test_non_ht_frames_carry_no_mcs():
     """HE-SIG-A has an MCS too, but radiotap's HE field is not emitted, so
     nothing is claimed rather than something unverified."""
     for fmt in (PhyFormat.B, PhyFormat.G, PhyFormat.HE_SU):
-        body = bytes([0x80, 0x00]) + b"" * 40
+        body = bytes([0x80, 0x00]) + b"\x11" * 40
         record, _b, _us, _o = wifi_session()._build_record(
             wifi_payload(body, len(body), phy=fmt,
                          siga1=ht_sig1(4, len(body) + FCS_LEN))
@@ -465,7 +465,7 @@ def test_timestamp_is_64_bit_so_it_survives_the_71_minute_wrap():
     """The radio's counter is 32-bit microseconds; the firmware widens it."""
     beyond_32_bits = (1 << 32) + 5_000_000
     _r, _b, device_us, _o = wifi_session()._build_record(
-        wifi_payload(bytes([0x80, 0x00]) + b"" * 10, 12,
+        wifi_payload(bytes([0x80, 0x00]) + b"\x11" * 10, 12,
                      timestamp=beyond_32_bits)
     )
     assert device_us == beyond_32_bits
@@ -584,6 +584,10 @@ def test_the_mismatch_message_names_that_boards_own_toolchain():
     c6 = version_mismatch_message("esp32c6", found=0)
     assert "idf.py" in c6
     assert "west" not in c6
+    # The whole command, not just the tool's name: this string once carried a
+    # form feed where the \f of .\flash.ps1 belonged, and told every operator
+    # with a stale board to run a script that does not exist.
+    assert r".\flash.ps1 -Port" in c6
 
 
 def test_a_session_defaults_to_the_board_that_existed_first():

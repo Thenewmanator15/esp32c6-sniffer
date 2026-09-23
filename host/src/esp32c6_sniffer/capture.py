@@ -106,7 +106,7 @@ EXPECTED_FIRMWARE_VERSIONS = {
 #: Naming the wrong toolchain misleads twice over: the wrong tool, and a
 #: version number that then looks like a fault rather than a stale flash.
 REFLASH_COMMANDS = {
-    "esp32c6": r"idf.py -DSN_MODE=2 build then .lash.ps1 -Port <port>",
+    "esp32c6": r"idf.py -DSN_MODE=2 build then .\flash.ps1 -Port <port>",
     "nrf54l15": ("west build -b xiao_nrf54l15/nrf54l15/cpuapp -- -DSN_MODE=2 "
                  "then west flash --runner openocd"),
 }
