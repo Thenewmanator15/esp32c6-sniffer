@@ -25,13 +25,9 @@ from __future__ import annotations
 
 import argparse
 import statistics
-import time
 
-import serial
-
-from esp32c6_sniffer.control import Command, decode_reply, encode_command
-from esp32c6_sniffer.framing import FrameType
-from esp32c6_sniffer.parser import StreamParser
+from esp32c6_sniffer.boards import BoardLink
+from esp32c6_sniffer.control import Command, encode_command
 from esp32c6_sniffer.tap import CHANNEL_MAX, CHANNEL_MIN
 
 # Channels Zigbee deployments commonly use, and the Wi-Fi gaps.
@@ -45,29 +41,6 @@ WIFI_OVERLAP = {
 
 def channel_mhz(channel: int) -> int:
     return 2405 + 5 * (channel - CHANNEL_MIN)
-
-
-def _open(port: str) -> serial.Serial:
-    ser = serial.Serial(port, 115200, timeout=0.05)
-    try:
-        ser.set_buffer_size(rx_size=1 << 20)
-    except (AttributeError, OSError):
-        pass
-    ser.reset_input_buffer()
-    return ser
-
-
-def _command(ser, parser, command: Command, value: int, timeout: float = 5.0) -> dict:
-    ser.write(encode_command(command, value))
-    ser.flush()
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        for frame in parser.feed(ser.read(4096)):
-            if frame.ftype is FrameType.CONTROL_REPLY:
-                reply = decode_reply(frame.payload)
-                if reply["command"] is command:
-                    return reply
-    raise TimeoutError(f"no reply to {command.name}")
 
 
 def _bar(dbm: float, floor: int = -100, ceiling: int = -20, width: int = 40) -> str:
@@ -86,31 +59,28 @@ def main() -> None:
     args = ap.parse_args()
 
     symbols = max(1, int(args.dwell_ms * 1000 / 16))  # 16 us per symbol
-    ser = _open(args.port)
-    parser = StreamParser()
+    link = BoardLink(args.port).open()
 
     readings: dict[int, list[int]] = {
         c: [] for c in range(CHANNEL_MIN, CHANNEL_MAX + 1)
     }
 
-    print(f"{args.passes} passes, {args.dwell_ms:.0f} ms per channel "
-          f"({symbols} symbols)")
+    print(f"{args.passes} passes on the {link.board['display']} on "
+          f"{args.port}, {args.dwell_ms:.0f} ms per channel ({symbols} symbols)")
     try:
         for pass_no in range(1, args.passes + 1):
             for channel in range(CHANNEL_MIN, CHANNEL_MAX + 1):
-                reply = _command(
-                    ser, parser, Command.ENERGY_DETECT,
-                    channel | (symbols << 8),
-                )
+                reply = link.command(Command.ENERGY_DETECT,
+                                     channel | (symbols << 8))
                 if not reply["ok"]:
                     continue
                 raw = reply["value"] & 0xFF
                 readings[channel].append(raw - 256 if raw > 127 else raw)
             print(f"  pass {pass_no} done")
     finally:
-        ser.write(encode_command(Command.STOP))
-        ser.flush()
-        ser.close()
+        link.ser.write(encode_command(Command.STOP))
+        link.ser.flush()
+        link.close()
 
     print()
     print(f"{'ch':>3} {'MHz':>5} {'peak':>6} {'median':>7}  "

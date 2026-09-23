@@ -129,86 +129,11 @@ HOP_SETS = {
 
 DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 
-#: The ESP32-C6's built-in USB-Serial-JTAG. Espressif's vendor id and the
-#: product id every C6 presents. Used to find the board rather than assume a
-#: port number: this machine has a second USB serial device on COM4, and a
-#: default of COM3 is a guess that is wrong as often as it is right.
-#:
-#: That COM4 device turned out to be the other board in this table.
-ESP32C6_USB_VID = 0x303A
-ESP32C6_USB_PID = 0x1001
-
-#: Every board this plugin knows, keyed by the USB id it enumerates as.
-#:
-#: Identity has to be settled here rather than over the wire, because the
-#: extcap must list its interfaces before any port is opened -- Wireshark asks
-#: what exists while nothing is plugged in, and an interface that appears only
-#: once a board is attached cannot be configured in advance. A GET_BOARD
-#: command would answer too late to name an interface.
-#:
-#: `radios` records what the FIRMWARE implements, not what the silicon can do.
-#: The nRF54L15 has a BLE radio; it gets a BLE interface when there is firmware
-#: behind it and not before.
-BOARDS = {
-    (ESP32C6_USB_VID, ESP32C6_USB_PID): {
-        "id": "esp32c6",
-        "display": "ESP32-C6",
-        "usb": "303A:1001",
-        # Written into the pcapng section header. A capture that describes
-        # itself must describe the right board.
-        "hardware": "Seeed Studio XIAO ESP32-C6",
-        # A USB CDC virtual port with no physical line rate: the setting is
-        # discarded, and the dialog deliberately offers no baud option.
-        "baud": 115200,
-        # Order is load-bearing: it is the order interfaces appear in
-        # Wireshark's list, and it reproduces the order the hand-written
-        # INTERFACES table used before this was generated.
-        "radios": ("802154", "ble", "wifi"),
-        # The controller's accept list, loaded before a scan starts.
-        "ble_filter": True,
-        "ble_periodic": True,
-        # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
-        "antenna": True,
-        "antenna_note": ("External needs a U.FL antenna fitted. Measured "
-                         "+13 to +14 dB over the onboard one on this board"),
-    },
-    (0x2886, 0x0066): {
-        "id": "nrf54l15",
-        "display": "nRF54L15",
-        "usb": "2886:0066",
-        "hardware": "Seeed Studio XIAO nRF54L15",
-        # A real UART rate here, not a formality. This part has no USB
-        # controller, so the host is reached over a UART bridged by the
-        # board's SAMD11, and 1 Mbaud is the UARTE's ceiling. The board
-        # default of 115200 carries 11.7 kB/s against the ~31 kB/s an
-        # 802.15.4 channel can produce. Must match the overlay in
-        # the boards/ overlay in nrf54l15-sniffer.
-        "baud": 1000000,
-        # No Wi-Fi radio exists on this part -- within the nRF54L family a
-        # USB device controller and Wi-Fi are both absent. BLE is the
-        # controller's own, driven over HCI exactly as the C6's is.
-        "radios": ("802154", "ble"),
-        # The controller's accept list, loaded before a scan starts.
-        # Measured on this board: filtering to one advertiser took a capture
-        # from 300 packets across six advertisers to 113 from one, and the
-        # wire traffic to 43% of unfiltered.
-        "ble_filter": True,
-        "ble_periodic": True,
-        # The same arrangement as the C6's, found while spiking this board:
-        # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
-        # selects the antenna, both regulator-boot-on in its devicetree.
-        # Which position selects which antenna is not documented anywhere.
-        # See https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md.
-        "antenna": True,
-        # Deliberately not the C6's +13 dB figure: that was measured on the
-        # C6 and is a property of its switch and antennas, not of this one.
-        # Which position selects which antenna is not known here either.
-        "antenna_note": ("External needs an IPEX antenna fitted. Which "
-                         "position selects which antenna is not yet "
-                         "established on this board, and the gain "
-                         "difference has not been measured"),
-    },
-}
+# The board table lives in the host package, where the tools can reach it
+# too. See esp32c6_sniffer/boards.py.
+from esp32c6_sniffer.boards import (  # noqa: E402
+    BOARDS, ESP32C6_USB_PID, ESP32C6_USB_VID,
+)
 
 
 def list_comports() -> list:

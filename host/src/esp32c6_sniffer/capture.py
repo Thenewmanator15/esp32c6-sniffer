@@ -33,6 +33,7 @@ from .control import (
 )
 from .batch import (BatchError, decode_ble_batch, decode_link,
                     decode_packet_batch)
+from .boards import BRIDGE_FIRST_REPLY_S, bridged_board_ids
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
 from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
@@ -77,13 +78,9 @@ REPLY_POLL_S = 0.01
 #: XIAO nRF54L15's SAMD11 holds the whole USB packets that were in flight when
 #: the previous session closed, and releases them in front of the next thing
 #: the board sends. The ESP32-C6 resets when its port opens and has nothing
-#: left over to hand across.
-BRIDGED_BOARDS = frozenset({"nrf54l15"})
-
-#: How long a bridged board's first GET_INFO is waited for. A reply normally
-#: arrives in milliseconds; this only decides how soon one that stale data has
-#: eaten is given up on and asked for again.
-BRIDGE_FIRST_REPLY_S = 0.5
+#: left over to hand across. Read from the board table, which says the same
+#: thing to boards.BoardLink.
+BRIDGED_BOARDS = bridged_board_ids()
 
 #: How far the device-derived time may drift from the host clock before the
 #: anchor is reset. Generous against real drift, which is parts per million,

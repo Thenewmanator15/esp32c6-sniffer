@@ -28,10 +28,12 @@ erase-flash ever has. Measured going in: 0 access points before, 12 after.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 
 import serial
 
+from esp32c6_sniffer import boards
 from esp32c6_sniffer.apscan import parse_ap_record
 from esp32c6_sniffer.control import Command, Radio, decode_reply, encode_command
 from esp32c6_sniffer.framing import FrameType
@@ -143,6 +145,15 @@ def main() -> int:
                          "and scan once more. Resets the board, so do not use "
                          "it while a capture is running")
     args = ap.parse_args()
+
+    # Refused before anything is sent. The first thing this does is
+    # power-cycle the C6's radio domain, which would reach the nRF54L15 as a
+    # command it answers with a timeout rather than a reason.
+    board = boards.board_on_port(args.port)
+    if board is not None and "wifi" not in board["radios"]:
+        print(f"The {board['display']} on {args.port} has no Wi-Fi radio; "
+              f"this survey needs the ESP32-C6.", file=sys.stderr)
+        return 2
 
     # Automatic rather than optional: if 802.15.4 has run since boot the
     # Wi-Fi receiver is deaf, and every scan would come back empty for a reason

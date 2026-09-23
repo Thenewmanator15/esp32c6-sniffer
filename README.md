@@ -418,6 +418,11 @@ at all, or be quiet and carry a network talking softly, so read them together.
 `tools/spectrum.py` runs the energy half alone and faster.
 `tools/antenna_compare.py` measures the two antennas against the same traffic.
 
+`--port` takes either board: the survey, spectrum and BLE survey recognise
+the nRF54L15 by its USB id and talk to it at its own line rate. The Wi-Fi
+survey needs the ESP32-C6, and says so if given the nRF54L15, which has no
+Wi-Fi radio.
+
 For Wi-Fi, `tools/wifi_survey.py` asks the receiver what it can identify rather
 than measuring energy, and prints access points with their channel, signal,
 security and the 802.15.4 channels each one overlaps:

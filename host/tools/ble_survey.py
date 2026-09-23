@@ -25,6 +25,7 @@ import collections
 import threading
 import time
 
+from esp32c6_sniffer import boards
 from esp32c6_sniffer.adv import AddressType, parse_advertising_reports
 from esp32c6_sniffer.capture import CaptureSession
 from esp32c6_sniffer.control import Radio
@@ -79,7 +80,12 @@ def main() -> int:
     print(f"listening {args.seconds:.0f} s, "
           f"{'legacy' if args.legacy else 'extended'} passive scan", flush=True)
 
+    # Opened as the board on the port, not as a C6: the nRF54L15 needs its own
+    # line rate, its bridge handshake and its own firmware version.
+    board = (boards.board_on_port(args.port)
+             or boards.board_by_id("esp32c6"))
     with CaptureSession(args.port, channel=0, radio=Radio.BLE,
+                        board=board["id"], baud=board["baud"],
                         ble_phys=0 if args.legacy else 1) as session:
         original = session._build_record
 
