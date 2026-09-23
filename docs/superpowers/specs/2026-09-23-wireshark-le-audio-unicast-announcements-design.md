@@ -78,9 +78,14 @@ In `packet-bluetooth.c`, two new dissectors in the `btad_le_audio` protocol.
 |---|---|---|
 | `cas.announcement_type` | 1 | the same value string as `ascs.announcement_type` |
 
-Both announcement type fields share a single value string. The item text on
-the service data entry names the type, e.g. "ASCS: Targeted Announcement", so
-the packet list says something without expanding the tree.
+Both announcement type fields share a single value string. The protocol item
+names the service and the type, e.g. "ASCS, Targeted Announcement", so the
+tree says something without being expanded.
+
+The protocol was registered as "Bluetooth LE Audio Broadcast Announcements".
+Now that it covers unicast announcements too, this commit renames it to
+"Bluetooth LE Audio Announcements". The filter name, `bluetooth.le_audio`, does
+not change.
 
 ### 2. `BT Common: dissect TMAP and GMAP roles`
 
@@ -130,8 +135,9 @@ The Coordinated Set Identification Service requires the two most significant
 bits of prand to be `0` then `1`. Zephyr's `generate_prand` forces them that
 way. If they are anything else, the RSI raises expert info
 `btcommon.eir_ad.entry.rsi.bad_prand` (protocol, warning). If the length is
-not 6, only the parent field is shown, as today, and it raises
-`btcommon.eir_ad.entry.rsi.bad_length` (protocol, warning).
+not 6, only the parent field is shown, as today, and it raises the existing
+`btcommon.eir_ad.invalid_length` (protocol, warning) rather than a new
+expert info of its own.
 
 Resolving an RSI against a Set Identity Resolving Key is out of scope (below).
 
@@ -159,9 +165,10 @@ One pcapng file, added to `test/captures/`:
   `west flash --runner openocd --verify`, because NCS v3.4.0's openocd
   script leaves the end of the image unwritten. Captured by the ESP32-C6's
   BLE interface with extended scanning for 30 s, then trimmed with `tshark -Y`
-  to the sample's own advertising reports, about ten of them. Every other
-  device's frames are removed. The sample's address is random and belongs to
-  a throwaway build.
+  to the sample's own advertising reports, selected by its device name
+  "TMAP Peripheral", and cut to ten of them. Every other device's frames are
+  removed. The sample sets `CONFIG_BT_PRIVACY`, so its address is a
+  resolvable private address that rotates and identifies no board.
 
 Its advertising data, from the sample's source, carries all of these at once:
 
