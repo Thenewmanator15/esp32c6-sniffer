@@ -566,9 +566,13 @@ the unchanged sample boots and advertises.)
 **Where a sync leads differs by board.** A periodic train carrying an Auracast
 broadcast also carries BIGInfo: the announcement of the isochronous group the
 audio itself travels in. The nRF54L15 reads it and joins that group, and the
-audio arrives as ISO packets which Wireshark's HCI dissector reads like
-anything else. The C6 stops at the announcement, and cannot do otherwise —
-see [the ceilings](#honest-capability-ceilings).
+audio should arrive as ISO packets which Wireshark's HCI dissector reads like
+anything else — should, because it has not been seen on air: until
+2026-09-24 the nRF54L15 dropped every ISO packet (a deprecated Zephyr helper
+typed incoming buffers as outgoing), and since the fix no second LE Audio
+broadcaster has been on the bench to prove it. The C6 stops at the
+announcement, and cannot do otherwise — see
+[the ceilings](#honest-capability-ceilings).
 
 The C6 is Bluetooth 5.0 LE, certified to 5.3. Bluetooth 6.0 features such as
 Channel Sounding are not present in this silicon: its `soc_caps.h` defines
