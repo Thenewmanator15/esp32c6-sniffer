@@ -277,6 +277,23 @@ than a key inside the file:
 .\.venv\Scripts\python.exe tools\thread_key.py --key <32 hex digits>
 ```
 
+**Bluetooth Mesh**, for a network you own, is decrypted by Wireshark's own Mesh
+dissector on the BLE interface. The keys cannot travel inside the capture:
+pcapng has a key block for Zigbee but none for Mesh. So they go into
+Wireshark's table instead: *Edit › Preferences › Protocols › BT Mesh*, the
+*Network and Application keys* table, one row per network with its network
+key, application key and IV index. Every value needs a `0x` prefix, or the row
+is refused. From the command line:
+
+```
+tshark -o 'uat:btmesh_nw_keys:"0x<network key>","0x<application key>","0x<IV index>"' -r capture.pcapng
+```
+
+Checked against a test network of our own (Zephyr's `mesh_demo` on the
+nRF54L15): without the keys a message is only obfuscated bytes. With them,
+every heartbeat decrypted to its source, destination, sequence number and
+features.
+
 **Wi-Fi** payloads stay encrypted. WPA2 can be decrypted in Wireshark with the
 passphrase, but only for sessions whose four-way handshake you captured, which
 means capturing at the moment a device joins.
