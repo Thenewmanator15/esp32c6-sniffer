@@ -510,6 +510,22 @@ time-shares between the PHYs it scans, so adding Coded costs 1M coverage. There
 is also a legacy-only setting, which exists so the difference can be measured
 rather than asserted.
 
+Measured with a long-range advertiser made for the purpose (NCS's
+`peripheral_hr_coded` on the XIAO nRF54L15, Coded primary and secondary PHY),
+20 s per setting, one round each:
+
+| Setting | 1M reports | Coded reports |
+|---|---|---|
+| 1M | 419 | 0: the long-range advertiser is invisible |
+| Coded | 0 | 182 |
+| 1M and Coded | 241 | 90 |
+
+So Coded is the only way to see such a device, and scanning both costs each PHY
+a large share of its reports: 1M kept 58% of them, Coded 49%. Wireshark labels the reports' primary and
+secondary PHY as LE Coded; whether a packet used S=2 or S=8 coding is not in the
+report, so it cannot be told apart. No Coded advertiser other than the test one
+was in range.
+
 Measured: 446 HCI packets in 20 s, every one dissected as an LE Advertising
 Report, five distinct advertisers.
 
