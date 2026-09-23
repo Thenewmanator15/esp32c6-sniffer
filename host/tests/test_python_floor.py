@@ -30,7 +30,8 @@ def test_ci_tests_the_declared_floor():
     text = (REPO / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8")
     m = re.search(r"^\s*python:\s*\[([^\]]*)\]", text, re.M)
     assert m, "tests.yml has no python matrix"
-    versions = [tuple(int(p) for p in v.strip().strip("\"'").split("."))
+    # "3.14t" is 3.14's free-threaded build: the same version for the floor.
+    versions = [tuple(int(p) for p in v.strip().strip("\"'").rstrip("t").split("."))
                 for v in m.group(1).split(",")]
     assert min(versions) == _floor(), (
         f"tests.yml tests {versions}, but the declared floor is {_floor()}")

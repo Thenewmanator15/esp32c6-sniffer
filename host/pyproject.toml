@@ -15,6 +15,9 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    # Tested on 3.14t in CI; cross-thread state goes through locks. Not
+    # audited beyond that, hence Beta rather than Stable.
+    "Programming Language :: Python :: Free Threading :: 2 - Beta",
     "Topic :: System :: Networking :: Monitoring",
 ]
 dependencies = ["pyserial>=3.5"]

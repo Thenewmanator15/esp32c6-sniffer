@@ -38,7 +38,12 @@ jobs:
         # did: the floor said 3.10 while the code needed 3.12, and this job
         # was red from its first run. test_python_floor.py now holds the two
         # together.
-        python: ["3.12", "3.14"]
+        #
+        # 3.14t is the free-threaded build, with no GIL. Nothing here needs it
+        # -- one capture stream runs some 170 times below what one thread can
+        # parse -- but the plugin does run threads beside the capture, and this
+        # keeps a change that is only safe under the GIL from arriving unseen.
+        python: ["3.12", "3.14", "3.14t"]
 
     steps:
       # Both repositories side by side, as on a developer's machine. The stats
