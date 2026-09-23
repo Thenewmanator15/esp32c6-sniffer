@@ -2,7 +2,7 @@
 name = "esp32c6-sniffer"
 version = "0.1.0"
 description = "Passive tri-radio wireless sniffer on an ESP32-C6, streaming into Wireshark"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = "MIT"
 license-files = ["../LICENSE"]
 authors = [{ name = "Mathew Newman" }]

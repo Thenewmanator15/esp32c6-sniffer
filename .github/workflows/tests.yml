@@ -34,22 +34,38 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-latest]
         # The floor declared in host/pyproject.toml, and the current release.
-        # Testing only the newest would let the declared floor rot.
-        python: ["3.10", "3.13"]
+        # Testing only the newest would let the declared floor rot -- and it
+        # did: the floor said 3.10 while the code needed 3.12, and this job
+        # was red from its first run. test_python_floor.py now holds the two
+        # together.
+        python: ["3.12", "3.14"]
 
     steps:
+      # Both repositories side by side, as on a developer's machine. The stats
+      # layout tests read the nRF54L15 firmware's own headers from a sibling
+      # checkout and skip without one, so here they always skipped -- and they
+      # are what caught the nRF padding its Wi-Fi block to the wrong width.
+      # The sibling is the nRF repository's main, so a change there that
+      # breaks the shared layout turns this red on the next run.
       - uses: actions/checkout@v4
+        with:
+          path: esp32c6-sniffer
+
+      - uses: actions/checkout@v4
+        with:
+          repository: Thenewmanator15/nrf54l15-sniffer
+          path: nrf54l15-sniffer
 
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
 
       - name: Install the host package
-        working-directory: host
+        working-directory: esp32c6-sniffer/host
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
 
       - name: Run the suite
-        working-directory: host
+        working-directory: esp32c6-sniffer/host
         # Explicit rather than relying on the hardware tests to skip
         # themselves. They do skip, but a deselect says what was intended.
         run: python -m pytest -q -m "not hardware"

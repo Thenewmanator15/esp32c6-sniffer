@@ -50,7 +50,7 @@ Linux / macOS:
 
 The installer creates a Python environment beside the plugin, installs the
 bundled wheel into it, and points Wireshark's launcher at it. Nothing is
-installed into your system Python. Python 3.10 or newer must be on PATH.
+installed into your system Python. Python 3.12 or newer must be on PATH.
 
 Then restart Wireshark. The interfaces appear on the welcome screen.
 

@@ -29,7 +29,7 @@ when nothing arrives.
 | Board | Seeed Studio **XIAO ESP32-C6**. Nothing else is needed; the antenna is onboard. A U.FL antenna is optional and measured +13 to +14 dB better. |
 | Cable | USB-C, **data-capable**. A charge-only cable enumerates nothing and looks exactly like a dead board. |
 | Toolchain | **ESP-IDF v6.1 or later**, to build the firmware once. Not needed afterwards, and not needed at all if you [install from a release](#install-from-a-release). |
-| Host | **Python 3.10+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. Matter dissection additionally needs **4.2 or later**, the release that introduced it. |
+| Host | **Python 3.12+** and **Wireshark 4.x**, on Windows, Linux or macOS. Npcap is *not* required: frames arrive over USB, not from a network adapter. Matter dissection additionally needs **4.2 or later**, the release that introduced it. |
 
 On ESP-IDF v6.0.2 the Wi-Fi receiver on this board hears nothing even with the
 RF switch driven correctly. That is measured, not folklore, and it is why the

@@ -66,7 +66,19 @@ mkdir -p "$extcap_dir/lib"
 wheel="$(ls "$here"/esp32c6_sniffer-*.whl 2>/dev/null | head -n1 || true)"
 from_wheel=0
 
+# The plugin's floor is host/pyproject.toml's requires-python. An older
+# interpreter installs without complaint and then fails to load inside
+# Wireshark, where nobody sees the error, so it is refused here instead.
+require_python_floor() {
+    if ! "$1" -c 'import sys; sys.exit(sys.version_info < (3, 12))'; then
+        echo "$2 is $("$1" -V 2>&1); the plugin needs Python 3.12 or newer." >&2
+        echo "Install it (in a clone, rebuild host/.venv with it), then re-run." >&2
+        exit 1
+    fi
+}
+
 if [[ -x "$venv_python" ]]; then
+    require_python_floor "$venv_python" "The project's environment ($venv_python)"
     interpreter="$venv_python"
     [[ -d "$package" ]] || { echo "Package not found at $package" >&2; exit 1; }
     # Installing from a clone over a previous release install leaves that
@@ -79,9 +91,10 @@ if [[ -x "$venv_python" ]]; then
 elif [[ -n "$wheel" ]]; then
     bootstrap="$(command -v python3 || command -v python || true)"
     if [[ -z "$bootstrap" ]]; then
-        echo "No python3 found on PATH. Install Python 3.10 or newer, then re-run." >&2
+        echo "No python3 found on PATH. Install Python 3.12 or newer, then re-run." >&2
         exit 1
     fi
+    require_python_floor "$bootstrap" "The Python on PATH ($bootstrap)"
     echo "creating $target_venv"
     "$bootstrap" -m venv "$target_venv"
     interpreter="$target_venv/bin/python"

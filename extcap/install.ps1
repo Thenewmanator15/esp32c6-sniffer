@@ -55,12 +55,24 @@ if ($Uninstall) {
 
 New-Item -ItemType Directory -Force -Path $extcapDir | Out-Null
 
+# The plugin's floor is host/pyproject.toml's requires-python. An older
+# interpreter installs without complaint and then fails to load inside
+# Wireshark, where nobody sees the error, so it is refused here instead.
+function Assert-PythonFloor([string]$exe, [string]$what) {
+    & $exe -c "import sys; sys.exit(sys.version_info < (3, 12))"
+    if ($LASTEXITCODE -ne 0) {
+        $found = (& $exe -c "import sys; print('%d.%d' % sys.version_info[:2])") -join ''
+        throw "$what is Python $found; the plugin needs Python 3.12 or newer. Install it from python.org (in a clone, rebuild host\.venv with it), then re-run this script."
+    }
+}
+
 # Which layout is this? The repository's virtual environment wins where it
 # exists, so a developer's install keeps working exactly as before.
 $wheel = Get-ChildItem -Path $PSScriptRoot -Filter 'esp32c6_sniffer-*.whl' -ErrorAction SilentlyContinue |
          Select-Object -First 1
 
 if (Test-Path $venvPython) {
+    Assert-PythonFloor $venvPython "The project's environment ($venvPython)"
     $interpreter = $venvPython
     $fromWheel = $false
     if (-not (Test-Path $package)) { throw "Package not found at $package" }
@@ -79,8 +91,9 @@ if (Test-Path $venvPython) {
     $bootstrap = (Get-Command py, python3, python -ErrorAction SilentlyContinue |
                   Select-Object -First 1).Source
     if (-not $bootstrap) {
-        throw "No Python found on PATH. Install Python 3.10 or newer from python.org, then re-run this script."
+        throw "No Python found on PATH. Install Python 3.12 or newer from python.org, then re-run this script."
     }
+    Assert-PythonFloor $bootstrap "The Python on PATH ($bootstrap)"
     Write-Host "creating $targetVenv"
     & $bootstrap -m venv $targetVenv
     if ($LASTEXITCODE -ne 0) { throw "could not create a virtual environment at $targetVenv" }

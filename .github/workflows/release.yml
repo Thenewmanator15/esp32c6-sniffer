@@ -85,7 +85,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install the host package
         working-directory: host
@@ -161,7 +161,7 @@ jobs:
           2. Unpack \`esp32c6-sniffer-plugin-$version.zip\` and run \`install.ps1\`
              (Windows) or \`install.sh\` (Linux/macOS). It builds its own Python
              environment from the bundled wheel and leaves your system Python
-             alone. Python 3.10 or newer must be on PATH.
+             alone. Python 3.12 or newer must be on PATH.
           3. Restart Wireshark. The interfaces appear on the welcome screen.
 
           ## Flash an ESP32-C6
