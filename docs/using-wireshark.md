@@ -133,10 +133,18 @@ empty room. If the controller ever refuses a sync the line says that too, and
 it is worth reporting: it means the firmware and the controller disagree about
 how many syncs there are to give.
 
-The ESP32-C6 stops at the announcement. It will report the BIGInfo describing
-an Auracast broadcast and cannot receive the audio, because isochronous
-channels are absent from the part — the nRF54L15 is the board that goes
-further. See [the capability ceilings](../README.md#honest-capability-ceilings).
+The ESP32-C6 stops at the announcement. It follows an Auracast broadcast's
+train, but its controller never reports the BIGInfo describing the isochronous
+group, and it cannot receive the audio, because isochronous channels are absent
+from the part — the nRF54L15 is the board that goes further. See
+[the capability ceilings](../README.md#honest-capability-ceilings).
+
+What Wireshark makes of the nRF54L15's extra steps, checked against Wireshark
+4.6.8 with hand-built packets: the BIGInfo report is decoded in full, from the
+number of streams to the PHY and encryption. The audio arrives as HCI ISO
+packets, whose header is decoded: connection handle, timestamp, sequence
+number, SDU length and status. The audio itself is shown as bytes. Wireshark
+4.6 has no LC3 decoder, so it can neither interpret nor play the sound.
 
 ## The toolbar: retuning without restarting
 

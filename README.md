@@ -815,9 +815,11 @@ Neither board follows a connection: this is a scanner, not a link-layer
 sniffer. Two further BLE ceilings are silicon rather than configuration, and
 neither of them moves.
 
-**The C6 cannot capture LE Audio.** It sees the periodic train announcing an
-Auracast broadcast and reports the BIGInfo describing the group, and there it
-stops: isochronous channels are absent from the part. ESP-IDF's `soc_caps.h`
+**The C6 cannot capture LE Audio.** It follows the periodic train announcing an
+Auracast broadcast, and there it stops. Its controller does not even report the
+BIGInfo describing the isochronous group: following a real broadcast for 30 s
+gave 482 periodic reports and not one BIGInfo report, with every LE event
+unmasked. Isochronous channels are absent from the part. ESP-IDF's `soc_caps.h`
 defines `SOC_BLE_ISO` for the C5, C61, H2, H21 and H4, and not for the C6.
 The nRF54L15 takes the next step, syncing to the group and forwarding the
 stream itself.
