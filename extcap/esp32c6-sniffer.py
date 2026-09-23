@@ -103,10 +103,10 @@ HOP_DWELL_MAX_MS = 10000
 #: for, and no way to tell which one a network is on without looking.
 #:
 #: Keyed by RADIO, and looked up through hop_sets(), never by interface name.
-#: Keyed by the C6's names, hopping existed only while it was the one board
-#: attached: a second board makes Wireshark name every interface with its
-#: port, and the option vanished -- or, for Wi-Fi, was offered and then
-#: refused. The nRF54L15 never had it.
+#: Keyed by the C6's names, the nRF54L15 had no hopping at all -- its
+#: interfaces are named for their board -- though it retunes mid-capture as
+#: readily as the C6 does. (A port-qualified name never reaches this table:
+#: main() splits the port off first. hop_sets() accepts one anyway.)
 HOP_SETS = {
     "wifi": {
         0: None,
@@ -661,7 +661,11 @@ def print_config(interface: str, reload_option: str | None = None,
         print("value {arg=2}{value=0}{display=Onboard ceramic}")
         print("value {arg=2}{value=1}{display=External U.FL}")
 
-    if interface == INTERFACE:
+    # Every board's 802.15.4 interface. This once tested the name against the
+    # C6's, so the nRF54L15 offered none of these options -- no key file, no
+    # Thread credentials, no channel hop -- though the capture handles all
+    # three the same way on either board.
+    if radio_kind(interface) == "802154":
         print("arg {number=3}{call=--keys}{display=Zigbee key file}"
               "{type=fileselect}{fileext=Key files (*.txt)}"
               "{tooltip=Records Zigbee network keys IN the capture, in a "
@@ -681,11 +685,6 @@ def print_config(interface: str, reload_option: str | None = None,
               "A dataset also carries the channel, and the capture moves to "
               "it, because the wrong channel gives an empty capture that "
               "looks exactly like a wrong key. For a network you own}")
-
-    if radio_kind(interface) == "802154":
-        # Every board's 802.15.4 interface, alone or port-qualified. The key
-        # and credential options above are still the C6's alone.
-        #
         # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
         # 100 ms on a handful of channels, so a survey finds the traffic in
         # seconds. Here there are sixteen channels, nothing announces itself,

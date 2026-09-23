@@ -10,12 +10,14 @@ Verified live: a 40 s capture hopping the Zigbee preferred set visited
 channels 11, 15 and 25 in one file.
 
 The sets are looked up by RADIO, not by interface name. They were once keyed
-by the ESP32-C6's bare names, so hopping existed only while that board was the
-only one attached: plug in a second board and Wireshark names every interface
-with its port, the option vanished from the dialog, and the capture refused
-the set it had just offered. The nRF54L15 never had it at all. Two boards
-sweeping half the band each -- the fastest way to find a quiet network -- was
-the one setup that could not work.
+by the ESP32-C6's names, so the nRF54L15 -- whose interfaces are named for
+their board -- had no hopping at all, and two boards sweeping half the band
+each, the fastest way to find a quiet network, could not be set up.
+
+A port-qualified name ("esp32c6-802154@COM3") is split by main() before any
+of this is asked, so it never reached the old table and was never the fault.
+It is tested here anyway, because hop_sets() accepts either form and should
+go on doing so.
 """
 
 import importlib.util

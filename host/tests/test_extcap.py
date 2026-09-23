@@ -425,6 +425,30 @@ def test_thread_credentials_are_offered_on_802154_only():
                                       "--extcap-interface", other)
 
 
+@pytest.mark.parametrize("interface", [
+    "esp32c6-802154", "esp32c6-802154@COM3",
+    "nrf54l15-802154", "nrf54l15-802154@COM4",
+])
+def test_key_and_credential_options_follow_the_radio_not_the_name(interface):
+    """Both options were once shown only for the name "esp32c6-802154", so the
+    nRF54L15's 802.15.4 interface never offered them, though the capture
+    handles both files the same way whatever the board: the keys go into the
+    capture, the credentials into Wireshark's key table. The port-qualified
+    forms are here because that is what Wireshark sends with both boards
+    attached."""
+    config = _run("--extcap-config", "--extcap-interface", interface)
+    assert "{call=--keys}" in config, interface
+    assert "{call=--thread}" in config, interface
+
+
+@pytest.mark.parametrize("interface", [
+    "esp32c6-wifi@COM3", "esp32c6-ble@COM3", "nrf54l15-ble", "nrf54l15-ble@COM4",
+])
+def test_key_and_credential_options_stay_off_other_radios(interface):
+    config = _run("--extcap-config", "--extcap-interface", interface)
+    assert "--keys" not in config and "--thread" not in config, interface
+
+
 def test_thread_credentials_are_taken_as_a_path_not_a_value():
     """A key passed as an option value reaches the process list and
     Wireshark's saved configuration; a path does not."""
