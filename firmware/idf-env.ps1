@@ -119,6 +119,42 @@ Or point somewhere they already are:  . .\idf-env.ps1 -IdfToolsPath <path>
 $env:IDF_PATH       = $found
 $env:IDF_TOOLS_PATH = $IdfToolsPath
 
+# ESP-IDF's export chooses its Python environment by the version of whatever
+# `python` is first on PATH, and only the version it was installed with has
+# one. Change the default Python and export stops, asking for an environment
+# named after the new version that was never made: installing Python 3.14 as
+# the default did exactly that here, with ESP-IDF 6.1 set up on 3.13.
+#
+# So when the default has no environment for this ESP-IDF, the Python that
+# does is put first on PATH -- for this shell only. The default is left alone:
+# other things on the machine chose it.
+$version = Get-Content (Join-Path $found 'tools\cmake\version.cmake') -ErrorAction SilentlyContinue |
+    Select-String 'IDF_VERSION_(MAJOR|MINOR) (\d+)' | ForEach-Object { $_.Matches[0].Groups[2].Value }
+$idfTag = if ($version.Count -eq 2) { "idf$($version[0]).$($version[1])" } else { 'idf*' }
+$idfEnvs = @(Get-ChildItem (Join-Path $IdfToolsPath 'python_env') -Directory -Filter "${idfTag}_py*_env" -ErrorAction SilentlyContinue)
+$current = & python -c "import sys; print('%d.%d' % sys.version_info[:2])" 2>$null
+if ($idfEnvs -and -not ($idfEnvs | Where-Object { $_.Name -eq "${idfTag}_py${current}_env" })) {
+    $pinned = $null
+    foreach ($envDir in ($idfEnvs | Sort-Object Name -Descending)) {
+        if ($envDir.Name -notmatch '_py(\d+\.\d+)_env$') { continue }
+        $exe = & py "-V:$($Matches[1])" -c "import sys; print(sys.executable)" 2>$null
+        if ($LASTEXITCODE -eq 0 -and $exe) {
+            $env:PATH = (Split-Path $exe) + ';' + $env:PATH
+            $pinned = $Matches[1]
+            Write-Host "Python $current is the default, but this ESP-IDF is installed for $pinned; using $pinned in this shell."
+            break
+        }
+    }
+    if (-not $pinned) {
+        throw @"
+This ESP-IDF's Python environments are for: $($idfEnvs.Name -join ', ')
+The default Python is $current, and none of those versions is installed.
+Install one of them (py install <version>), or give ESP-IDF an environment for
+$current by running its installer:  & "$found\install.ps1" esp32c6
+"@
+    }
+}
+
 & "$found\export.ps1"
 
 Write-Host ""
