@@ -146,6 +146,19 @@ packets, whose header is decoded: connection handle, timestamp, sequence
 number, SDU length and status. The audio itself is shown as bytes. Wireshark
 4.6 has no LC3 decoder, so it can neither interpret nor play the sound.
 
+**Large advertisements arrive in pieces.** Advertising data longer than one
+report — a big extended advertisement, or a large periodic train such as a
+multi-language Auracast announcement — reaches Wireshark as a chain of
+reports, each holding part of it. Measured with a test advertiser sending
+1,008 bytes, both kinds took nine reports, and every complete chain carried
+the sent bytes exactly; a few ended truncated (15 of 274 extended chains, 3 of
+282 periodic), which is the controller giving up, not a capture fault.
+Wireshark 4.6 decodes each piece of an extended advertisement as if it were
+whole, so a chained one shows as a run of malformed packets, 2,381 of 2,396
+pieces in that test: the data is intact, the decoding is not. A patch that
+reassembles periodic chains is being prepared for upstream Wireshark;
+extended ones are not yet covered.
+
 ## The toolbar: retuning without restarting
 
 Turn it on with **View → Interface Toolbars → ESP32-C6**. It gives you:
