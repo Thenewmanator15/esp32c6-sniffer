@@ -101,10 +101,13 @@ and adapter ids:
 - **0x00 with no earlier pieces:** decoded directly, as a single report.
 - **0x02:** the controller has abandoned the chain. The pieces gathered so far
   are discarded, the report's bytes stay raw, and expert info
-  `bthci_evt.periodic_data_truncated` (protocol, warning) says the data is
+  `bthci_evt.expert.periodic_data_truncated` (protocol, warning) says the data is
   incomplete. No malformed packet is reported.
 - **Data length 0** (for example Data Status 0xFF, failed to receive) adds an
   empty `hf_bthci_evt_data`, as today.
+- **LE Periodic Advertising Sync Lost** (0x10) for a handle discards any pieces
+  gathered on it: a lost sync ends its chain without a closing report, and a
+  later sync may be given the same handle.
 
 The PAwR response report case upstream hands data to the AD parser whatever
 the Data Status; that is not changed here.
@@ -248,7 +251,7 @@ A new class `TestDissectBluetoothLeAudio`. Each test runs `tshark -T fields` or
 5b. A BASE split across two hand-built reports (0x01 then 0x00) decodes in
    the second frame exactly as an unsplit one does.
 5c. A chain ended by Data Status 0x02 raises
-   `bthci_evt.periodic_data_truncated`, with no `_ws.malformed`, and the next
+   `bthci_evt.expert.periodic_data_truncated`, with no `_ws.malformed`, and the next
    single Complete report on the same sync handle decodes on its own.
 5d. Two sync handles interleaving their pieces reassemble separately, each to
    its own data.
