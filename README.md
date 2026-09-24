@@ -711,11 +711,21 @@ reports this honestly as "Encrypted Payload" and "No encryption key set".
 
 ### Decrypting your own network
 
-`install.ps1` does not touch keys, but the project adds the well-known default
-Zigbee Trust Center link key to `%APPDATA%\Wireshark\zigbee_pc_keys`. That key
-is public and ships with every Zigbee analyser. It does **not** decrypt
-arbitrary traffic: it only lets Wireshark read the key-transport message sent
-when a device joins, and derive that network's key from it.
+The installers do not touch keys, and Wireshark does not carry the well-known
+default Zigbee Trust Center link key itself, so add it once. Put this line in
+`%APPDATA%\Wireshark\zigbee_pc_keys` (on Linux and macOS,
+`~/.config/wireshark/zigbee_pc_keys`), creating the file if it is not there:
+
+```
+"5A6967426565416C6C69616E63653039","Normal","ZigBeeAlliance09"
+```
+
+That key is public, "ZigBeeAlliance09" in ASCII, and ships with every Zigbee
+analyser. It does **not** decrypt arbitrary traffic: it only lets Wireshark
+read the key-transport message sent when a device joins, and derive that
+network's key from it. It is not shipped inside a profile on purpose: the
+installers overwrite a profile's files, and would replace any Zigbee keys of
+your own kept beside it.
 
 To read your own Zigbee network, start a capture on its channel and put a
 device into pairing mode. Wireshark picks up the network key from the join and
