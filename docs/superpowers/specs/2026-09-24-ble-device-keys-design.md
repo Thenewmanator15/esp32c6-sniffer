@@ -128,8 +128,10 @@ more entries than that, and logs the refusal. The host enforces the same limit
 first, from the board table, so the user is told in Wireshark before anything
 is sent.
 
-**Versions.** The C6 firmware goes to 7 and the nRF firmware to 4. Both
-firmwares silently ignore a frame type they do not know. Without a version
+**Versions.** Each firmware takes the next free version number when this is
+implemented: currently the C6's would be 7. The nRF's 4 is already claimed by
+another piece of work, an 802.15.4 FCS-failure counter, so it would be 5.
+Both firmwares silently ignore a frame type they do not know. Without a version
 check, a key file sent to older firmware would give a capture that looks normal
 but never resolves, and a filtered one would be empty.
 
@@ -187,8 +189,8 @@ wrong type changes nothing but the label Wireshark shows, because the
 resolving list and the filter both take it from the same line.
 
 **`boards.py`:** each board gains `ble_keys` (its resolving list size: 5 and 8)
-and `ble_keys_firmware` (the first firmware version that understands the frame:
-7 and 4).
+and `ble_keys_firmware` (the first firmware version that understands the frame,
+per Versions above).
 
 **`CaptureSession`:**
 
