@@ -112,6 +112,10 @@ and adapter ids:
   0x18/0x26) discards any pieces on its handle too. A sync the host ends with
   Terminate Sync produces no Sync Lost event, and the next sync is often given
   the same handle (found in review on 2026-09-24).
+- **A report declaring more data than the event carries** is malformed and
+  reported as such, but it first discards its chain. The reassembly would
+  otherwise ignore it and leave the chain open for the next report to join.
+  The Truncated path drops its chain before its data item for the same reason.
 
 The PAwR response report case upstream hands data to the AD parser whatever
 the Data Status; that is not changed here.
