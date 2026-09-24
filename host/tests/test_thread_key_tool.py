@@ -67,3 +67,16 @@ def test_an_unreadable_child_table_is_refused_with_its_reason(tool, tmp_path, mo
     monkeypatch.setattr(sys, "argv", ["thread_key.py", "--child-table", str(table), "--pan", "0x1234"])
     assert tool.main() != 0
     assert "64-bit address" in capsys.readouterr().err
+
+
+def test_listing_the_tables_never_prints_a_key(tool, tmp_path, monkeypatch, capsys):
+    """The docstring promises nothing here ever prints the key; --list did."""
+    from esp32c6_sniffer.thread import install_key
+    key = bytes(range(16))
+    install_key(key, root=tmp_path / "Wireshark")
+    install_key(key, root=tmp_path / "wireshark")
+    monkeypatch.setattr(sys, "argv", ["thread_key.py", "--list"])
+    assert tool.main() == 0
+    out = capsys.readouterr().out
+    assert key.hex() not in out.lower()
+    assert "1 key" in out

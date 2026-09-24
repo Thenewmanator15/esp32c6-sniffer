@@ -133,8 +133,13 @@ def main() -> int:
             found = read_entries(table)
             if not found:
                 print("  no keys installed")
+                continue
+            # Counted, never shown: the key is the whole secret.
+            print(f"  {len(found)} key{'' if len(found) == 1 else 's'} installed")
             for entry in found:
-                print(f"  {entry}")
+                fields = [f.strip().strip('"') for f in entry.split(",")]
+                detail = ", ".join(fields[1:]) if len(fields) > 1 else "unreadable entry"
+                print(f"    key hidden ({detail})")
         if not args.key and not args.key_file:
             print()
             print("Pass --key-file <path> to install one. See the module")
