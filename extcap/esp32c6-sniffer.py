@@ -1033,7 +1033,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                              + s.fw_frames_dropped_ringfull
                              + s.sequence_gaps),
                     start_time_s=capture_started,
-                    end_time_s=time.time())
+                    end_time_s=time.time(),
+                    comment=s.fcs_failure_note())
                 writer.flush()
             except Exception:
                 # Wireshark closing first makes this a broken pipe. For the
@@ -1207,6 +1208,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                         # for the same reason. A reader takes the last one.
                         write_statistics(s)
                         extra = ""
+                        corrupt = s.fcs_failure_note()
+                        if corrupt:
+                            # The nRF54L15 only: frames heard and thrown away
+                            # for a bad FCS. Not loss -- never received -- so
+                            # it rides beside the loss report, not inside it.
+                            extra += f", {corrupt}"
                         if s.fw_recoveries:
                             # A workaround for a fault that is not ours, so it
                             # is surfaced rather than hidden.

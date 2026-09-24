@@ -22,8 +22,10 @@ the failure, not the bytes.
   `IEEE802154_RX_FAIL_INVALID_FCS`, atomically, since the driver may call it
   from interrupt context. Other reasons (not received, address filtered) are
   not counted: the first is the radio's ordinary listening, the second cannot
-  happen in promiscuous mode. The counter resets when the radio starts, as
-  the captured counter does, and is read with `sn_radio154_fcs_failed()`.
+  happen in promiscuous mode. It is read with `sn_radio154_fcs_failed()`.
+  Like the captured counter beside it, it counts from boot. It does **not**
+  reset when the radio starts, because changing channel mid-capture calls the
+  same start function.
 - `src/main.c`: `struct sn_stats_full` gains `uint32_t fcs_failed` as its last
   member, after the BLE block. Appended, never inserted, because the host reads
   the STATS frame by position and tells tiers apart by length.
@@ -65,4 +67,17 @@ the failure, not the bytes.
 
 - Capturing the corrupt frames' bytes. The driver does not hand them over; that
   would need a raw radio driver, the same work as following BLE connections.
-- Per-channel counts during channel hopping. The counter is per capture.
+- Per-channel counts during channel hopping: one count covers every channel.
+
+## Found while measuring: the nRF's counters run from boot
+
+The ESP32-C6 reboots whenever its serial port is opened, so every capture on it
+starts its counters from zero. The nRF54L15 sits behind a USB bridge and does
+not. So on a second capture without a reboot, every counter it sends carries
+the earlier capture's counts as well. Measured on 2026-09-25: a 20 s capture
+holding 104 frames wrote a statistics block claiming 509 received, and its
+FCS-failure count opened at 10. This predates the FCS counter; it applies to
+the captured, forwarded and dropped counts alike. Fixing it (resetting every
+counter when a capture's GET_INFO handshake arrives) touches the link, batch,
+802.15.4 and BLE counters, and is proposed separately rather than folded in
+here.

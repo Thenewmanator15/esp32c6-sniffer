@@ -96,7 +96,7 @@ MAX_CLOCK_SKEW_S = 60.0
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
     "esp32c6": 6,
-    "nrf54l15": 3,
+    "nrf54l15": 4,
 }
 
 #: How to reflash each board, quoted back to the operator on a mismatch.
@@ -170,15 +170,19 @@ _STATS_V4 = struct.Struct("<20I")
 # it, and then periodic_refused appended to the end of it.
 _STATS_BLE = struct.Struct("<31I")
 _STATS_V5 = struct.Struct("<32I")
+# The nRF54L15's firmware 4 appended the count of 802.15.4 frames its radio
+# discarded for a bad FCS. The ESP32-C6's driver cannot see those, so it sends
+# the 32-counter frame and the count stays unknown rather than zero.
+_STATS_V6 = struct.Struct("<33I")
 
 #: Widest first: the first tier the payload is long enough for wins, and
 #: counters a shorter firmware does not send read as zero. Every block has
 #: only ever been appended to, so length alone identifies how much arrived.
 #: Held as a table because the padding used to be counted by hand at each
 #: branch, which made appending a counter a chance to get it silently wrong.
-_STATS_TIERS = (_STATS_V5, _STATS_BLE, _STATS_V4, _STATS_V2, _STATS_FULL,
-                _STATS)
-_STATS_COUNTERS = _STATS_V5.size // 4
+_STATS_TIERS = (_STATS_V6, _STATS_V5, _STATS_BLE, _STATS_V4, _STATS_V2,
+                _STATS_FULL, _STATS)
+_STATS_COUNTERS = _STATS_V6.size // 4
 
 #: Where each radio's block begins, counting the blocks in front of it. Named
 #: rather than written into the slices because they were written into the
@@ -187,6 +191,9 @@ _STATS_COUNTERS = _STATS_V5.size // 4
 #: checks both against the firmware headers.
 _WIFI_BLOCK_AT = 8
 _BLE_BLOCK_AT = 21
+_BLE_BLOCK_END = _STATS_V5.size // 4
+#: The 802.15.4 FCS-failure count, after every block.
+_FCS_FAILED_AT = _BLE_BLOCK_END
 
 
 #: PHY formats that carry HE-SIG-A rather than HT-SIG.
@@ -244,6 +251,11 @@ class CaptureStats:
     fw_frames_captured: int = 0
     fw_isr_queue_full: int = 0
     fw_link_rejected: int = 0
+    # 802.15.4 frames the radio heard and discarded for a bad FCS. None when
+    # the board does not measure it (the ESP32-C6's driver cannot), so "not
+    # measured" is never shown as a reassuring zero. Not loss: these frames
+    # were never received, and `lossless` is about delivering what was.
+    fw_fcs_failed: int | None = None
     fw_frames_dropped_ringfull: int = 0
     fw_tx_stalls: int = 0
     # Wi-Fi only. Truncation is deliberate, set by the snapshot length, so it
@@ -287,6 +299,13 @@ class CaptureStats:
     #: Times the device clock had to be re-pinned to the host clock, because
     #: the board's counter restarted or a timestamp was corrupt.
     timestamp_reanchors: int = 0
+
+    def fcs_failure_note(self) -> str | None:
+        """What the board said about corrupt frames, or None if it cannot say."""
+        if self.fw_fcs_failed is None:
+            return None
+        return (f"{self.fw_fcs_failed} frames failed their FCS at the radio "
+                f"and were not captured")
 
     @property
     def lossless(self) -> bool:
@@ -931,6 +950,7 @@ class CaptureSession:
         for tier in _STATS_TIERS:
             if len(payload) >= tier.size:
                 values = tier.unpack_from(payload)
+                sent = len(values)
                 values += (0,) * (_STATS_COUNTERS - len(values))
                 break
         else:
@@ -977,13 +997,15 @@ class CaptureSession:
                 self.stats.fw_ble_periodic_synced,
                 self.stats.fw_ble_periodic_reports,
                 self.stats.fw_ble_periodic_refused,
-            ) = values[_BLE_BLOCK_AT:_STATS_COUNTERS]
+            ) = values[_BLE_BLOCK_AT:_BLE_BLOCK_END]
         else:
             (
                 self.stats.fw_frames_captured,
                 self.stats.fw_isr_queue_full,
                 self.stats.fw_link_rejected,
             ) = values[5:8]
+            self.stats.fw_fcs_failed = (values[_FCS_FAILED_AT]
+                                        if sent > _FCS_FAILED_AT else None)
 
     def _build_record(self, payload: bytes):
         """Turns one PACKET payload into

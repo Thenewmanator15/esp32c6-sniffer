@@ -144,3 +144,16 @@ def test_the_nrf_pads_the_wifi_block_to_the_c6s_width():
     widths = re.findall(r"uint32_t\s+wifi\[(\d+)\]\s*;", nrf_stats_frame())
     assert len(widths) == 1, "expected one wifi[] padding array"
     assert int(widths[0]) == len(blocks()["wifi"])
+
+
+@pytest.mark.skipif(not NRF_MAIN.exists(),
+                    reason="the nRF54L15 firmware is a separate repository")
+def test_the_nrf_appends_its_fcs_failure_count_where_the_host_reads_it():
+    """nRF firmware 4 appended one counter after the BLE block: frames its
+    radio discarded for a bad FCS. Appended, because everything is read by
+    position; one counter, because the host reads exactly one there."""
+    from esp32c6_sniffer.capture import _FCS_FAILED_AT, _STATS_V6
+    after_ble = nrf_stats_frame().split("struct sn_ble_stats ble;", 1)[1]
+    assert re.findall(r"uint32_t\s+(\w+)\s*;", after_ble) == ["fcs_failed"]
+    assert _STATS_V6.size // 4 == _STATS_V5.size // 4 + 1
+    assert _FCS_FAILED_AT == _STATS_V5.size // 4

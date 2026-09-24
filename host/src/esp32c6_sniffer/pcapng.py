@@ -219,6 +219,7 @@ class PcapngWriter:
         dropped: int | None = None,
         start_time_s: float | None = None,
         end_time_s: float | None = None,
+        comment: str | None = None,
     ) -> None:
         """Records what the interface saw and what it lost.
 
@@ -229,6 +230,10 @@ class PcapngWriter:
         high, low = self._timestamp(end_time_s or 0.0)
         body = struct.pack("<III", 0, high, low)
         options = b""
+        if comment:
+            # What the board measured that is not a drop, such as frames its
+            # radio discarded as corrupt: said in the file, not only the log.
+            options += _option(OPT_COMMENT, comment.encode("utf-8"))
         if start_time_s is not None:
             hi, lo = self._timestamp(start_time_s)
             options += _option(ISB_STARTTIME, struct.pack("<II", hi, lo))

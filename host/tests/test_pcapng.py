@@ -198,6 +198,23 @@ def test_zero_drops_are_recorded_rather_than_omitted():
     assert 5 in opts and struct.unpack("<Q", opts[5])[0] == 0
 
 
+def test_statistics_can_carry_a_note():
+    """The nRF54L15's count of frames its radio discarded as corrupt is not a
+    drop -- they were never received -- so it travels as the block's comment."""
+    stream, writer = write()
+    note = "7 frames failed their FCS at the radio and were not captured"
+    writer.write_statistics(received=10, dropped=0, comment=note)
+    opts = options(blocks(stream.getvalue())[2][1], 12)
+    assert opts[1] == note.encode("utf-8")      # opt_comment
+    assert struct.unpack("<Q", opts[5])[0] == 0
+
+
+def test_statistics_without_a_note_carry_no_comment():
+    stream, writer = write()
+    writer.write_statistics(received=10, dropped=0)
+    assert 1 not in options(blocks(stream.getvalue())[2][1], 12)
+
+
 def test_packets_written_counts_only_packets():
     stream, writer = write()
     writer.write_secret(SECRET_ZIGBEE_NWK, bytes(16))

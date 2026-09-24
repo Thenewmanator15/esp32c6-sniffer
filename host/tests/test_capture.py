@@ -17,7 +17,9 @@ from esp32c6_sniffer.capture import (
     WIFI_CHANNEL_MAX,
     WIFI_CHANNEL_MIN,
     _BLE_BLOCK_AT,
+    _BLE_BLOCK_END,
     _STATS_COUNTERS,
+    _STATS_V6,
     _WIFI_BLOCK_AT,
 )
 from esp32c6_sniffer.control import Radio
@@ -235,8 +237,8 @@ def _stats_blob_ble(link, radio154, wifi, ble):
     both disagreed with the board.
     """
     values = (*link, *radio154, *wifi, *ble)
-    assert len(values) == _STATS_COUNTERS, (
-        f"{len(values)} counters, the frame holds {_STATS_COUNTERS}")
+    assert len(values) == _BLE_BLOCK_END, (
+        f"{len(values)} counters, the frame holds {_BLE_BLOCK_END}")
     return struct.pack(f"<{len(values)}I", *values)
 
 
@@ -305,7 +307,7 @@ def test_ble_stats_without_the_refused_counter_still_parse():
     sends thirty counters, not thirty-one."""
     s = ble_session()
     s._update_stats(struct.pack(
-        f"<{_STATS_COUNTERS - 1}I", 10, 0, 0, 0, 4096, 0, 0, 0, *WIFI_IDLE,
+        f"<{_BLE_BLOCK_END - 1}I", 10, 0, 0, 0, 4096, 0, 0, 0, *WIFI_IDLE,
         1500, 1342, 1500, 0, 0, 0, 0, 5, 1, 40,
     ))
     assert s.stats.fw_frames_captured == 1500
@@ -549,10 +551,11 @@ def test_a_length_below_the_frame_is_rejected():
 def test_each_board_has_its_own_expected_firmware_version():
     from esp32c6_sniffer.capture import EXPECTED_FIRMWARE_VERSIONS
     assert EXPECTED_FIRMWARE_VERSIONS["esp32c6"] == 6
-    # 3 since that board began batching BLE. A host without BLE_BATCH skips
+    # 3 when that board began batching BLE: a host without BLE_BATCH skips
     # the frame type it does not know, so an unbumped mismatch would present
-    # as a capture that runs happily and shows nothing at all.
-    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 3
+    # as a capture that runs happily and shows nothing at all. 4 when its
+    # STATS frame gained the FCS-failure count after the BLE block.
+    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 4
 
 
 def test_the_old_constant_still_names_the_c6():
@@ -595,3 +598,47 @@ def test_a_session_defaults_to_the_board_that_existed_first():
     import inspect
     from esp32c6_sniffer.capture import CaptureSession
     assert inspect.signature(CaptureSession).parameters["board"].default == "esp32c6"
+
+
+# --- Frames the radio discarded as corrupt (nRF54L15 firmware 4) ------------
+
+def _stats_blob_nrf(radio154, fcs_failed):
+    """The nRF54L15's frame: every block, then the FCS-failure count."""
+    values = (10, 0, 0, 0, 4096, *radio154, *WIFI_IDLE, *BLE_QUIET, fcs_failed)
+    assert len(values) == _STATS_V6.size // 4 == _STATS_COUNTERS
+    return struct.pack(f"<{len(values)}I", *values)
+
+
+def test_the_nrf_reports_frames_discarded_as_corrupt():
+    s = session_154()
+    s._update_stats(_stats_blob_nrf((86, 0, 0), 7))
+    assert s.stats.fw_frames_captured == 86
+    assert s.stats.fw_fcs_failed == 7
+    # Never received, so never loss: the capture delivered everything it got.
+    assert s.stats.lossless
+    assert s.stats.fcs_failure_note() == (
+        "7 frames failed their FCS at the radio and were not captured")
+
+
+def test_a_board_without_the_counter_reports_not_measured():
+    """The ESP32-C6's driver cannot see these, and zero would be invented."""
+    s = session_154()
+    s._update_stats(_stats_blob(link=(10, 0, 0, 0, 4096), radio154=(86, 0, 0),
+                                wifi=(0,) * 8))
+    assert s.stats.fw_fcs_failed is None
+    assert s.stats.fcs_failure_note() is None
+
+
+def test_a_ble_capture_does_not_claim_the_802154_counter():
+    s = ble_session()
+    s._update_stats(_stats_blob_nrf((0, 0, 0), 7))
+    assert s.stats.fw_fcs_failed is None
+
+
+def test_zero_corrupt_frames_is_still_said():
+    """Measured and zero is information; the note says so rather than vanishing."""
+    s = session_154()
+    s._update_stats(_stats_blob_nrf((86, 0, 0), 0))
+    assert s.stats.fcs_failure_note() == (
+        "0 frames failed their FCS at the radio and were not captured")
+

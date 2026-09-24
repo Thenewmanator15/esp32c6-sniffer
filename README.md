@@ -705,6 +705,16 @@ exposes only a receive-done callback, with no failure equivalent, so corrupt
 frames are discarded in hardware before we could see them. Some sniffers show
 them; this one cannot.
 
+The nRF54L15 cannot show them either, but it can count them: its driver
+reports each failed reception, and from firmware 4 the count travels with the
+other counters. It appears in the toolbar log and in the capture file's
+statistics, as "N frames failed their FCS at the radio and were not captured".
+It is not counted as loss, since those frames were never received. Measured
+on a Thread network: 7 in 60 s against 293 frames captured. The ESP32-C6 shows
+no such line, rather than a zero it did not measure. On the nRF the count runs
+from the board's boot rather than from the capture's start, as its other
+counters do; unplug it between captures for a per-capture figure.
+
 **Payloads are encrypted.** Zigbee and Thread both encrypt above the MAC layer,
 so you see frame structure, addresses and routing but not contents. Wireshark
 reports this honestly as "Encrypted Payload" and "No encryption key set".
