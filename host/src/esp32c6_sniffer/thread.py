@@ -262,13 +262,18 @@ def key_table_paths(root: Path | None = None) -> list[Path]:
     installed only to the root would be silently unused by exactly the profiles
     this project installs.
     """
+    return _table_paths("ieee802154_keys", root)
+
+
+def _table_paths(name: str, root: Path | None) -> list[Path]:
+    """A table of this name in the root configuration and every ESP32-C6 profile."""
     root = root or wireshark_config_dir()
-    paths = [root / "ieee802154_keys"]
+    paths = [root / name]
     profiles = root / "profiles"
     if profiles.is_dir():
         for directory in sorted(profiles.iterdir()):
             if directory.is_dir() and directory.name.startswith("ESP32-C6"):
-                paths.append(directory / "ieee802154_keys")
+                paths.append(directory / name)
     return paths
 
 
@@ -290,5 +295,94 @@ def install_key(key: bytes | str, index: int = 0,
         found.append(line)
         table.parent.mkdir(parents=True, exist_ok=True)
         table.write_text(HEADER + "\n".join(found) + "\n", encoding="utf-8")
+        written.append(table)
+    return written
+
+
+# --- Short-to-long address mappings ------------------------------------------
+
+class ThreadAddressError(ValueError):
+    """A child table or address list that does not read."""
+
+
+ADDRESS_HEADER = """# IEEE 802.15.4 short-to-long address mappings.
+#
+# Written by esp32c6-sniffer. Safe to edit or delete.
+#
+# A sleepy Thread device sends from its 16-bit address, but 802.15.4 security
+# puts the 64-bit address into the nonce, so its frames decrypt only once
+# Wireshark knows the pairing. It learns that from MLE link setup, which such a
+# device sends only when it attaches; these rows supply it from the border
+# router's child table instead.
+#
+# Format: "short address","PAN ID",EUI-64 (bare hex: quoted, Wireshark refuses it)
+"""
+
+_HEX64 = re.compile(r"^[0-9a-fA-F]{16}$")
+
+
+def _pairing(short_text: str, long_text: str) -> tuple[int, int]:
+    long_hex = long_text.replace(":", "").replace("-", "")
+    if not _HEX64.match(long_hex):
+        raise ThreadAddressError(f"not a 64-bit address: {long_text!r}")
+    try:
+        short = int(short_text, 16)
+    except ValueError:
+        raise ThreadAddressError(f"not a short address: {short_text!r}") from None
+    if short >= 0xFFFE:
+        raise ThreadAddressError(f"not a unicast short address: {short_text!r}")
+    return short, int(long_hex, 16)
+
+
+def parse_child_table(text: str) -> list[tuple[int, int]]:
+    """(short address, 64-bit address) pairs from an OpenThread child table.
+
+    Takes the output of ``ot-ctl child table`` as it stands, or plain lines of
+    a short address and a 64-bit address separated by spaces or a comma.
+    Refuses rather than skips anything it cannot read: a row silently dropped
+    is a device that silently stays encrypted.
+    """
+    pairs: list[tuple[int, int]] = []
+    columns: list[str] | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith("+") or line == "Done":
+            continue
+        if line.startswith("|"):
+            cells = [c.strip() for c in line.strip("|").split("|")]
+            if "RLOC16" in cells and "Extended MAC" in cells:
+                columns = cells
+                continue
+            if columns is None:
+                raise ThreadAddressError(f"table row before its header: {line!r}")
+            row = dict(zip(columns, cells))
+            pairs.append(_pairing(row.get("RLOC16", ""), row.get("Extended MAC", "")))
+            continue
+        fields = re.split(r"[\s,]+", line)
+        if len(fields) != 2:
+            raise ThreadAddressError(f"expected a short and a 64-bit address: {line!r}")
+        pairs.append(_pairing(*fields))
+    if not pairs:
+        raise ThreadAddressError("no address pairs found")
+    return pairs
+
+
+def address_table_paths(root: Path | None = None) -> list[Path]:
+    """Wireshark's Static Addresses table, wherever the key table goes."""
+    return _table_paths("802154_addresses", root)
+
+
+def install_addresses(pairs: list[tuple[int, int]], pan: int,
+                      root: Path | None = None) -> list[Path]:
+    """Writes the pairings into every Static Addresses table, returning the ones changed."""
+    lines = [f'"0x{short:04x}","0x{pan:04x}",{long_:016x}' for short, long_ in pairs]
+    written: list[Path] = []
+    for table in address_table_paths(root):
+        found = read_entries(table)
+        added = [line for line in lines if line not in found]
+        if not added:
+            continue
+        table.parent.mkdir(parents=True, exist_ok=True)
+        table.write_text(ADDRESS_HEADER + "\n".join(found + added) + "\n", encoding="utf-8")
         written.append(table)
     return written

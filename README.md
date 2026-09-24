@@ -807,12 +807,29 @@ ordinary use, and liftable only if you control the firmware.
 
 Two further limits worth stating plainly:
 
-* **Frames carrying only a short 16-bit source address cannot be decrypted by
-  anyone.** 802.15.4's CCM* construction takes the 64-bit source address into
-  its nonce, and it is not in the frame. On a sample of 29 encrypted frames, 20
-  were affected — 19 of them empty sleepy-device Data Requests, so little was
-  actually lost. Wireshark reports this as `No extended source address - can't
-  decrypt`, which is easy to mistake for a wrong key.
+* **A sleepy device's frames need its 64-bit address as well as the key.**
+  802.15.4's CCM* construction takes the 64-bit source address into its nonce,
+  and a sleepy device sends from its short 16-bit one. Wireshark reports this
+  as `No extended source address - can't decrypt`, which is easy to mistake for
+  a wrong key. It learns the pairing from Thread's MLE link setup, but a sleepy
+  device only sends that when it attaches. Measured over 30 minutes of one
+  network: 1,394 secured frames stayed encrypted, 351 of them data rather than
+  empty Data Requests, all from 4 sleepy devices that never revealed their
+  64-bit address. Only the routers' three pairings were learned.
+
+  Your border router knows the pairings. Put `ot-ctl child table` into a file
+  and hand it to `thread_key.py`, which writes them into Wireshark's own Static
+  Addresses table, beside the key:
+
+  ```powershell
+  .\.venv\Scripts\python.exe tools\thread_key.py --key-file C:\path\to\dataset.txt --child-table C:\path\to\children.txt
+  ```
+
+  The PAN ID comes from the dataset, or give `--pan`. Checked with the
+  pairings Wireshark had learned: with the capture's MLE frames removed, 0
+  short-address frames decrypted, and with the pairings as static rows, 418
+  did. Like the key, the table lives in your Wireshark configuration, not in
+  the capture.
 * **The Bluetooth half of commissioning is out of reach.** A device advertising
   itself as commissionable *is* captured, and the BLE profile's `Matter` button
   finds it. But the commissioning exchange that follows runs inside a GATT

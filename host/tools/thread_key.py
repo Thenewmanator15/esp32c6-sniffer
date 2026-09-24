@@ -58,14 +58,48 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from esp32c6_sniffer.thread import (  # noqa: E402
+    ThreadAddressError,
     ThreadCredentials,
     ThreadKeyError,
+    install_addresses,
     install_key,
     key_table_paths,
     normalise_key,
+    parse_child_table,
     read_credentials,
     read_entries,
 )
+
+
+def install_child_table(path: str, pan_text: str | None, key_file: str | None) -> int:
+    """Fills Wireshark's Static Addresses table from a border router's child table."""
+    try:
+        if pan_text:
+            pan = int(pan_text, 16)
+        elif key_file:
+            pan = read_credentials(key_file).pan_id
+        else:
+            pan = None
+        if pan is None:
+            sys.stderr.write("error: the PAN ID is needed: give --pan, or --key-file with a "
+                             "dataset (it names the PAN)\n")
+            return 1
+        pairs = parse_child_table(Path(path).read_text(encoding="utf-8"))
+    except (ThreadAddressError, ThreadKeyError, ValueError, OSError) as exc:
+        sys.stderr.write(f"error: {exc}\n")
+        return 1
+    written = install_addresses(pairs, pan)
+    plural = "" if len(pairs) == 1 else "s"
+    print(f"read {len(pairs)} address pair{plural} for PAN 0x{pan:04x}")
+    if written:
+        print("installed into:")
+        for table in written:
+            print(f"  {table}")
+    else:
+        print("already installed in every address table")
+    print("Sleepy devices' frames now decrypt from the first one, not only after")
+    print("they next attach. Reopen the capture for it to take effect.")
+    return 0
 
 
 def main() -> int:
@@ -80,7 +114,18 @@ def main() -> int:
                                   "the process list; prefer --key-file")
     ap.add_argument("--index", type=int, default=0, help="key index (default 0)")
     ap.add_argument("--list", action="store_true", help="show installed keys")
+    ap.add_argument("--child-table", dest="child_table",
+                    help="file holding `ot-ctl child table` output (or lines of a short "
+                         "and a 64-bit address), so sleepy devices' frames decrypt")
+    ap.add_argument("--pan", help="PAN ID for --child-table, in hex; read from the "
+                                  "dataset instead when --key-file gives one")
     args = ap.parse_args()
+
+    if args.child_table:
+        status = install_child_table(args.child_table, args.pan, args.key_file)
+        if status or not (args.key or args.key_file):
+            return status
+        print()
 
     if args.list or (not args.key and not args.key_file):
         for table in key_table_paths():
@@ -129,10 +174,11 @@ def main() -> int:
     print("  * Matter needs the ESP32-C6 802.15.4 profile as well as the key.")
     print("    Its dissector claims no UDP port, so without the profile's")
     print("    Decode As entry the frames decrypt and then stop at UDP.")
-    print("  * Frames carrying only a short 16-bit source address cannot be")
-    print("    decrypted by anyone: the 64-bit address is part of the CCM*")
-    print("    nonce. In practice these are sleepy-device Data Requests with")
-    print("    no payload, so little is lost.")
+    print("  * Frames from a sleepy device, which sends from its 16-bit address,")
+    print("    decrypt only once Wireshark knows its 64-bit address, which is")
+    print("    part of the nonce. It learns that when the device attaches, which")
+    print("    may be never during a capture. --child-table supplies it from")
+    print("    your border router: `ot-ctl child table` into a file.")
     return 0
 
 

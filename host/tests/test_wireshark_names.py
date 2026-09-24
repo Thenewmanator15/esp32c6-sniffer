@@ -135,6 +135,8 @@ def test_the_decode_as_entry_names_a_table_and_dissector_that_exist():
 KEY_ROWS = {
     "ieee802154_keys": f'"00000000000000000000000000000000","0","{HASH_TYPE_THREAD}"',
     "btmesh_nw_keys": '"0x00000000000000000000000000000000","0x00000000000000000000000000000000","0x00000000"',
+    # The EUI-64 is a bare hex buffer: quoted, Wireshark refuses the row.
+    "802154_addresses": '"0x1c01","0x1234",0000000000000000',
 }
 
 
