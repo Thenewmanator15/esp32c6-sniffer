@@ -27,7 +27,10 @@ import argparse
 import statistics
 import struct
 import time
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 
+from esp32c6_sniffer import mac154
 from esp32c6_sniffer.batch import BatchError, decode_packet_batch
 from esp32c6_sniffer.boards import BoardLink
 from esp32c6_sniffer.control import Command, encode_command
@@ -48,8 +51,8 @@ def channel_mhz(channel: int) -> int:
     return 2405 + 5 * (channel - CHANNEL_MIN)
 
 
-def packet_rssis(frame) -> list[int]:
-    """The signal strength of every 802.15.4 packet a frame carries.
+def packet_entries(frame) -> list[tuple[int, bytes]]:
+    """The signal strength and bytes of every 802.15.4 packet a frame carries.
 
     One for a PACKET, one per entry for a PACKET_BATCH -- which is how the
     nRF54L15 sends most of what it captures, so counting PACKET frames alone
@@ -57,14 +60,61 @@ def packet_rssis(frame) -> list[int]:
     or for a batch that does not decode whole.
     """
     if frame.ftype is FrameType.PACKET and len(frame.payload) > _META.size:
-        return [_META.unpack_from(frame.payload)[2]]
+        return [(_META.unpack_from(frame.payload)[2], frame.payload[_META.size:])]
     if frame.ftype is FrameType.PACKET_BATCH:
         try:
             _channel, entries = decode_packet_batch(frame.payload)
         except BatchError:
             return []
-        return [entry.rssi_dbm for entry in entries]
+        return [(entry.rssi_dbm, entry.psdu) for entry in entries]
     return []
+
+
+def packet_rssis(frame) -> list[int]:
+    """The signal strength of every 802.15.4 packet a frame carries."""
+    return [rssi for rssi, _psdu in packet_entries(frame)]
+
+
+@dataclass(frozen=True)
+class NetworkRow:
+    channel: int
+    pan: int
+    network: str
+    frames: int
+    #: Distinct source addresses, not devices: one device heard under both
+    #: its short and its 64-bit address counts twice.
+    addresses: int
+    #: Sources seen polling their parent with a Data Request.
+    sleepy: int
+    rssi: int
+
+
+def networks(per_channel: dict[int, list[tuple[int, bytes]]]) -> list[NetworkRow]:
+    """The PANs heard on each channel, named and counted from their headers.
+
+    Frames that carry no PAN ID -- acknowledgements, chiefly -- belong to no
+    row. A PAN is Thread or Zigbee by the most common verdict among its frames,
+    and "unknown" when none of them names a stack.
+    """
+    rows = []
+    for channel in sorted(per_channel):
+        by_pan: dict[int, list[tuple[int, mac154.MacHeader]]] = defaultdict(list)
+        for rssi, psdu in per_channel[channel]:
+            header = mac154.parse(psdu)
+            if header is not None and header.pan is not None:
+                by_pan[header.pan].append((rssi, header))
+        for pan in sorted(by_pan):
+            heard = by_pan[pan]
+            verdicts = Counter(h.network for _rssi, h in heard if h.network)
+            sources = {(h.src_is_ext, h.src_addr) for _rssi, h in heard if h.src_addr is not None}
+            polling = {(h.src_is_ext, h.src_addr) for _rssi, h in heard
+                       if h.is_data_request and h.src_addr is not None}
+            rows.append(NetworkRow(
+                channel=channel, pan=pan,
+                network=verdicts.most_common(1)[0][0] if verdicts else "unknown",
+                frames=len(heard), addresses=len(sources), sleepy=len(polling),
+                rssi=round(statistics.median(rssi for rssi, _h in heard))))
+    return rows
 
 
 def main() -> None:
@@ -107,13 +157,14 @@ def main() -> None:
             link.command(Command.SET_CHANNEL, channel)
             time.sleep(0.3)
             parser.feed(ser.read(65536))     # drain the retune boundary
-            rssis: list[int] = []
+            heard: list[tuple[int, bytes]] = []
             end = time.monotonic() + args.dwell
             while time.monotonic() < end:
                 for frame in parser.feed(ser.read(8192)):
-                    rssis += packet_rssis(frame)
+                    heard += packet_entries(frame)
+            rssis = [rssi for rssi, _psdu in heard]
             frames = len(rssis)
-            traffic[channel] = {"frames": frames, "rssis": rssis}
+            traffic[channel] = {"frames": frames, "rssis": rssis, "packets": heard}
             marker = f"{frames} frames" if frames else "quiet"
             print(f"  channel {channel:>2}: {marker}")
     finally:
@@ -147,6 +198,18 @@ def main() -> None:
         busy.sort(reverse=True)
         found = ", ".join(f"ch {c} ({n} frames)" for n, c in busy)
         print(f"networks found on: {found}")
+        rows = networks({c: traffic[c]["packets"] for c in channels})
+        if rows:
+            print()
+            print("networks, read from their frame headers without any key:")
+            print(f"{'ch':>3} {'PAN':>6} {'stack':>7} {'frames':>7} {'addrs':>6} "
+                  f"{'sleepy':>7} {'signal':>7}")
+            for r in rows:
+                print(f"{r.channel:>3} 0x{r.pan:04x} {r.network:>7} {r.frames:>7} "
+                      f"{r.addresses:>6} {r.sleepy:>7} {r.rssi:>7}")
+            print("addrs counts source addresses, not devices: a device heard under")
+            print("both its short and its 64-bit address counts twice. sleepy counts")
+            print("sources polling their parent with Data Requests.")
     else:
         print("no 802.15.4 traffic seen on any channel during the dwell.")
         print("That may be genuine, or the networks may simply have been idle:")

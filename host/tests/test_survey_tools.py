@@ -40,6 +40,45 @@ def test_anything_else_gives_nothing():
     assert survey.packet_rssis(frame(FrameType.PACKET_BATCH, b"\x19")) == []
 
 
+def test_packets_keep_their_bytes_for_naming_the_network():
+    meta = struct.pack("<BBbBQ", 15, 200, -60, 0, 123456)
+    assert survey.packet_entries(frame(FrameType.PACKET, meta + b"\x41\x88\x07")) == [(-60, b"\x41\x88\x07")]
+    entries = [BatchEntry(1000, 200, -55, b"\x41\x88\x01")]
+    batch = frame(FrameType.PACKET_BATCH, encode_packet_batch(25, entries))
+    assert survey.packet_entries(batch) == [(-55, b"\x41\x88\x01")]
+
+
+# A secured Thread data frame and a Data Request, both on PAN 0x1234, from two
+# short addresses; a Zigbee NWK data frame on PAN 0xbeef; an acknowledgement.
+AUX = bytes([0x0D]) + (7).to_bytes(4, "little") + b"\x01"
+THREAD_DATA = (0x9869).to_bytes(2, "little") + b"\x01" + b"\x34\x12" + b"\x00\x04" + b"\x0c\xac" + AUX + b"\xaa"
+THREAD_POLL = (0x986B).to_bytes(2, "little") + b"\x02" + b"\x34\x12" + b"\x00\x04" + b"\x0d\xac" + AUX + b"\x04"
+ZIGBEE_DATA = (0x8841).to_bytes(2, "little") + b"\x03" + b"\xef\xbe" + b"\xff\xff" + b"\x00\x00" + b"\x08\x02\xfc\xff"
+ACK = (0x0002).to_bytes(2, "little") + b"\x01"
+
+
+def test_networks_are_named_counted_and_their_sleepy_devices_found():
+    rows = survey.networks({
+        15: [(-60, THREAD_DATA), (-62, THREAD_POLL), (-61, THREAD_POLL), (-40, ACK)],
+        20: [(-80, ZIGBEE_DATA)],
+    })
+    assert [(r.channel, r.pan, r.network, r.frames, r.addresses, r.sleepy, r.rssi)
+            for r in rows] == [
+        (15, 0x1234, "Thread", 3, 2, 1, -61),
+        (20, 0xBEEF, "Zigbee", 1, 1, 0, -80),
+    ]
+
+
+def test_frames_that_name_no_stack_leave_the_network_unknown():
+    unsecured_command = (0x8863).to_bytes(2, "little") + b"\x04" + b"\x99\x99" + b"\x00\x00" + b"\x01\x00" + b"\x07"
+    rows = survey.networks({11: [(-70, unsecured_command)]})
+    assert [(r.pan, r.network) for r in rows] == [(0x9999, "unknown")]
+
+
+def test_unreadable_frames_are_skipped_not_fatal():
+    assert survey.networks({26: [(-50, b"\x41"), (-50, b"")]}) == []
+
+
 import ble_survey  # noqa: E402
 import wifi_survey  # noqa: E402
 from esp32c6_sniffer import boards  # noqa: E402

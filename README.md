@@ -415,6 +415,15 @@ most 802.15.4 channels and is invisible to a packet capture. Traffic counting
 sees decoded frames. A channel can be electrically noisy and carry no 802.15.4
 at all, or be quiet and carry a network talking softly, so read them together.
 
+It then names the networks it heard, from their frame headers and without any
+key: each PAN ID on each channel, whether it is Thread or Zigbee, how many
+source addresses spoke and how many of them are sleepy devices polling their
+parent. Thread is told by its MAC-layer security and 6LoWPAN, Zigbee by its
+network-layer header, and either by a beacon; a PAN that shows none of these is
+reported as unknown rather than guessed. Checked against Wireshark on 2,804
+recorded frames, Thread and Zigbee: frame type, PAN, address, security and
+stack agreed on every one.
+
 `tools/spectrum.py` runs the energy half alone and faster.
 `tools/antenna_compare.py` measures the two antennas against the same traffic.
 
