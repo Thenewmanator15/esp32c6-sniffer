@@ -72,22 +72,42 @@ own.
 
 ### 1. `Bluetooth HCI Event: dissect periodic advertising data`
 
-In `packet-bthci_evt.c`, cases 0x0F and 0x25: when Data Status is `0x00`
-(Complete) and the length is non-zero, build a `bluetooth_eir_ad_data_t` the way
-the extended advertising report case does (interface and adapter ids,
-`bd_addr = NULL`, because a periodic report carries a sync handle and no
-address). Then hand the data to `btcommon_ad_handle`. Otherwise add
-`hf_bthci_evt_data` as today.
+In `packet-bthci_evt.c`, cases 0x0F and 0x25: the data of a periodic report
+is advertising data, and it goes to `btcommon_ad_handle` with a
+`bluetooth_eir_ad_data_t` built the way the extended advertising report case
+builds one (interface and adapter ids, `bd_addr = NULL`, because a periodic
+report carries a sync handle and no address).
 
-Reports with Data Status 0x01 (incomplete, more to come) or 0x02 (truncated)
-stay raw bytes. A fragment of a chained report can end in the middle of an AD
-structure, and decoding it would flag a malformed packet that is not malformed.
-Reassembling chained reports by sync handle is out of scope (below).
+**A large train arrives in pieces, and the pieces are reassembled.** A
+controller delivers periodic data longer than one report as a chain: reports
+with Data Status 0x01 (incomplete, more to come), ended by one with 0x00
+(complete) or 0x02 (truncated). The last piece of a chain says Complete too,
+while holding only the tail. The first version of this commit decoded any
+Complete report as a whole, which was measured wrong on 2026-09-24. A test
+advertiser sent 1,008 bytes of periodic data, which arrived in 9 reports per
+chain. All 279 chain tails were flagged as malformed packets, where Wireshark
+4.6.8, leaving them as bytes, flagged none. The same run showed the chains
+themselves are sound: every complete chain matched the sent bytes exactly, and
+3 of 282 ended truncated.
 
-Known review risk: the extended advertising and PAwR response report cases
-upstream hand data to the AD parser whatever the Data Status. If the reviewer
-wants consistency with them, drop the status check. That is a one-line
-change, and it would not affect the other two commits.
+So the reports are reassembled with Wireshark's reassembly support
+(`fragment_add_seq_next`), keyed by the sync handle combined with the interface
+and adapter ids:
+
+- **0x01:** the piece is added to the chain. The report shows its bytes as a
+  fragment, with a link to the frame that completes it.
+- **0x00 after earlier pieces:** the last piece. The frame shows the reassembled
+  data, decoded once as a whole, and lists the frames it came from.
+- **0x00 with no earlier pieces:** decoded directly, as a single report.
+- **0x02:** the controller has abandoned the chain. The pieces gathered so far
+  are discarded, the report's bytes stay raw, and expert info
+  `bthci_evt.periodic_data_truncated` (protocol, warning) says the data is
+  incomplete. No malformed packet is reported.
+- **Data length 0** (for example Data Status 0xFF, failed to receive) adds an
+  empty `hf_bthci_evt_data`, as today.
+
+The PAwR response report case upstream hands data to the AD parser whatever
+the Data Status; that is not changed here.
 
 ### 2. `BT Common: dissect the Basic Audio Announcement (BASE)`
 
@@ -198,6 +218,12 @@ Two small pcapng files, added to `test/captures/`:
   two octets where the specification fixes one. If the capture confirms it,
   that is a real `ltv.bad_length` case. If not, the test for it is built by
   hand instead.
+- `bt-le-periodic-chained.pcapng` (added 2026-09-24): a throwaway test
+  advertiser on the XIAO sending 1,008 bytes of periodic data, which arrives
+  in 9 reports per chain. The data is a device name and four manufacturer data
+  structures under company ID 0xFFFF, reserved for testing, carrying a
+  counting byte pattern. Trimmed to the Sync Established event and two
+  complete chains, 18 reports. The address is a non-resolvable private one.
 
 ### Tests in `test/suite_dissection.py`
 
@@ -212,9 +238,20 @@ A new class `TestDissectBluetoothLeAudio`. Each test runs `tshark -T fields` or
 3. The Broadcast ID is 0x123456.
 4. The Public Broadcast Announcement decodes features, Program Info `PBP`,
    and the Broadcast ID present in the fixture.
-5. A periodic report with Data Status 0x01 stays raw: `bthci_evt.data`
-   present, no `btcommon.eir_ad.entry` (built with `text2pcap`, as the suite's
-   existing hand-made tests do).
+5. A periodic report with Data Status 0x01 is not decoded as advertising
+   data on its own: no `btcommon.eir_ad.entry` in that frame (built with
+   `text2pcap`, as the suite's existing hand-made tests do).
+5a. The chained capture: both chains reassemble, each to 1,008 bytes whose
+   four manufacturer data structures are 248 octets each; the 16 non-final
+   pieces carry no `btcommon.eir_ad.entry` and point to their reassembly frame;
+   no `_ws.malformed` and no exception anywhere in the file.
+5b. A BASE split across two hand-built reports (0x01 then 0x00) decodes in
+   the second frame exactly as an unsplit one does.
+5c. A chain ended by Data Status 0x02 raises
+   `bthci_evt.periodic_data_truncated`, with no `_ws.malformed`, and the next
+   single Complete report on the same sync handle decodes on its own.
+5d. Two sync handles interleaving their pieces reassemble separately, each to
+   its own data.
 6. A BASE whose `Codec_Specific_Configuration_Length` overruns raises
    `bluetooth.le_audio.length_overrun`, and `_ws.malformed` is absent: the
    dissector reported it and did not throw (`text2pcap`).
@@ -224,7 +261,10 @@ A new class `TestDissectBluetoothLeAudio`. Each test runs `tshark -T fields` or
 Each commit brings the tests and captures for what it adds, so every commit
 passes on its own:
 
-- **Commit 1:** tests 1 and 5, plus the BAP capture.
+- **Commit 1:** tests 1, 5 and 5a-5d, plus the BAP and chained captures.
+  (5b builds its BASE by hand and asserts only that the service data entry
+  for UUID 0x1851 appears in the completing frame, since the BASE dissector
+  arrives in commit 2; commit 2 extends it to the decoded fields.)
 - **Commit 2:** tests 2, 6 and 7.
 - **Commit 3:** tests 3 and 4, plus the PBP capture.
 
@@ -234,7 +274,7 @@ These are run on the changed files before handing over:
 
 - `tools/checkAPIs.pl`, `tools/checkhf.pl`, `tools/checkfiltername.pl`;
 - `tools/check_typed_item_calls.py`, `tools/check_spelling.py`;
-- `tools/fuzz-test.sh` over both captures;
+- `tools/fuzz-test.sh -p 200` over every LE Audio capture (`-P` is the plugin count, not the passes);
 - the full `test/suite_dissection.py`, not only the new class.
 
 ## Build environment
@@ -268,10 +308,12 @@ themselves; nothing here enters passwords.
 
 ## Out of scope
 
-- **Reassembling chained periodic reports.** A BASE longer than one report
-  (large multi-subgroup broadcasts) arrives as 0x01 fragments and stays raw.
-  This is the natural follow-up and needs Wireshark's reassembly API keyed by
-  sync handle.
+- **Chained extended advertising reports.** The same problem exists upstream
+  for LE Extended Advertising Reports (0x0D), which every Wireshark release
+  decodes piece by piece: on 2026-09-24, 4.6.8 flagged 2,381 of 2,396 pieces of
+  a chained extended advertisement as errors or malformed. The fix is the
+  same reassembly keyed by address and SID, and it belongs in its own merge
+  request, since the bug predates this one.
 - **Encrypted Advertising Data and Broadcast Code decryption.** A separate
   feature with its own key-handling design.
 - **PACS/ASCS/BASS in ATT.** They would reuse this LTV code, but they concern
