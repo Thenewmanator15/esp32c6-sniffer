@@ -108,6 +108,10 @@ and adapter ids:
 - **LE Periodic Advertising Sync Lost** (0x10) for a handle discards any pieces
   gathered on it: a lost sync ends its chain without a closing report, and a
   later sync may be given the same handle.
+- **A successful Sync Established or Sync Transfer Received** (0x0E/0x24,
+  0x18/0x26) discards any pieces on its handle too. A sync the host ends with
+  Terminate Sync produces no Sync Lost event, and the next sync is often given
+  the same handle (found in review on 2026-09-24).
 
 The PAwR response report case upstream hands data to the AD parser whatever
 the Data Status; that is not changed here.
