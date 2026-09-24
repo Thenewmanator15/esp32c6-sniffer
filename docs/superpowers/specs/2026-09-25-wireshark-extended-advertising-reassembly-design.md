@@ -34,10 +34,16 @@ Advertising SID, and whether the report is a scan response (event type bit 3),
 since a scan response's chain runs separately from the advertisement's. That
 key is wider than the 32-bit id `fragment_add_seq_next` takes, so this follows
 the pattern `packet-btle.c` uses for the same problem (`adi_to_first_frame_tree`):
-on the first pass, a `wmem_map` in file scope maps the full key to the number
-of the frame holding the chain's first piece, and that number is the
-reassembly id, with `addresses_reassembly_table_functions`. The map entry is
-removed when the chain ends.
+on the first pass, a `wmem_map` in file scope maps the full key to the chain
+in progress, whose reassembly id is where its first piece sits: the frame
+number shifted left four bits, with the report's position in its event in the
+low bits, because one event carries up to ten reports and can start several
+chains (found in review: using the frame number alone merged them). The id is
+used with `addresses_reassembly_table_functions`, stored per report with
+`p_add_proto_data` for later passes, and the map entry is removed when the
+chain ends. The entry also counts the chain's data: a chain that would pass
+1,650 octets, the most a controller delivers, has lost its end, and is
+discarded so it cannot swallow the advertiser's next chain.
 
 **Per report**, inside the existing `num_reports` loop:
 
@@ -89,6 +95,10 @@ the reassembled table, as in the periodic patch.
    have): decoded directly, never chained.
 8. **Single complete report:** decodes exactly as before, with no fragment
    fields (guards today's behaviour for the common case).
+9. **An overlong report ending a chain:** malformed, and the chain closed.
+10. **Found in review:** a chain piece and a single report in one event, two
+    chains starting in one event, a single report beside a chain on a second
+    pass, and a chain whose end was never captured.
 
 Upstream checks as for the LE Audio series: `check_apis.py`, `checkhf.pl`,
 `checkfiltername.pl`, `check_typed_item_calls.py`, `check_spelling.py`,

@@ -155,9 +155,8 @@ the sent bytes exactly; a few ended truncated (15 of 274 extended chains, 3 of
 282 periodic), which is the controller giving up, not a capture fault.
 Wireshark 4.6 decodes each piece of an extended advertisement as if it were
 whole, so a chained one shows as a run of malformed packets, 2,381 of 2,396
-pieces in that test: the data is intact, the decoding is not. A patch that
-reassembles periodic chains is being prepared for upstream Wireshark;
-extended ones are not yet covered.
+pieces in that test: the data is intact, the decoding is not. Patches that
+reassemble both kinds of chain are being prepared for upstream Wireshark.
 
 ## The toolbar: retuning without restarting
 
