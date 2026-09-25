@@ -31,6 +31,11 @@ void sn_control_set_credentials_handler(sn_credentials_handler_t handler);
 typedef void (*sn_ble_filter_handler_t)(const uint8_t *payload, size_t len);
 void sn_control_set_ble_filter_handler(sn_ble_filter_handler_t handler);
 
+/* Called for a SN_FRAME_BLE_KEYS frame: N x (identity type, identity address,
+ * key), least significant first. Key material: never log the payload. */
+typedef void (*sn_ble_keys_handler_t)(const uint8_t *payload, size_t len);
+void sn_control_set_ble_keys_handler(sn_ble_keys_handler_t handler);
+
 /* Starts the reader task. Call after sn_usb_link_init(). */
 esp_err_t sn_control_start(void);
 

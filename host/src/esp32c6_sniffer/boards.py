@@ -58,6 +58,9 @@ BOARDS = {
         # The controller's accept list, loaded before a scan starts.
         "ble_filter": True,
         "ble_periodic": True,
+        # Identity resolving keys the controller's resolving list holds.
+        # CONFIG_BT_LE_LL_RESOLV_LIST_SIZE, whose Kconfig range is 1 to 5.
+        "ble_keys": 5,
         # An FM8625H RF switch on GPIO3/GPIO14. See firmware/main/board.h.
         "antenna": True,
         "antenna_note": ("External needs a U.FL antenna fitted. Measured "
@@ -89,6 +92,8 @@ BOARDS = {
         # wire traffic to 43% of unfiltered.
         "ble_filter": True,
         "ble_periodic": True,
+        # CONFIG_BT_CTLR_RL_SIZE in prj.conf.
+        "ble_keys": 8,
         # The same arrangement as the C6's, found while spiking this board:
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.

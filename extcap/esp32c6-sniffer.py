@@ -303,6 +303,7 @@ def is_ble(name: str) -> bool:
 CTRL_ARG_CHANNEL = 0
 CTRL_ARG_ANTENNA = 1
 CTRL_ARG_LOGGER = 2
+CTRL_ARG_CHECK_KEYS = 3
 CTRL_ARG_NONE = 255
 
 # Control commands. Wireshark only ever SENDS 0 and 1; the rest are ours to send.
@@ -486,6 +487,13 @@ def print_interfaces(selected: str | None = None) -> None:
           f"external on this board, so this is a live A/B on the same traffic}}")
     print(f"control {{number={CTRL_ARG_LOGGER}}}{{type=button}}{{role=logger}}"
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
+    from esp32c6_sniffer.ble_keys import KEY_CHECK_SECONDS
+    print(f"control {{number={CTRL_ARG_CHECK_KEYS}}}{{type=button}}"
+          f"{{display=Check keys}}"
+          f"{{tooltip=BLE with a device key file: listens "
+          f"{KEY_CHECK_SECONDS:.0f} s with no keys and no filter, then says "
+          f"for each key whether it is right, backwards, or matched nothing. "
+          f"Those seconds are left out of the capture}}")
 
 
 def scanned_channel_labels(interface: str, port: str) -> dict[int, str]:
@@ -655,11 +663,26 @@ def print_config(interface: str, reload_option: str | None = None,
                   # message has nowhere useful to appear.
                   r"{validation=^\s*$|^\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}"
                   r"(\s*[, ]\s*([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2})*\s*$}"
-                  "{tooltip=Restricts scanning to up to eight addresses, filtered "
-                  "by the controller so the rest never cross the USB link. One "
-                  "advertiser here produced half of everything a survey heard, so "
-                  "this is the difference between watching a device and watching "
-                  "a room. Leave empty to hear everything}")
+                  "{tooltip=Restricts scanning to these devices, filtered by "
+                  "the controller so the rest never cross the USB link. An "
+                  "address in the Device keys file is followed through its "
+                  "address changes and takes one of the eight places; any "
+                  "other address takes two, because whether it is public or "
+                  "random cannot be told from the address, so four fit. Leave "
+                  "empty to hear everything}")
+            holds = board_for_interface(interface)["ble_keys"]
+            print("arg {number=8}{call=--ble-keys}{display=Device keys}"
+                  "{type=fileselect}{fileext=Key files (*.txt)}"
+                  "{tooltip=Identity resolving keys, so a device that changes "
+                  "its address is recognised under every address it uses and "
+                  "shown under its fixed identity address. One per line: the "
+                  "identity address, optionally public or random (public if "
+                  "left out), then the key as 32 hex digits. The file is a "
+                  "secret: anyone holding it can follow those devices. The "
+                  "keys go to the board's memory for this capture only and "
+                  "are never written into the capture file. This board holds "
+                  f"{holds}. Check keys on the toolbar says whether each key "
+                  "is right}")
         if board_for_interface(interface)["ble_periodic"]:
             print("arg {number=7}{call=--ble-periodic}"
                   "{display=Follow periodic advertising}"
@@ -834,7 +857,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                thread_file: str | None = None,
                interface_label: str | None = None,
                ble_filter: str | None = None,
-               ble_periodic: bool = False) -> int:
+               ble_periodic: bool = False,
+               ble_keys_file: str | None = None) -> int:
     from esp32c6_sniffer.capture import CaptureSession
     from esp32c6_sniffer.control import (
         Antenna, Bandwidth, CtrlFilter, FrameFilter, Radio,
@@ -870,6 +894,36 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             sys.stderr.write(str(exc) + os.linesep)
             return 1
 
+    # Device keys and the filter, read on the same terms as the Zigbee keys:
+    # a bad file must fail while Wireshark can still show why. The filter is
+    # read here too because keyed identities decide how it is typed.
+    device_keys = []
+    key_name = os.path.basename(ble_keys_file) if ble_keys_file else ""
+    accept = []
+    if radio is Radio.BLE:
+        from esp32c6_sniffer.ble_keys import (
+            KeyFileError, filter_entries, parse_key_file,
+        )
+        if ble_keys_file:
+            try:
+                device_keys = parse_key_file(ble_keys_file)
+            except KeyFileError as exc:
+                sys.stderr.write(str(exc) + os.linesep)
+                return 1
+            holds = board_for_interface(interface)["ble_keys"]
+            if len(device_keys) > holds:
+                sys.stderr.write(
+                    f"{key_name} holds {len(device_keys)} device keys and "
+                    f"this board holds {holds}" + os.linesep)
+                return 1
+        if ble_filter:
+            typed = [a for a in ble_filter.replace(",", " ").split() if a]
+            try:
+                accept = filter_entries(typed, device_keys)
+            except ValueError as exc:
+                sys.stderr.write(str(exc) + os.linesep)
+                return 1
+
     # Thread credentials, read on the same terms and for the same reason: a
     # bad file must fail while Wireshark can still show why. Unlike the Zigbee
     # keys this cannot go in the capture -- Wireshark defines no 802.15.4
@@ -903,10 +957,43 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     state = {"initialized": False, "running": True}
     fp_out = None
 
-    def log(text: str) -> None:
-        if state["initialized"]:
+    # Three threads write the control pipe now -- the toolbar reader, the
+    # capture loop and the heartbeat -- and two messages written at once
+    # interleave mid-message.
+    control_lock = threading.Lock()
+
+    def log(text: str, popup: bool = False) -> None:
+        if not state["initialized"]:
+            return
+        with control_lock:
             control_write(fp_out, CTRL_ARG_LOGGER, CTRL_CMD_ADD,
                           text.encode("utf-8") + b"\n")
+            if popup:
+                control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
+                              text.encode("utf-8"))
+
+    def start_key_check(session) -> None:
+        if radio is not Radio.BLE or not device_keys:
+            log("Check keys: needs a BLE capture with a Device keys file")
+            return
+        from esp32c6_sniffer.ble_keys import KEY_CHECK_SECONDS, KeyCheck
+        check = KeyCheck(device_keys)
+
+        def done() -> None:
+            # One log line per key, and one pop-up holding all of them --
+            # not a pop-up per key, which would stack up dialogs.
+            lines = [r.message(key_name) for r in check.results()]
+            for line in lines:
+                log(line)
+            with control_lock:
+                control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
+                              "\n".join(lines).encode("utf-8"))
+
+        if session.request_key_check(check.observe, done):
+            log(f"Check keys: listening {KEY_CHECK_SECONDS:.0f} s with no keys "
+                f"and no filter; those packets are left out of the capture")
+        else:
+            log("Check keys: a check is already running")
 
     def reader(fp_in, session) -> None:
         """Handles toolbar input. Wireshark sends only Initialized and Set."""
@@ -942,6 +1029,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 except ValueError as exc:
                     log(f"bad antenna value: {exc}")
                 continue
+            if cmd == CTRL_CMD_SET and arg == CTRL_ARG_CHECK_KEYS:
+                start_key_check(session)
+                continue
             if cmd == CTRL_CMD_SET and arg == CTRL_ARG_CHANNEL:
                 try:
                     wanted = parse_channel_token(
@@ -949,8 +1039,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     )
                     session.request_channel(wanted)
                     log(f"retuning to channel {wanted}")
-                    control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_STATUSBAR,
-                                  f"ESP32-C6: channel {wanted}".encode())
+                    with control_lock:
+                        control_write(fp_out, CTRL_ARG_NONE,
+                                      CTRL_CMD_STATUSBAR,
+                                      f"ESP32-C6: channel {wanted}".encode())
                 except (ValueError, UnicodeDecodeError) as exc:
                     # Selecting the other radio's channel lands here. Say so
                     # rather than silently ignoring it.
@@ -1072,12 +1164,25 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # find out when you try to read it and the join is hours in the past.
         handshakes = HandshakeTracker() if radio is Radio.WIFI else None
 
-        # Comma or space separated, because a Wireshark option is one text
-        # field and people will type it either way.
-        filter_addresses = []
-        if ble_filter and radio is Radio.BLE:
-            filter_addresses = [a for a in ble_filter.replace(",", " ").split()
-                                if a]
+        # The filter was turned into accept-list entries before the fifo was
+        # opened, comma or space separated, because a Wireshark option is one
+        # text field and people will type it either way.
+        #
+        # The key watches: a key written backwards is spotted from addresses
+        # the board did not resolve, and a followed identity that goes quiet
+        # is named, because with the filter on a backwards key looks exactly
+        # like a device that is off.
+        backwards = silence = None
+        if device_keys:
+            from esp32c6_sniffer.ble import hci_of_record
+            from esp32c6_sniffer.ble_keys import (
+                BackwardsKeyWatch, SilenceWatch, silence_message,
+            )
+            backwards = BackwardsKeyWatch(device_keys)
+            followed = [k.address for k in device_keys
+                        if any(address == k.address for _, address in accept)]
+            if followed:
+                silence = SilenceWatch(followed, start=time.monotonic())
 
         # The packet loop and the heartbeat both write to the pipe, from
         # different threads. Interleaving two pcapng blocks produces a file
@@ -1094,7 +1199,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             ble_interval_ms=ble_interval,
                             ble_window_ms=ble_window,
                             ble_phys=ble_phys,
-                            ble_filter=filter_addresses,
+                            ble_filter=accept,
+                            ble_keys=device_keys,
                             ble_periodic=ble_periodic,
                             board=board_for_interface(interface)["id"],
                             baud=board_for_interface(interface)["baud"],
@@ -1157,6 +1263,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                         state["running"] = False
                         session.request_stop()
                         return
+                    # Here rather than in the record loop: a filtered capture
+                    # of a silent device yields no records at all.
+                    if silence is not None:
+                        for identity in silence.silent(time.monotonic()):
+                            log(silence_message(identity, 30.0))
 
             threading.Thread(target=heartbeat, daemon=True).start()
 
@@ -1164,6 +1275,17 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             try:
                 for record, timestamp, original_len in session.records():
                     note = None
+                    if backwards is not None:
+                        hci = hci_of_record(record)
+                        for finding in backwards.observe(hci):
+                            # In the file as well as the log, as the
+                            # handshake notes are: filterable with
+                            # pkt_comment long after the log has gone.
+                            text = finding.message(key_name)
+                            log(text, popup=True)
+                            note = text if note is None else f"{note}; {text}"
+                        if silence is not None:
+                            silence.observe(hci, time.monotonic())
                     if handshakes is not None:
                         # The 802.11 frame sits after the radiotap header,
                         # whose length is its third and fourth bytes.
@@ -1181,12 +1303,14 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             log(f"four-way handshake captured for "
                                 f"{done.bssid} <- {done.station}: with the "
                                 f"passphrase, this session can be decrypted")
-                            control_write(
-                                fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
-                                (f"WPA handshake captured for {done.bssid}. "
-                                 f"Add the passphrase under Edit, Preferences, "
-                                 f"Protocols, IEEE 802.11 to decrypt this "
-                                 f"capture. Filter: pkt_comment").encode())
+                            with control_lock:
+                                control_write(
+                                    fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
+                                    (f"WPA handshake captured for {done.bssid}. "
+                                     f"Add the passphrase under Edit, "
+                                     f"Preferences, Protocols, IEEE 802.11 to "
+                                     f"decrypt this capture. Filter: "
+                                     f"pkt_comment").encode())
                     with write_lock:
                         writer.write_packet(record, timestamp,
                                             original_length=original_len,
@@ -1253,10 +1377,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                                 f"LOSS gaps={s.sequence_gaps} "
                                 f"isr={s.fw_isr_queue_full} "
                                 f"link={s.fw_link_rejected}{extra}")
-                            control_write(
-                                fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
-                                b"ESP32-C6 dropped frames; see the Log button",
-                            )
+                            with control_lock:
+                                control_write(
+                                    fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
+                                    b"ESP32-C6 dropped frames; see the Log "
+                                    b"button",
+                                )
             finally:
                 state["running"] = False
                 # The board's own counters, written into the file. Without
@@ -1288,7 +1414,16 @@ def capture_failure_message(port: str, exc: Exception,
     the reply to the first command of a session.
     """
     lines = [f"cannot capture on {port}: {exc}"]
-    if port.casefold() in {f.casefold() for f in found}:
+    if isinstance(exc, RuntimeError) and "failed, status" in str(exc):
+        # The board answered, and refused. On the nRF54L15 that is now how a
+        # setting its Bluetooth controller would not take comes back, so
+        # "did not answer, replug it" would send the user the wrong way.
+        lines.append(
+            "the board answered but refused the command -- usually a "
+            "setting it would not take: a device key, the filter, or the "
+            "advertising PHYs. Try the capture without the setting you "
+            "changed last.")
+    elif port.casefold() in {f.casefold() for f in found}:
         lines.append(
             f"{port} is where the board is, so the port is right: the board "
             f"did not answer. Start the capture again; if it still does not "
@@ -1342,6 +1477,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ble-window", dest="ble_window", type=int, default=0)
     parser.add_argument("--ble-phys", dest="ble_phys", type=int, default=None)
     parser.add_argument("--ble-filter", dest="ble_filter", default=None)
+    parser.add_argument("--ble-keys", dest="ble_keys_file", default=None)
     parser.add_argument("--ble-periodic", dest="ble_periodic",
                         action="store_true")
     args, unknown = parser.parse_known_args(argv)
@@ -1451,7 +1587,8 @@ def main(argv: list[str] | None = None) -> int:
                               args.thread_file,
                               interface_label=args.extcap_interface,
                               ble_filter=args.ble_filter,
-                      ble_periodic=args.ble_periodic)
+                              ble_periodic=args.ble_periodic,
+                              ble_keys_file=args.ble_keys_file)
         except (OSError, RuntimeError) as exc:
             # Usually the wrong serial port, which used to reach the user as a
             # Python traceback in a Wireshark dialog.

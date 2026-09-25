@@ -139,6 +139,18 @@ def test_a_board_that_did_not_answer_is_not_blamed_on_the_port():
     assert "the port is right" in msg
 
 
+def test_a_refused_command_is_not_reported_as_no_answer():
+    """The nRF54L15 now reports a setting its controller refused -- a device
+    key, the filter, the PHYs -- as a failed START. The board answered, so
+    telling the user it did not, and to replug it, sends them the wrong way."""
+    msg = plugin.capture_failure_message(
+        "COM4", RuntimeError("START failed, status 3"), ["COM4"])
+
+    assert "cannot capture on COM4: START failed, status 3" in msg
+    assert "did not answer" not in msg and "unplug" not in msg
+    assert "refused" in msg
+
+
 def test_the_same_port_is_recognised_whatever_its_case():
     """Windows port names are case-insensitive, and Wireshark keeps whatever
     the user typed."""

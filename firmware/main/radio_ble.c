@@ -32,6 +32,10 @@ static const char *TAG = "radio_ble";
 #define OPCODE_LE_SET_EXT_SCAN_ENABLE 0x2042
 #define OPCODE_LE_CLEAR_ACCEPT_LIST  0x2010
 #define OPCODE_LE_ADD_TO_ACCEPT_LIST 0x2011
+#define OPCODE_LE_ADD_TO_RESOLVING_LIST 0x2027
+#define OPCODE_LE_CLEAR_RESOLVING_LIST  0x2029
+#define OPCODE_LE_SET_ADDR_RESOLUTION   0x202D
+#define OPCODE_LE_SET_PRIVACY_MODE      0x204E
 #define OPCODE_LE_PERIODIC_CREATE_SYNC    0x2044
 #define OPCODE_LE_PERIODIC_CANCEL_SYNC    0x2045
 #define OPCODE_LE_PERIODIC_TERMINATE_SYNC 0x2046
@@ -96,6 +100,15 @@ static bool s_controller_up;
 #define SN_BLE_MAX_FILTER 8
 static uint8_t s_filter[SN_BLE_MAX_FILTER][7];   /* type, then 6 address bytes */
 static uint8_t s_filter_count;
+
+/* Identity resolving keys: N x (identity type, identity address, key), both
+ * least significant first, exactly as the host frames them. Held for one
+ * capture and cleared when it stops; never logged. The controller's
+ * resolving list is the limit, and its Kconfig caps it at five. */
+#define SN_BLE_KEY_ENTRY 23u
+#define SN_BLE_MAX_KEYS CONFIG_BT_LE_LL_RESOLV_LIST_SIZE
+static uint8_t s_keys[SN_BLE_MAX_KEYS][SN_BLE_KEY_ENTRY];
+static uint8_t s_key_count;
 static bool s_extended;          /* true once extended scanning is running */
 static uint8_t s_phys = SN_BLE_PHY_1M;
 static sn_ble_stats_t s_stats;
@@ -383,12 +396,81 @@ uint8_t sn_radio_ble_filter_count(void)
     return s_filter_count;
 }
 
+esp_err_t sn_radio_ble_set_keys(const uint8_t *entries, size_t len)
+{
+    if (len % SN_BLE_KEY_ENTRY != 0u) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    const size_t count = len / SN_BLE_KEY_ENTRY;
+    if (count > SN_BLE_MAX_KEYS) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    for (size_t i = 0; i < count; i++) {
+        if (entries[i * SN_BLE_KEY_ENTRY] > 1u) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    memset(s_keys, 0, sizeof(s_keys));
+    memcpy(s_keys, entries, len);
+    s_key_count = (uint8_t)count;
+    ESP_LOGI(TAG, "device keys: %u", s_key_count);
+    return ESP_OK;
+}
+
+/* Loads the resolving list: resolution off (the list cannot change while it
+ * is on), clear, each key with device privacy mode, then resolution on.
+ *
+ * Device privacy mode because the default, network privacy mode, drops an
+ * advertisement from a listed device that uses its identity address instead
+ * of a private one, and a sniffer should hear those too.
+ *
+ * The local IRK is left zero: the sniffer has no identity of its own. */
+static esp_err_t apply_keys(void)
+{
+    const uint8_t off = 0x00;
+    const uint8_t on = 0x01;
+    esp_err_t err = send_command(OPCODE_LE_SET_ADDR_RESOLUTION, &off, 1);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = send_command(OPCODE_LE_CLEAR_RESOLVING_LIST, NULL, 0);
+    if (err != ESP_OK) {
+        return err;
+    }
+    for (uint8_t i = 0; i < s_key_count; i++) {
+        uint8_t entry[SN_BLE_KEY_ENTRY + 16u] = {0};
+        memcpy(entry, s_keys[i], SN_BLE_KEY_ENTRY);
+        err = send_command(OPCODE_LE_ADD_TO_RESOLVING_LIST, entry,
+                           sizeof(entry));
+        if (err != ESP_OK) {
+            return err;
+        }
+        uint8_t mode[8];
+        memcpy(mode, s_keys[i], 7u);        /* type and identity address */
+        mode[7] = 0x01;                     /* device privacy mode */
+        err = send_command(OPCODE_LE_SET_PRIVACY_MODE, mode, sizeof(mode));
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    if (s_key_count > 0u) {
+        err = send_command(OPCODE_LE_SET_ADDR_RESOLUTION, &on, 1);
+    }
+    return err;
+}
+
 /* Loads the accept list into the controller. Rebuilt on every scan start
  * rather than kept in step, because the controller is deinitialised when a
  * capture stops and forgets it. */
 static esp_err_t apply_filter(void)
 {
-    esp_err_t err = send_command(OPCODE_LE_CLEAR_ACCEPT_LIST, NULL, 0);
+    /* Keys first: the accept list may name identities that only the
+     * resolving list can recognise. */
+    esp_err_t err = apply_keys();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = send_command(OPCODE_LE_CLEAR_ACCEPT_LIST, NULL, 0);
     if (err != ESP_OK) {
         return err;
     }
@@ -552,6 +634,12 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
 
 void sn_radio_ble_stop(void)
 {
+    /* Keys are secrets; they live for one capture. First, so the early
+     * return below -- a stop with the controller already down -- cannot
+     * skip it. Deinitialising the controller clears its own copy. */
+    memset(s_keys, 0, sizeof(s_keys));
+    s_key_count = 0;
+
     sn_trace(SN_TRACE_BLE_STOP_IN, s_controller_up ? 1 : 0, 0);
     if (!s_controller_up) {
         sn_trace(SN_TRACE_BLE_STOP_OUT, 0, 0);
@@ -699,6 +787,11 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
     return ESP_ERR_NOT_SUPPORTED;
 }
 void sn_radio_ble_stop(void) {}
+esp_err_t sn_radio_ble_set_keys(const uint8_t *entries, size_t len)
+{
+    (void)entries; (void)len;
+    return ESP_ERR_NOT_SUPPORTED;
+}
 bool sn_radio_ble_running(void) { return false; }
 bool sn_radio_ble_extended(void) { return false; }
 esp_err_t sn_radio_ble_set_phys(uint8_t phys)

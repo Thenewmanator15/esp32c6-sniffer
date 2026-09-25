@@ -12,9 +12,14 @@
 
 static const char *TAG = "control";
 
-/* Inbound frames are tiny (a 10-byte header plus a 5-byte payload), so a small
- * buffer suffices. Sized for a few frames plus slack for resynchronisation. */
-#define RX_BUF_LEN      128
+/* Commands are 15 bytes, but a BLE capture starts with the device keys, the
+ * filter and START in one burst: 206 bytes at most here (five keys, eight
+ * filter entries). At 128 a read that brought the end of a keys frame and the
+ * next frame together overran, and the overrun drops the oldest bytes -- the
+ * front of the keys frame -- so the capture ran without its keys and nothing
+ * said so. host/tests/test_link_buffers.py holds this above the largest
+ * burst. */
+#define RX_BUF_LEN      512
 #define READ_CHUNK      64
 #define CMD_PAYLOAD_LEN 5
 #define REPLY_LEN       6
@@ -22,6 +27,7 @@ static const char *TAG = "control";
 static sn_control_handler_t s_handler;
 static sn_credentials_handler_t s_credentials_handler;
 static sn_ble_filter_handler_t s_ble_filter_handler;
+static sn_ble_keys_handler_t s_ble_keys_handler;
 static uint8_t s_buf[RX_BUF_LEN];
 static size_t s_len;
 
@@ -110,6 +116,9 @@ static void parse_buffered(void)
         } else if (s_buf[2] == SN_FRAME_BLE_FILTER &&
                    s_ble_filter_handler != NULL) {
             s_ble_filter_handler(s_buf + SN_HEADER_LEN, payload_len);
+        } else if (s_buf[2] == SN_FRAME_BLE_KEYS &&
+                   s_ble_keys_handler != NULL) {
+            s_ble_keys_handler(s_buf + SN_HEADER_LEN, payload_len);
         }
         memmove(s_buf, s_buf + total, s_len - total);
         s_len -= total;
@@ -124,6 +133,11 @@ void sn_control_set_credentials_handler(sn_credentials_handler_t handler)
 void sn_control_set_ble_filter_handler(sn_ble_filter_handler_t handler)
 {
     s_ble_filter_handler = handler;
+}
+
+void sn_control_set_ble_keys_handler(sn_ble_keys_handler_t handler)
+{
+    s_ble_keys_handler = handler;
 }
 
 static void control_task(void *arg)

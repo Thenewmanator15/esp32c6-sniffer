@@ -73,8 +73,9 @@ static uint16_t s_ble_window_ms;
  *   4: A-MPDU flag, CSI frames, bandwidth and control-subtype commands
  *   5: RADIO_DIRTY, so the host can power-cycle before a Wi-Fi capture
  *   6: BLE observer, its stats block, and SET_BLE_SCAN
+ *   7: BLE device keys (SN_FRAME_BLE_KEYS) and the resolving list
  */
-#define SN_FIRMWARE_VERSION 6u
+#define SN_FIRMWARE_VERSION 7u
 
 static const char *TAG = "main";
 
@@ -435,6 +436,16 @@ static void on_ble_filter(const uint8_t *payload, size_t len)
     }
 }
 
+static void on_ble_keys(const uint8_t *payload, size_t len)
+{
+    const esp_err_t err = sn_radio_ble_set_keys(payload, len);
+    if (err != ESP_OK) {
+        /* The size and the reason; the payload is key material. */
+        ESP_LOGW(TAG, "device keys rejected (%u bytes): %s", (unsigned)len,
+                 esp_err_to_name(err));
+    }
+}
+
 static void on_credentials(const uint8_t *payload, size_t len)
 {
     /* ssid_len, ssid, pass_len, passphrase. Bounded at every step: this
@@ -508,6 +519,7 @@ void app_main(void)
 #if SN_MODE == SN_MODE_CAPTURE
     sn_control_set_credentials_handler(on_credentials);
     sn_control_set_ble_filter_handler(on_ble_filter);
+    sn_control_set_ble_keys_handler(on_ble_keys);
 #endif
     ESP_ERROR_CHECK(sn_control_start());
 
