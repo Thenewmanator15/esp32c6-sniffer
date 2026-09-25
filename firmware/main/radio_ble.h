@@ -99,6 +99,12 @@ bool sn_radio_ble_running(void);
  */
 esp_err_t sn_radio_ble_set_filter(const uint8_t *entries, size_t len);
 uint8_t sn_radio_ble_filter_count(void);
+
+/* Identity resolving keys: N x 23 bytes, (identity type, identity address,
+ * key), the last two least significant first. Refuses a malformed payload,
+ * more keys than the resolving list holds, or a type other than 0 or 1.
+ * Takes effect at the next scan start and is cleared when the scan stops. */
+esp_err_t sn_radio_ble_set_keys(const uint8_t *entries, size_t len);
 void sn_radio_ble_get_stats(sn_ble_stats_t *out);
 
 /* Primary advertising PHYs a scan may use. 2M is deliberately absent: primary

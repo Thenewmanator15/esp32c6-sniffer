@@ -550,7 +550,9 @@ def test_a_length_below_the_frame_is_rejected():
 
 def test_each_board_has_its_own_expected_firmware_version():
     from esp32c6_sniffer.capture import EXPECTED_FIRMWARE_VERSIONS
-    assert EXPECTED_FIRMWARE_VERSIONS["esp32c6"] == 6
+    # 7 when device keys arrived: older firmware ignores frame type 15, so a
+    # key file sent to it would give a capture that never resolves anything.
+    assert EXPECTED_FIRMWARE_VERSIONS["esp32c6"] == 7
     # 3 when that board began batching BLE: a host without BLE_BATCH skips
     # the frame type it does not know, so an unbumped mismatch would present
     # as a capture that runs happily and shows nothing at all. 4 when its

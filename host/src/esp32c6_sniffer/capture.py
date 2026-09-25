@@ -97,7 +97,7 @@ MAX_CLOCK_SKEW_S = 60.0
 #: packs its metadata differently, so every field would decode to a confident
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
-    "esp32c6": 6,
+    "esp32c6": 7,
     "nrf54l15": 4,
 }
 
