@@ -608,6 +608,84 @@ the one this part does expose is Periodic Advertising with Responses —
 is ever wanted here, the silicon is not what stands in the way. Nothing in
 this firmware asks for it.
 
+#### Following a device that changes its address
+
+Phones, Macs and most BLE devices advertise under a *resolvable private
+address* and replace it every few minutes. *Only these devices* filters on an
+address, so on its own it loses such a device at the first change. Given the
+device's identity resolving key (IRK), the board's controller recognises it
+under every address it uses, reports it under its fixed *identity* address,
+and filters on that identity in hardware -- so the rest of the room still
+never crosses the USB link.
+
+Measured on 2026-09-24 with a test advertiser rotating three private addresses
+every 15 s: filtered on its identity, the C6 heard it throughout 50 s (466
+reports) and nothing else, and the nRF54L15, the other way round, 224 reports
+and nothing else.
+
+**The key file** is plain text, one device per line: the identity address,
+optionally `public` or `random` (public if left out), then the key as 32 hex
+digits, most significant byte first as the Bluetooth specification writes it.
+
+```
+# identity address    [public|random]   key
+11:22:33:44:55:66                       <your device's key, 32 hex digits>
+de:ad:be:ef:00:01     random            <your device's key, 32 hex digits>
+```
+
+Blank lines and `#` comments are fine. A mistake stops the capture before it
+starts, naming the line and never repeating what is on it.
+
+**Getting a key from a Mac.** Open Keychain Access, choose Local Items and
+search for "Bluetooth". Open the device's entry and tick *Show password* --
+macOS asks for your login password -- and the key is the value labelled
+"Remote IRK". The identity address is the device's Bluetooth address; on an
+iPhone it is under Settings, General, About, Bluetooth. This is the only route
+that has been tried. Keychain shows the key as base64, and which way round its
+bytes run has not yet been measured on a real key, so this README does not yet
+say how to use that value.
+
+**In Wireshark,** choose the file under *Device keys* in the BLE interface's
+options, type the identity address into *Only these devices*, and start.
+Keyed devices appear under their identity address throughout the capture,
+filtered or not; Wireshark labels it a public or random *identity* address.
+
+**Is the key right?** A key written backwards resolves nothing, and with the
+filter on that looks exactly like a device that is switched off. Three things
+catch it:
+
+- In any capture with keys, a private address that still arrives unresolved
+  is tested against each key reversed. A match raises a pop-up, a log line
+  and a comment on the packet (display filter `pkt_comment`), naming the line
+  of the file.
+- **Check keys**, on the interface toolbar (View, Interface Toolbars), makes
+  the board listen for 20 s with no keys and no filter, then says for each
+  key *correct*, *BACKWARDS*, or *nothing matched* -- the device was not
+  nearby or not advertising, or the key is wrong. Those 20 s are left out of
+  the capture.
+- If a filtered capture hears nothing from a keyed identity for 30 s, the log
+  says so and suggests Check keys.
+
+**How many.** The ESP32-C6 holds five keys and the nRF54L15 eight. In *Only
+these devices*, an identity from the key file takes one of the eight places;
+any other address takes two, because whether it is public or random cannot be
+told from the address, so four plain addresses fit.
+
+That rule fixes a fault. A typed address used to go to the controller as
+public only, and the controller matches the type as well, so a device with a
+random address was filtered out entirely: measured, 0 reports against 10 on
+the C6 and 0 against 9 on the nRF54L15. And the nRF54L15, which does not reset
+when its port opens, kept the previous capture's filter: an unfiltered capture
+straight after a filtered one heard 10 reports from one device, where the one
+before had heard 587 from nine. The key list and the filter are now both sent
+at the start of every capture.
+
+**The key file is a secret.** Anyone holding it can follow those devices. The
+keys go to the board's memory for one capture and are cleared when it stops.
+They are never written into the capture file -- pcapng has no place for a
+Bluetooth key -- and the firmware logs how many it was given, never what they
+are. Keep the file out of repositories.
+
 ### Verifying the 11ax decoder
 
 The HE decoder has never seen a real 802.11ax frame, and not because it is
