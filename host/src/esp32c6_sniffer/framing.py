@@ -65,6 +65,11 @@ class FrameType(IntEnum):
     #: and its capacity. Occupancy only -- drops travel in STATS already, and
     #: counting them here too would double them in the pcapng statistics.
     LINK = 13
+    #: Host to board: identity resolving keys, so the controller reports and
+    #: filters a device that changes its address under its identity address.
+    #: N x 23 bytes: identity type, identity address, key -- the last two
+    #: least significant byte first. Empty clears. See ble_keys.
+    BLE_KEYS = 15
 
 
 @dataclass(frozen=True)

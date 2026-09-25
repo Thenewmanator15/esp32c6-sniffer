@@ -23,15 +23,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from esp32c6_sniffer.control import MAX_DEVICE_KEYS
+
 #: The byte order of the base64 "Remote IRK" that macOS Keychain shows. Apple
 #: does not document it and write-ups disagree, so it is measured on a real
 #: key (plan Task 15). Until then the decoded bytes are taken as written, and
 #: the README does not offer base64 as supported.
 KEYCHAIN_BASE64_REVERSED = False
-
-#: What one SN_FRAME_BLE_KEYS frame carries. Boards hold fewer: see
-#: boards.py "ble_keys".
-MAX_DEVICE_KEYS = 8
 
 _TYPE_WORDS = {"public": 0, "random": 1}
 _HEX_KEY = re.compile(r"^[0-9a-fA-F]{32}$")

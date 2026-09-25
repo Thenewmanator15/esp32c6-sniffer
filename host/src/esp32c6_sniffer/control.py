@@ -276,6 +276,38 @@ def encode_ble_filter(addresses) -> bytes:
     return encode_frame(FrameType.BLE_FILTER, 0, bytes(payload))
 
 
+#: Device keys one SN_FRAME_BLE_KEYS frame carries. Each board holds fewer or
+#: as many: boards.py "ble_keys".
+MAX_DEVICE_KEYS = 8
+
+
+def encode_ble_keys(keys) -> bytes:
+    """Frames identity resolving keys for the board's resolving list.
+
+    Each key is anything with address_type (0 public, 1 random), address
+    ("aa:bb:cc:dd:ee:ff") and irk (16 bytes, most significant first) --
+    ble_keys.DeviceKey in practice. On the wire each is 23 bytes: the type,
+    then the address and the key least significant byte first, as HCI
+    carries both. An empty list clears the keys.
+
+    The board keeps them in RAM for one capture and never logs them.
+    """
+    if len(keys) > MAX_DEVICE_KEYS:
+        raise ValueError(
+            f"{len(keys)} device keys; a frame carries at most "
+            f"{MAX_DEVICE_KEYS}")
+    payload = bytearray()
+    for key in keys:
+        if key.address_type not in (BLE_ADDRESS_PUBLIC, BLE_ADDRESS_RANDOM):
+            raise ValueError(f"address type {key.address_type} is not 0 or 1")
+        if len(key.irk) != 16:
+            raise ValueError("a device key is 16 bytes")
+        payload.append(key.address_type)
+        payload += bytes.fromhex(key.address.replace(":", ""))[::-1]
+        payload += key.irk[::-1]
+    return encode_frame(FrameType.BLE_KEYS, 0, bytes(payload))
+
+
 def decode_reply(payload: bytes) -> dict:
     """Decode a CONTROL_REPLY frame's payload.
 

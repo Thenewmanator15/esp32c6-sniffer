@@ -178,3 +178,41 @@ def test_an_empty_file_is_refused(tmp_path):
 def test_a_missing_file_is_refused_by_name(tmp_path):
     with pytest.raises(KeyFileError, match="missing.txt"):
         parse_key_file(tmp_path / "missing.txt")
+
+
+from esp32c6_sniffer.boards import board_by_id
+from esp32c6_sniffer.control import MAX_DEVICE_KEYS, encode_ble_keys
+from esp32c6_sniffer.framing import FrameType, decode_frame
+
+KEY = DeviceKey(1, 1, IDENTITY, IRK)
+
+
+def test_the_keys_frame_is_type_15():
+    """Pinned: shared/frame.h says 15 too, and both firmwares dispatch on it."""
+    assert FrameType.BLE_KEYS == 15
+    assert decode_frame(encode_ble_keys([KEY])).ftype is FrameType.BLE_KEYS
+
+
+def test_one_key_is_23_bytes_least_significant_first():
+    payload = decode_frame(encode_ble_keys([KEY])).payload
+    assert payload.hex() == (
+        "01"                                   # random
+        "0100efbeadde"                         # de:ad:be:ef:00:01, LSB first
+        "9b7d390aa610103405adc857a33402ec")    # the sample IRK, reversed
+
+
+def test_an_empty_list_clears_the_keys():
+    assert decode_frame(encode_ble_keys([])).payload == b""
+
+
+def test_more_than_a_frame_holds_is_refused():
+    keys = [DeviceKey(n, 0, f"11:22:33:44:55:{n:02x}", IRK)
+            for n in range(MAX_DEVICE_KEYS + 1)]
+    with pytest.raises(ValueError, match="at most 8"):
+        encode_ble_keys(keys)
+
+
+def test_each_board_says_how_many_keys_it_holds():
+    """The C6's resolving list tops out at 5 in its Kconfig; the nRF's is 8."""
+    assert board_by_id("esp32c6")["ble_keys"] == 5
+    assert board_by_id("nrf54l15")["ble_keys"] == 8
