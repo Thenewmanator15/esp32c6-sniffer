@@ -24,6 +24,7 @@ from .control import (
     Bandwidth,
     Command,
     encode_ble_filter,
+    encode_ble_keys,
     encode_credentials,
     CtrlFilter,
     FrameFilter,
@@ -33,7 +34,7 @@ from .control import (
 )
 from .batch import (BatchError, decode_ble_batch, decode_link,
                     decode_packet_batch)
-from .boards import BRIDGE_FIRST_REPLY_S, bridged_board_ids
+from .boards import BRIDGE_FIRST_REPLY_S, board_by_id, bridged_board_ids
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
 from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
@@ -342,6 +343,7 @@ class CaptureSession:
         ble_phys: int | None = None,
         ble_periodic: bool = False,
         ble_filter=None,
+        ble_keys=None,
         ctrl_filter: CtrlFilter | None = None,
         csi_sink=None,
         board: str = "esp32c6",
@@ -393,6 +395,14 @@ class CaptureSession:
         #: BLE addresses to restrict scanning to, filtered by the
         #: controller so the rest never cross the link.
         self._ble_filter = list(ble_filter or [])
+        #: Identity resolving keys for the controller's resolving list.
+        self._ble_keys = list(ble_keys or [])
+        if self._ble_keys:
+            spec = board_by_id(board)
+            if len(self._ble_keys) > spec["ble_keys"]:
+                raise ValueError(
+                    f"{len(self._ble_keys)} device keys, and the "
+                    f"{spec['display']} holds {spec['ble_keys']}")
         self._ctrl_filter = ctrl_filter
         # Called for each CSI record. CSI has no place in a pcap, so it leaves
         # by a different door rather than being forced into one.
@@ -580,9 +590,7 @@ class CaptureSession:
             # Before START, always. The accept list is loaded when the scan is
             # configured, and the controller forgets it when a capture stops,
             # so sending it afterwards filters nothing.
-            if self._ble_filter:
-                self._serial.write(encode_ble_filter(self._ble_filter))
-                self._serial.flush()
+            self._send_ble_lists(self._ble_keys, self._ble_filter)
             self._command(Command.START)
         else:
             self._command(Command.SET_CHANNEL, self._channel)
@@ -603,6 +611,22 @@ class CaptureSession:
         self._tracker = SequenceTracker()
         self._deferred = []
         self.stats.sequence_gaps = 0
+
+    def _send_ble_lists(self, keys, entries) -> None:
+        """The device keys, then the accept list, both always.
+
+        Always, even empty: an empty frame is how the board is told to clear
+        one. The nRF54L15 does not reset when its port opens, so a list left
+        from the previous capture would otherwise still apply -- a capture
+        with no filter after one with a filter came out filtered anyway.
+
+        Keys before the filter, and both before START: the board loads the
+        resolving list, then the accept list that may name its identities,
+        when the scan starts.
+        """
+        self._serial.write(encode_ble_keys(keys))
+        self._serial.write(encode_ble_filter(entries))
+        self._serial.flush()
 
     def associate(self, ssid: str, passphrase: str) -> int:
         """Associates with an access point, returning the channel.

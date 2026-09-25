@@ -23,7 +23,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from esp32c6_sniffer.control import MAX_DEVICE_KEYS
+from esp32c6_sniffer.control import (
+    BLE_ADDRESS_PUBLIC,
+    BLE_ADDRESS_RANDOM,
+    MAX_BLE_FILTER,
+    MAX_DEVICE_KEYS,
+)
 
 #: The byte order of the base64 "Remote IRK" that macOS Keychain shows. Apple
 #: does not document it and write-ups disagree, so it is measured on a real
@@ -255,3 +260,32 @@ def parse_key_file(path) -> list[DeviceKey]:
             f"{path.name} holds {len(keys)} keys; one capture takes at most "
             f"{MAX_DEVICE_KEYS}, and some boards fewer")
     return keys
+
+
+def filter_entries(typed, keys, capacity: int = MAX_BLE_FILTER):
+    """Turns addresses typed into "Only these devices" into accept-list
+    entries of (type, address).
+
+    An address named in the key file takes that identity's type: one entry.
+    Any other takes two, public and random, because the type cannot be read
+    from an address -- a public one may have any leading bits. Sending only
+    public, as this once did, filtered every random-address device out of
+    the capture entirely: measured on the C6, 0 reports against 10.
+    """
+    keyed = {key.address: key.address_type for key in keys}
+    entries: list[tuple[int, str]] = []
+    for text in typed:
+        address = normalize_address(text)
+        if address in keyed:
+            entries.append((keyed[address], address))
+        else:
+            entries.append((BLE_ADDRESS_PUBLIC, address))
+            entries.append((BLE_ADDRESS_RANDOM, address))
+    unique = list(dict.fromkeys(entries))
+    if len(unique) > capacity:
+        raise ValueError(
+            f"these addresses need {len(unique)} accept-list entries and the "
+            f"board holds {capacity}. An address in the device key file "
+            f"takes one; any other takes two, because whether it is public or "
+            f"random cannot be told from the address")
+    return unique

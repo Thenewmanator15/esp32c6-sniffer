@@ -216,3 +216,40 @@ def test_each_board_says_how_many_keys_it_holds():
     """The C6's resolving list tops out at 5 in its Kconfig; the nRF's is 8."""
     assert board_by_id("esp32c6")["ble_keys"] == 5
     assert board_by_id("nrf54l15")["ble_keys"] == 8
+
+
+from esp32c6_sniffer.ble_keys import filter_entries
+
+
+def test_a_keyed_identity_takes_one_entry_of_its_own_type():
+    assert filter_entries([IDENTITY], [KEY]) == [(1, IDENTITY)]
+
+
+def test_a_plain_address_takes_both_types():
+    """The measured bug: typed addresses went out as public only, and a
+    random-address device was filtered out entirely (0 reports against 10)."""
+    assert filter_entries(["11:22:33:44:55:66"], []) == [
+        (0, "11:22:33:44:55:66"), (1, "11:22:33:44:55:66")]
+
+
+def test_the_same_device_typed_twice_takes_its_entries_once():
+    """Review focus 2."""
+    typed = ["11:22:33:44:55:66", "11-22-33-44-55-66", "11:22:33:44:55:66".upper()]
+    assert len(filter_entries(typed, [])) == 2
+
+
+def test_an_identity_written_differently_still_counts_as_keyed():
+    """Review focus 3."""
+    assert filter_entries(["DE-AD-BE-EF-00-01"], [KEY]) == [(1, IDENTITY)]
+
+
+def test_four_plain_addresses_fit_and_five_do_not():
+    four = [f"11:22:33:44:55:{n:02x}" for n in range(4)]
+    assert len(filter_entries(four, [])) == 8
+    with pytest.raises(ValueError, match="holds 8"):
+        filter_entries(four + ["de:ad:be:ef:00:01"], [])
+
+
+def test_eight_keyed_identities_fit():
+    keys = [DeviceKey(n, 1, f"de:ad:be:ef:00:{n:02x}", IRK) for n in range(8)]
+    assert len(filter_entries([k.address for k in keys], keys)) == 8

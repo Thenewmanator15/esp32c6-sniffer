@@ -78,6 +78,12 @@ def build_ble_record(payload: bytes):
     return _DIRECTION_RECEIVED + hci, len(hci), timestamp_us
 
 
+def hci_of_record(record: bytes) -> bytes:
+    """The HCI packet inside a record from build_ble_record: the H4 type byte
+    onwards, without the four-byte direction header."""
+    return record[len(_DIRECTION_RECEIVED):]
+
+
 def is_advertising_report(payload: bytes) -> bool:
     """True if this frame carries an LE advertising report.
 
