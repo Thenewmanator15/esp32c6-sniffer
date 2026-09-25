@@ -12,9 +12,14 @@
 
 static const char *TAG = "control";
 
-/* Inbound frames are tiny (a 10-byte header plus a 5-byte payload), so a small
- * buffer suffices. Sized for a few frames plus slack for resynchronisation. */
-#define RX_BUF_LEN      128
+/* Commands are 15 bytes, but a BLE capture starts with the device keys, the
+ * filter and START in one burst: 206 bytes at most here (five keys, eight
+ * filter entries). At 128 a read that brought the end of a keys frame and the
+ * next frame together overran, and the overrun drops the oldest bytes -- the
+ * front of the keys frame -- so the capture ran without its keys and nothing
+ * said so. host/tests/test_link_buffers.py holds this above the largest
+ * burst. */
+#define RX_BUF_LEN      512
 #define READ_CHUNK      64
 #define CMD_PAYLOAD_LEN 5
 #define REPLY_LEN       6
