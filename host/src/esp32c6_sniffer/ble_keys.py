@@ -208,11 +208,20 @@ def parse_key_file(path) -> list[DeviceKey]:
     """
     path = Path(path)
     try:
-        # utf-8-sig: Notepad writes a byte-order mark.
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
+        raw = path.read_bytes()
     except OSError as exc:
         raise KeyFileError(
             f"cannot read device key file {path}: {exc.strerror}") from None
+    # UTF-8, with or without the byte-order mark Notepad writes, or UTF-16
+    # with its mark, which is Notepad's "Unicode". Anything else was a raw
+    # UnicodeDecodeError, which reached Wireshark as a Python traceback.
+    encoding = ("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+                else "utf-8-sig")
+    try:
+        lines = raw.decode(encoding).splitlines()
+    except UnicodeDecodeError:
+        raise KeyFileError(
+            f"{path.name} is not UTF-8 text: save it as UTF-8") from None
 
     keys: list[DeviceKey] = []
     seen: set[str] = set()

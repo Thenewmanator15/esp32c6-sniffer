@@ -128,6 +128,22 @@ def test_a_notepad_file_with_bom_and_crlf_parses(tmp_path):
     assert parse_key_file(path)[0].address == IDENTITY
 
 
+def test_a_notepad_unicode_file_parses(tmp_path):
+    """Notepad's "Unicode" is UTF-16 with a byte-order mark."""
+    path = tmp_path / "keys.txt"
+    path.write_bytes(f"# phone\r\n{IDENTITY} random {IRK_HEX}\r\n".encode("utf-16"))
+    assert parse_key_file(path)[0].irk == IRK
+
+
+def test_a_file_in_another_encoding_is_refused_not_a_traceback(tmp_path):
+    """An ANSI file with an accented comment used to raise UnicodeDecodeError,
+    which reached Wireshark as a Python traceback."""
+    path = tmp_path / "keys.txt"
+    path.write_bytes(f"# Caf\xe9 iPad\r\n{IDENTITY} random {IRK_HEX}\r\n".encode("cp1252"))
+    with pytest.raises(KeyFileError, match="UTF-8"):
+        parse_key_file(path)
+
+
 def test_the_identity_is_normalised(tmp_path):
     keys = parse_key_file(keyfile(tmp_path, f"DE-AD-BE-EF-00-01 random {IRK_HEX}\n"))
     assert keys[0].address == IDENTITY
