@@ -7,6 +7,7 @@ from esp32c6_sniffer.adv import (
     AddressType,
     parse_ad_structures,
     parse_advertising_reports,
+    parse_hci_advertising_reports,
 )
 
 MAC = bytes([0x66, 0x55, 0x44, 0x33, 0x22, 0x11])   # least significant first
@@ -247,3 +248,20 @@ def test_truncated_matter_data_is_not_decoded():
 def test_an_ordinary_advertisement_has_no_matter_field():
     reports = parse_advertising_reports(legacy(ad((0x09, b"kettle"))))
     assert reports[0].matter is None
+
+
+def test_a_resolved_report_is_named_an_identity():
+    """Types 2 and 3 are what a controller with the device's key reports.
+    They were read as 'random static' by their top bits, which is wrong for
+    a public identity and says nothing about the resolving."""
+    public = parse_advertising_reports(extended(b"", address_type=0x02))[0]
+    random = parse_advertising_reports(extended(b"", address_type=0x03))[0]
+    assert public.address_type == AddressType.PUBLIC_IDENTITY
+    assert random.address_type == AddressType.RANDOM_IDENTITY
+    assert public.trackable and random.trackable
+
+
+def test_hci_bytes_parse_without_the_frame_metadata():
+    payload = extended(b"", address_type=0x03)
+    assert parse_hci_advertising_reports(payload[META_LEN:]) == \
+        parse_advertising_reports(payload)

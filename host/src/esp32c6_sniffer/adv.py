@@ -94,11 +94,19 @@ class AddressType:
     RANDOM_STATIC = "random static"
     RANDOM_RESOLVABLE = "resolvable private"
     RANDOM_NON_RESOLVABLE = "non-resolvable private"
+    #: Reported by a controller that resolved the device with its key: the
+    #: address shown is the identity, not what was sent on air.
+    PUBLIC_IDENTITY = "public identity"
+    RANDOM_IDENTITY = "random identity"
 
     @staticmethod
     def classify(address_type: int, address: bytes) -> str:
         if address_type == 0x00:
             return AddressType.PUBLIC
+        if address_type == 0x02:
+            return AddressType.PUBLIC_IDENTITY
+        if address_type == 0x03:
+            return AddressType.RANDOM_IDENTITY
         if not address:
             return "unknown"
         # The top two bits of the most significant byte say which kind of
@@ -190,7 +198,9 @@ class AdvertisingReport:
         """False when the address is rotated for privacy, so counting it as a
         device would count one phone many times over."""
         return self.address_type in (AddressType.PUBLIC,
-                                     AddressType.RANDOM_STATIC)
+                                     AddressType.RANDOM_STATIC,
+                                     AddressType.PUBLIC_IDENTITY,
+                                     AddressType.RANDOM_IDENTITY)
 
 
 def parse_ad_structures(data: bytes) -> list[tuple[int, bytes]]:
@@ -241,7 +251,12 @@ def parse_advertising_reports(payload: bytes) -> list[AdvertisingReport]:
     """Decodes every report in one frame payload. Empty if it is not one."""
     if len(payload) <= META_LEN:
         return []
-    hci = payload[META_LEN:]
+    return parse_hci_advertising_reports(payload[META_LEN:])
+
+
+def parse_hci_advertising_reports(hci: bytes) -> list[AdvertisingReport]:
+    """Decodes every report in one HCI packet, starting at its H4 type byte.
+    Empty if it is not an advertising report."""
     if len(hci) < 5 or hci[0] != H4_EVENT or hci[1] != EVENT_LE_META:
         return []
 
