@@ -556,8 +556,9 @@ def test_each_board_has_its_own_expected_firmware_version():
     # 3 when that board began batching BLE: a host without BLE_BATCH skips
     # the frame type it does not know, so an unbumped mismatch would present
     # as a capture that runs happily and shows nothing at all. 4 when its
-    # STATS frame gained the FCS-failure count after the BLE block.
-    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 4
+    # STATS frame gained the FCS-failure count after the BLE block. 5 with
+    # device keys, and with HCI commands that report a refusal.
+    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 5
 
 
 def test_the_old_constant_still_names_the_c6():

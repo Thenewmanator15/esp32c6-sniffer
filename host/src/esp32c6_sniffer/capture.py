@@ -98,7 +98,7 @@ MAX_CLOCK_SKEW_S = 60.0
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
     "esp32c6": 7,
-    "nrf54l15": 4,
+    "nrf54l15": 5,
 }
 
 #: How to reflash each board, quoted back to the operator on a mismatch.
