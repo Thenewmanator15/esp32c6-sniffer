@@ -253,3 +253,84 @@ def test_four_plain_addresses_fit_and_five_do_not():
 def test_eight_keyed_identities_fit():
     keys = [DeviceKey(n, 1, f"de:ad:be:ef:00:{n:02x}", IRK) for n in range(8)]
     assert len(filter_entries([k.address for k in keys], keys)) == 8
+
+
+from esp32c6_sniffer.ble_keys import (
+    KEY_CHECK_SECONDS,
+    BackwardsKeyWatch,
+    KeyCheck,
+    SilenceWatch,
+    silence_message,
+)
+
+
+def report(address: str, address_type: int = 1) -> bytes:
+    raw = bytes.fromhex(address.replace(":", ""))[::-1]
+    body = bytearray([1, 0x10, 0x00, address_type]) + raw
+    body += bytes([0x01, 0x00, 0x00, 0x7F, 0xC0, 0x00, 0x00, 0x00]) + bytes(6)
+    body += bytes([0])
+    return bytes([0x04, 0x3E, len(body) + 1, 0x0D]) + bytes(body)
+
+
+BACKWARDS = DeviceKey(2, 1, IDENTITY, IRK[::-1])   # written the wrong way round
+
+
+def test_a_backwards_key_is_spotted_once():
+    watch = BackwardsKeyWatch([BACKWARDS])
+    first = watch.observe(report(make_rpa(IRK, 0x400001)))
+    assert [(f.key.line, f.reversed) for f in first] == [(2, True)]
+    assert watch.observe(report(make_rpa(IRK, 0x400002))) == []
+
+
+def test_a_correct_key_seen_unresolved_is_a_board_fault():
+    [finding] = BackwardsKeyWatch([KEY]).observe(report(make_rpa(IRK, 0x400001)))
+    assert not finding.reversed
+    assert "board" in finding.message("keys.txt")
+
+
+def test_resolved_and_static_addresses_are_not_tested():
+    watch = BackwardsKeyWatch([BACKWARDS])
+    assert watch.observe(report(IDENTITY, address_type=0x03)) == []
+    assert watch.observe(report(IDENTITY, address_type=0x01)) == []
+
+
+def test_the_backwards_message_names_the_line_and_never_the_key():
+    [finding] = BackwardsKeyWatch([BACKWARDS]).observe(report(make_rpa(IRK, 0x400001)))
+    text = finding.message("keys.txt")
+    assert "line 2 of keys.txt" in text and "byte-reversed" in text
+    assert IRK.hex() not in text and IRK[::-1].hex() not in text
+
+
+def test_the_check_counts_distinct_addresses_per_key():
+    check = KeyCheck([KEY, BACKWARDS, DeviceKey(3, 0, "11:22:33:44:55:66", bytes(range(1, 17)))])
+    for prand in (0x400001, 0x400002, 0x400002):     # one repeated
+        check.observe(report(make_rpa(IRK, prand)))
+    verdicts = [(r.key.line, r.verdict, r.as_written, r.reversed) for r in check.results()]
+    assert verdicts == [(1, "correct", 2, 0), (2, "backwards", 0, 2),
+                        (3, "nothing matched", 0, 0)]
+
+
+def test_check_messages_say_what_to_do():
+    check = KeyCheck([BACKWARDS])
+    check.observe(report(make_rpa(IRK, 0x400001)))
+    [result] = check.results()
+    text = result.message("keys.txt")
+    assert "line 2" in text and "BACKWARDS" in text and IRK.hex() not in text
+
+
+def test_the_check_listens_twenty_seconds():
+    assert KEY_CHECK_SECONDS == 20.0
+
+
+def test_silence_is_reported_once_after_thirty_seconds():
+    watch = SilenceWatch([IDENTITY], start=100.0)
+    assert watch.silent(129.0) == []
+    watch.observe(report(IDENTITY, address_type=0x03), at=120.0)
+    assert watch.silent(149.0) == []
+    assert watch.silent(150.0) == [IDENTITY]
+    assert watch.silent(500.0) == []
+
+
+def test_the_silence_message_suggests_check_keys():
+    text = silence_message(IDENTITY, 30.0)
+    assert IDENTITY in text and "Check keys" in text

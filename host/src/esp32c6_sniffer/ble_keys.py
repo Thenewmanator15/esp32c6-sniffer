@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from esp32c6_sniffer.adv import AddressType, parse_hci_advertising_reports
 from esp32c6_sniffer.control import (
     BLE_ADDRESS_PUBLIC,
     BLE_ADDRESS_RANDOM,
@@ -289,3 +290,156 @@ def filter_entries(typed, keys, capacity: int = MAX_BLE_FILTER):
             f"takes one; any other takes two, because whether it is public or "
             f"random cannot be told from the address")
     return unique
+
+
+#: How long Check keys listens with no keys and no filter.
+KEY_CHECK_SECONDS = 20.0
+
+#: Distinct unresolved addresses remembered before the memory is cleared. A
+#: busy room produces a few hundred an hour; this only bounds a pathological one.
+_SEEN_LIMIT = 4096
+
+
+def _private_addresses(hci: bytes):
+    """Resolvable private addresses in one HCI packet that the board did NOT
+    resolve. A resolved one arrives as an identity instead."""
+    for report in parse_hci_advertising_reports(hci):
+        if report.address_type == AddressType.RANDOM_RESOLVABLE:
+            yield report.address
+
+
+@dataclass(frozen=True)
+class KeyFinding:
+    key: DeviceKey
+    #: True: the address resolves only with the key's bytes reversed.
+    #: False: it resolves with the key as written, which the board should
+    #: have done itself.
+    reversed: bool
+    address: str
+
+    def message(self, file_name: str) -> str:
+        where = f"Device key on line {self.key.line} of {file_name}"
+        if self.reversed:
+            return (f"{where} is byte-reversed: {self.address} resolves only "
+                    f"with its bytes the other way round, so this device is "
+                    f"not being followed. Reverse the key in the file and "
+                    f"restart the capture.")
+        return (f"{where} resolves {self.address}, but the board reported it "
+                f"unresolved. That should not happen: the board may have "
+                f"refused the key -- see the Log.")
+
+
+class BackwardsKeyWatch:
+    """Spots a key written the wrong way round, during an ordinary capture.
+
+    A keyed device whose key is right arrives already resolved, so any
+    resolvable private address still arriving unresolved is tested against
+    each key reversed. Each address is tested once and each key reported at
+    most once per capture. Costs two AES blocks per key per new address.
+    """
+
+    def __init__(self, keys):
+        self._keys = list(keys)
+        self._seen: set[str] = set()
+        self._reported: set[int] = set()
+
+    def observe(self, hci: bytes) -> list[KeyFinding]:
+        findings: list[KeyFinding] = []
+        for address in _private_addresses(hci):
+            if address in self._seen:
+                continue
+            if len(self._seen) >= _SEEN_LIMIT:
+                self._seen.clear()
+            self._seen.add(address)
+            for key in self._keys:
+                if key.line in self._reported:
+                    continue
+                if resolves(key.irk[::-1], address):
+                    findings.append(KeyFinding(key, True, address))
+                elif resolves(key.irk, address):
+                    findings.append(KeyFinding(key, False, address))
+                else:
+                    continue
+                self._reported.add(key.line)
+        return findings
+
+
+@dataclass(frozen=True)
+class KeyCheckResult:
+    key: DeviceKey
+    #: Distinct private addresses that resolved with the key as written.
+    as_written: int
+    #: ... that resolved only with its bytes reversed.
+    reversed: int
+
+    @property
+    def verdict(self) -> str:
+        if self.as_written:
+            return "correct"
+        if self.reversed:
+            return "backwards"
+        return "nothing matched"
+
+    def message(self, file_name: str) -> str:
+        head = f"{file_name} line {self.key.line} ({self.key.address})"
+        if self.as_written:
+            return (f"{head}: correct, {self.as_written} private "
+                    f"address(es) resolved.")
+        if self.reversed:
+            return (f"{head}: BACKWARDS, {self.reversed} private address(es) "
+                    f"resolved only with the key's bytes reversed. Reverse it "
+                    f"in the file.")
+        return (f"{head}: nothing matched in {KEY_CHECK_SECONDS:.0f} s. The "
+                f"device was not nearby or not advertising, or the key is "
+                f"wrong.")
+
+
+class KeyCheck:
+    """What Check keys does with the 20 s the board spends listening with no
+    keys and no filter: every private address heard, tested against every
+    key both ways round."""
+
+    def __init__(self, keys):
+        self._keys = list(keys)
+        self._addresses: set[str] = set()
+
+    def observe(self, hci: bytes) -> None:
+        self._addresses.update(_private_addresses(hci))
+
+    def results(self) -> list[KeyCheckResult]:
+        return [KeyCheckResult(
+                    key,
+                    sum(resolves(key.irk, a) for a in self._addresses),
+                    sum(resolves(key.irk[::-1], a) for a in self._addresses))
+                for key in self._keys]
+
+
+class SilenceWatch:
+    """Notices a followed identity that has gone quiet.
+
+    With the filter on, a backwards key means nothing at all arrives from
+    that device -- which looks exactly like a device that is off. After
+    `after_s` without a report from an identity, silent() names it once.
+    """
+
+    def __init__(self, identities, after_s: float = 30.0, *, start: float):
+        self._after = after_s
+        self._last = {address: start for address in identities}
+        self._told: set[str] = set()
+
+    def observe(self, hci: bytes, at: float) -> None:
+        for report in parse_hci_advertising_reports(hci):
+            if report.address in self._last:
+                self._last[report.address] = at
+
+    def silent(self, at: float) -> list[str]:
+        quiet = [address for address, last in self._last.items()
+                 if address not in self._told and at - last >= self._after]
+        self._told.update(quiet)
+        return quiet
+
+
+def silence_message(identity: str, seconds: float) -> str:
+    return (f"Nothing from {identity} for {seconds:.0f} s. If its key has "
+            f"never been checked, press Check keys: a backwards key looks "
+            f"exactly like this.")
