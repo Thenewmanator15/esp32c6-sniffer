@@ -70,6 +70,27 @@ def packet_entries(frame) -> list[tuple[int, bytes]]:
     return []
 
 
+def heard_on(frame, channel: int) -> list[tuple[int, bytes]]:
+    """The packets in a frame that were heard on `channel`, as packet_entries.
+
+    Every packet carries the channel it was heard on, and that is what counts,
+    not the channel the survey was on when the frame arrived: the nRF54L15
+    batches its packets, so a batch from the channel just left can arrive
+    after the retune. Counted as the new channel's, it put a channel-15
+    network on channel 20.
+    """
+    if frame.ftype is FrameType.PACKET and len(frame.payload) > _META.size:
+        heard = _META.unpack_from(frame.payload)[0]
+    elif frame.ftype is FrameType.PACKET_BATCH:
+        try:
+            heard, _entries = decode_packet_batch(frame.payload)
+        except BatchError:
+            return []
+    else:
+        return []
+    return packet_entries(frame) if heard == channel else []
+
+
 def packet_rssis(frame) -> list[int]:
     """The signal strength of every 802.15.4 packet a frame carries."""
     return [rssi for rssi, _psdu in packet_entries(frame)]
@@ -161,7 +182,7 @@ def main() -> None:
             end = time.monotonic() + args.dwell
             while time.monotonic() < end:
                 for frame in parser.feed(ser.read(8192)):
-                    heard += packet_entries(frame)
+                    heard += heard_on(frame, channel)
             rssis = [rssi for rssi, _psdu in heard]
             frames = len(rssis)
             traffic[channel] = {"frames": frames, "rssis": rssis, "packets": heard}

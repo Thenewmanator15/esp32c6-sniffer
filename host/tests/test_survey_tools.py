@@ -122,3 +122,21 @@ def test_both_tools_open_the_board_through_a_board_link():
     assert survey.BoardLink is BoardLink
     assert spectrum.BoardLink is BoardLink
     assert not hasattr(survey, "_open") and not hasattr(spectrum, "_open")
+
+
+def test_a_late_batch_counts_for_the_channel_it_was_heard_on():
+    """The nRF54L15 batches its packets, so a batch from the channel just left
+    can arrive after the retune. Counted as the new channel's, it put a
+    network on a channel it was never on: live, one frame of a channel-15
+    Thread PAN turned up on channel 20 at the same signal strength."""
+    entries = [BatchEntry(1000, 200, -70, b"\x41\x88\x01")]
+    late = frame(FrameType.PACKET_BATCH, encode_packet_batch(15, entries))
+    assert survey.heard_on(late, 20) == []
+    assert survey.heard_on(late, 15) == [(-70, b"\x41\x88\x01")]
+
+
+def test_a_single_packet_counts_for_the_channel_in_its_metadata():
+    meta = struct.pack("<BBbBQ", 15, 200, -60, 0, 123456)
+    packet = frame(FrameType.PACKET, meta + b"\x41\x88\x07")
+    assert survey.heard_on(packet, 15) == [(-60, b"\x41\x88\x07")]
+    assert survey.heard_on(packet, 20) == []
