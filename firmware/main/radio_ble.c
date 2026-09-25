@@ -634,6 +634,12 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms)
 
 void sn_radio_ble_stop(void)
 {
+    /* Keys are secrets; they live for one capture. First, so the early
+     * return below -- a stop with the controller already down -- cannot
+     * skip it. Deinitialising the controller clears its own copy. */
+    memset(s_keys, 0, sizeof(s_keys));
+    s_key_count = 0;
+
     sn_trace(SN_TRACE_BLE_STOP_IN, s_controller_up ? 1 : 0, 0);
     if (!s_controller_up) {
         sn_trace(SN_TRACE_BLE_STOP_OUT, 0, 0);
@@ -657,10 +663,6 @@ void sn_radio_ble_stop(void)
     if (s_sync_queue != NULL) {
         xQueueReset(s_sync_queue);
     }
-
-    /* Keys are secrets; they live for one capture. */
-    memset(s_keys, 0, sizeof(s_keys));
-    s_key_count = 0;
 
     /* Hand the front end back properly. Disabling the scan alone leaves the
      * controller owning the radio, and the 802.15.4 radio has already shown
