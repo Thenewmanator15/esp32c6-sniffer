@@ -199,7 +199,8 @@ Beyond capturing into Wireshark:
 - **A spectrum survey** using the radio's energy detector, which sees the Wi-Fi
   that overlaps most 802.15.4 channels and is invisible to a packet capture.
 - **Drop counters published by the board**, so "did I miss anything?" is
-  answerable rather than assumed.
+  answerable rather than assumed. The nRF54L15 also counts the 802.15.4 frames
+  its radio discarded as corrupt, which no capture can contain.
 - **Timestamps good to ~0.5 µs**, measured against the standard's fixed
   acknowledgement turnaround rather than claimed from a datasheet.
 - **Self-describing captures**: pcapng carrying the board, radio, channel, the
@@ -208,7 +209,13 @@ Beyond capturing into Wireshark:
 - **Channel state information** export, per-subcarrier, alongside the capture.
 - **802.11ax (HE) decoding** from the radio's own PHY metadata, verified
   against real 11ax traffic.
-- **Survey tools** for Wi-Fi and BLE that summarise a room without a capture.
+- **Survey tools** that summarise a room without a capture: Wi-Fi networks,
+  BLE advertisers, and 802.15.4 networks named from their frame headers
+  without any key (PAN, Thread or Zigbee, how many devices, how many sleepy).
+- **Decryption of your own networks**, through Wireshark's own key tables:
+  Zigbee, Thread (including sleepy devices' frames, given your border router's
+  child table), and Bluetooth Mesh. See
+  [Decrypting your own traffic](docs/using-wireshark.md#decrypting-your-own-traffic).
 
 ## Development status
 
@@ -965,10 +972,10 @@ Two further limits worth stating plainly:
 
 | Radio | What you actually get |
 |---|---|
-| 802.15.4 | Strong. Full promiscuous capture with RSSI, LQI and channel. |
+| 802.15.4 | Strong. Full promiscuous capture with RSSI, LQI and channel. Frames that fail their checksum never arrive; the nRF54L15 counts them. |
 | Wi-Fi | Good. Full payloads except MIMO frames. 2.4 GHz only. Encrypted payloads stay encrypted. |
-| BLE, ESP32-C6 | Weak. Advertisements only, and an LE Audio broadcast it can name but never hear. |
-| BLE, nRF54L15 | Weak, and a little more: advertisements, plus the audio of a broadcast it follows. |
+| BLE, ESP32-C6 | Weak. Advertisements, long-range (Coded) ones included, and an LE Audio broadcast it can name but never hear. |
+| BLE, nRF54L15 | Weak, and a little more: advertisements, and it joins a broadcast it follows. Forwarding that broadcast's audio is fixed in firmware but not yet seen on air. |
 
 Neither board follows a connection: this is a scanner, not a link-layer
 sniffer. Two further BLE ceilings are silicon rather than configuration, and
@@ -990,6 +997,15 @@ with no receiving counterpart — so the antenna array that would be the next
 question never becomes one.
 
 The three radios share one RF front end and **cannot** capture simultaneously.
+
+Some limits are Wireshark's rather than the boards'. Wireshark 4.6 shows an
+LE Audio broadcast's description (the BASE) and the announcements of LE Audio
+earbuds as raw bytes, and decodes a large extended or periodic advertisement,
+which arrives in pieces, as a run of malformed packets although its data is
+intact. Patches for all of these have been prepared for upstream Wireshark;
+until a release carries them, the bytes are in the capture and correct. It
+also has no LC3 decoder, so broadcast audio cannot be played back from a
+capture.
 
 ## Testing
 
