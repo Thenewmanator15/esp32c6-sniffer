@@ -1414,7 +1414,16 @@ def capture_failure_message(port: str, exc: Exception,
     the reply to the first command of a session.
     """
     lines = [f"cannot capture on {port}: {exc}"]
-    if port.casefold() in {f.casefold() for f in found}:
+    if isinstance(exc, RuntimeError) and "failed, status" in str(exc):
+        # The board answered, and refused. On the nRF54L15 that is now how a
+        # setting its Bluetooth controller would not take comes back, so
+        # "did not answer, replug it" would send the user the wrong way.
+        lines.append(
+            "the board answered but refused the command -- usually a "
+            "setting it would not take: a device key, the filter, or the "
+            "advertising PHYs. Try the capture without the setting you "
+            "changed last.")
+    elif port.casefold() in {f.casefold() for f in found}:
         lines.append(
             f"{port} is where the board is, so the port is right: the board "
             f"did not answer. Start the capture again; if it still does not "
