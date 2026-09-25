@@ -422,6 +422,10 @@ class CaptureSession:
         self._pending_check: tuple | None = None
         #: The Check keys listen in progress, or None.
         self._check: _KeyCheck | None = None
+        #: True from the moment a check is accepted until its result is
+        #: given. Neither field above covers the moment the loop has taken
+        #: the request but is still yielding what was heard before its STOP.
+        self._check_claimed = False
         self._pending_lock = threading.Lock()
         # Lets another thread end a capture without closing the port from
         # under the one doing the reading. Closing a serial port while a
@@ -809,14 +813,15 @@ class CaptureSession:
         if self._radio is not Radio.BLE:
             return False
         with self._pending_lock:
-            if self._pending_check is not None or self._check is not None:
+            if self._check_claimed:
                 return False
+            self._check_claimed = True
             self._pending_check = (on_hci, on_done, seconds)
         return True
 
     @property
     def key_check_running(self) -> bool:
-        return self._check is not None or self._pending_check is not None
+        return self._check_claimed
 
     def _key_check_step(self):
         """Starts or finishes a check. A generator, because packets heard
@@ -841,6 +846,8 @@ class CaptureSession:
             check, self._check = self._check, None
             self._send_ble_lists(self._ble_keys, self._ble_filter)
             self._command(Command.START)
+            with self._pending_lock:
+                self._check_claimed = False
             check.on_done()
 
     def _apply_pending(self) -> None:

@@ -179,6 +179,30 @@ def test_a_second_request_while_one_runs_is_refused(monkeypatch):
     assert not session.request_key_check(lambda hci: None, lambda: None)
 
 
+def test_a_second_press_while_the_check_is_starting_is_refused(monkeypatch):
+    """Review focus 4, in the window the first test cannot reach: the loop
+    has taken the request and is still yielding what was heard before the
+    STOP reply, so neither pending nor running is set. A second press there
+    started a second check and the first one's result was never given."""
+    board = KeyedBoard("nrf54l15")
+    session = open_session(monkeypatch, board, [KEY], [(1, IDENTITY)])
+    board.packet(distinct(1))
+    board.before[Command.STOP] = [[distinct(2)]]
+    done = []
+    records = session.records()
+    next(records)
+    assert session.request_key_check(lambda hci: None, lambda: done.append(1),
+                                     seconds=0.0)
+    next(records)            # suspended inside the check's start
+    assert not session.request_key_check(lambda hci: None, lambda: done.append(2))
+    assert session.key_check_running
+    board.after[Command.START] = [[], [distinct(3)]]
+    next(records)
+    assert done == [1]
+    assert board.sequence().count("STOP") == 2
+    assert not session.key_check_running
+
+
 def test_a_check_is_refused_on_a_radio_that_is_not_ble(monkeypatch):
     board = KeyedBoard("nrf54l15")
     monkeypatch.setattr(capture.serial, "Serial", lambda *a, **k: board)
