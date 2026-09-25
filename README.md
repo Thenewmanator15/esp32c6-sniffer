@@ -815,9 +815,9 @@ other counters. It appears in the toolbar log and in the capture file's
 statistics, as "N frames failed their FCS at the radio and were not captured".
 It is not counted as loss, since those frames were never received. Measured
 on a Thread network: 7 in 60 s against 293 frames captured. The ESP32-C6 shows
-no such line, rather than a zero it did not measure. On the nRF the count runs
-from the board's boot rather than from the capture's start, as its other
-counters do; unplug it between captures for a per-capture figure.
+no such line, rather than a zero it did not measure. From nRF firmware 6 the
+count, like every counter the board reports, starts from zero with each
+capture.
 
 **Payloads are encrypted.** Zigbee and Thread both encrypt above the MAC layer,
 so you see frame structure, addresses and routing but not contents. Wireshark

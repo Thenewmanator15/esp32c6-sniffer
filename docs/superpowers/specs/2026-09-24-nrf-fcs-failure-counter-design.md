@@ -80,4 +80,5 @@ FCS-failure count opened at 10. This predates the FCS counter; it applies to
 the captured, forwarded and dropped counts alike. Fixing it (resetting every
 counter when a capture's GET_INFO handshake arrives) touches the link, batch,
 802.15.4 and BLE counters, and is proposed separately rather than folded in
-here.
+here. Done in nRF firmware 6 (2026-09-25): GET_INFO resets every counter and
+the BLE PHYs, and two back-to-back captures now each start from zero.
