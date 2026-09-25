@@ -680,6 +680,25 @@ straight after a filtered one heard 10 reports from one device, where the one
 before had heard 587 from nine. The key list and the filter are now both sent
 at the start of every capture.
 
+**Measured on both boards, 2026-09-25,** through this host and firmware, with
+a test advertiser that used three private addresses made from one key and
+then its identity address itself, 15 s each:
+
+| | ESP32-C6 | nRF54L15 |
+|---|---|---|
+| Filtered on the identity, 60 s | 420 resolved reports and 137 under the identity itself; nothing else | 195 and 54; nothing else |
+| The key written backwards | pop-up, log line and packet comment | the same |
+| Check keys | *correct*, *BACKWARDS* and *nothing matched*, each where expected | the same |
+| Keys that load | 5; a sixth refused before anything is sent | 8; a ninth refused |
+
+Device privacy mode is what lets the nRF54L15 hear a keyed device that
+advertises under its identity address directly: without it that phase gave 0
+reports in 65 s, with it 54 to 78. The ESP32-C6 heard it either way (139
+without). A periodic train being followed is lost for the 20 s of a Check
+keys listen and was back 0.3 s after it ended. Wireshark shows a resolved
+report's address type as "Random (Static) Identity Address (Corresponds to
+Resolved Private Address)".
+
 **The key file is a secret.** Anyone holding it can follow those devices. The
 keys go to the board's memory for one capture and are cleared when it stops.
 They are never written into the capture file -- pcapng has no place for a
