@@ -18,6 +18,25 @@ BlueZ write them. HCI wants the reverse, and encode_ble_keys() does that.
 
 from __future__ import annotations
 
+import base64
+import re
+from dataclasses import dataclass, field
+from pathlib import Path
+
+#: The byte order of the base64 "Remote IRK" that macOS Keychain shows. Apple
+#: does not document it and write-ups disagree, so it is measured on a real
+#: key (plan Task 15). Until then the decoded bytes are taken as written, and
+#: the README does not offer base64 as supported.
+KEYCHAIN_BASE64_REVERSED = False
+
+#: What one SN_FRAME_BLE_KEYS frame carries. Boards hold fewer: see
+#: boards.py "ble_keys".
+MAX_DEVICE_KEYS = 8
+
+_TYPE_WORDS = {"public": 0, "random": 1}
+_HEX_KEY = re.compile(r"^[0-9a-fA-F]{32}$")
+_BASE64_KEY = re.compile(r"^[A-Za-z0-9+/]{22}==$")
+
 
 def _xtime(b: int) -> int:
     b <<= 1
@@ -140,3 +159,101 @@ def make_rpa(irk: bytes, prand: int) -> str:
         raise ValueError("prand must be 24 bits with its top two bits 01")
     raw = prand.to_bytes(3, "big") + ah(irk, prand).to_bytes(3, "big")
     return ":".join(f"{b:02x}" for b in raw)
+
+
+class KeyFileError(ValueError):
+    """A device key file that cannot be used.
+
+    The message names the file and line and never contains any field from
+    that line: a key pasted into the wrong column would otherwise land in
+    Wireshark's error dialog, and from there in a screenshot.
+    """
+
+
+@dataclass(frozen=True)
+class DeviceKey:
+    line: int
+    #: 0 public, 1 random -- the identity address's type, as HCI numbers it.
+    address_type: int
+    #: The identity address, lower case with colons, most significant first.
+    address: str
+    #: Most significant byte first. Kept out of repr so a key never reaches
+    #: a log or a traceback by way of printing the object that holds it.
+    irk: bytes = field(repr=False)
+
+
+def _parse_key(text: str) -> bytes | None:
+    digits = text.replace(":", "")
+    if _HEX_KEY.match(digits):
+        return bytes.fromhex(digits)
+    if _BASE64_KEY.match(text):
+        raw = base64.b64decode(text)
+        return raw[::-1] if KEYCHAIN_BASE64_REVERSED else raw
+    return None
+
+
+def parse_key_file(path) -> list[DeviceKey]:
+    """Reads identity resolving keys, one device per line::
+
+        # identity address   [public|random]   key
+        11:22:33:44:55:66                      <32 hex digits>
+        de:ad:be:ef:00:01    random            <32 hex digits>
+
+    The type defaults to public, which is what phones and Apple devices use
+    as their identity. Raises KeyFileError naming the line.
+    """
+    path = Path(path)
+    try:
+        # utf-8-sig: Notepad writes a byte-order mark.
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as exc:
+        raise KeyFileError(
+            f"cannot read device key file {path}: {exc.strerror}") from None
+
+    keys: list[DeviceKey] = []
+    seen: set[str] = set()
+    for number, line in enumerate(lines, 1):
+        text = line.split("#", 1)[0].strip()
+        if not text:
+            continue
+        where = f"{path.name} line {number}"
+        fields = text.split()
+        if len(fields) == 2:
+            address_text, type_word, key_text = fields[0], "public", fields[1]
+        elif len(fields) == 3:
+            address_text, type_word, key_text = fields
+        else:
+            raise KeyFileError(
+                f"{where}: expected '<identity address> [public|random] "
+                f"<key>', found {len(fields)} fields")
+        try:
+            address = normalize_address(address_text)
+        except ValueError:
+            raise KeyFileError(
+                f"{where}: the first field is not a BLE address like "
+                f"aa:bb:cc:dd:ee:ff") from None
+        kind = _TYPE_WORDS.get(type_word.lower())
+        if kind is None:
+            raise KeyFileError(
+                f"{where}: the address type must be public or random")
+        irk = _parse_key(key_text)
+        if irk is None:
+            raise KeyFileError(
+                f"{where}: the key must be 32 hex digits, or 24 characters "
+                f"of base64 as macOS Keychain shows it")
+        if irk == bytes(16):
+            raise KeyFileError(
+                f"{where}: an all-zero key means 'no key' to the controller")
+        if address in seen:
+            raise KeyFileError(
+                f"{where}: that identity already has a key on an earlier line")
+        seen.add(address)
+        keys.append(DeviceKey(number, kind, address, irk))
+
+    if not keys:
+        raise KeyFileError(f"{path.name} contains no device keys")
+    if len(keys) > MAX_DEVICE_KEYS:
+        raise KeyFileError(
+            f"{path.name} holds {len(keys)} keys; one capture takes at most "
+            f"{MAX_DEVICE_KEYS}, and some boards fewer")
+    return keys

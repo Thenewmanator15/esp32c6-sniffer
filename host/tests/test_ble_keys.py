@@ -68,3 +68,113 @@ def test_addresses_accept_colons_dashes_and_either_case():
 def test_a_malformed_address_is_refused(bad):
     with pytest.raises(ValueError):
         address_bytes(bad)
+
+
+import base64
+
+from esp32c6_sniffer.ble_keys import (
+    KEYCHAIN_BASE64_REVERSED,
+    DeviceKey,
+    KeyFileError,
+    parse_key_file,
+)
+
+IRK_HEX = IRK.hex()
+IRK_B64 = base64.b64encode(IRK).decode()
+
+
+def keyfile(tmp_path, text, name="keys.txt", **write):
+    path = tmp_path / name
+    path.write_text(text, encoding=write.pop("encoding", "utf-8"), **write)
+    return path
+
+
+def test_a_public_identity_with_a_hex_key(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"11:22:33:44:55:66 {IRK_HEX}\n"))
+    assert keys == [DeviceKey(1, 0, "11:22:33:44:55:66", IRK)]
+
+
+def test_a_random_identity_with_a_type_word(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"{IDENTITY} random {IRK_HEX}\n"))
+    assert (keys[0].address_type, keys[0].address) == (1, IDENTITY)
+
+
+def test_the_type_word_is_case_insensitive(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"{IDENTITY} RANDOM {IRK_HEX}\n"))
+    assert keys[0].address_type == 1
+
+
+def test_colons_in_a_hex_key_are_allowed(tmp_path):
+    spaced = ":".join(IRK_HEX[i:i + 2] for i in range(0, 32, 2))
+    keys = parse_key_file(keyfile(tmp_path, f"{IDENTITY} random {spaced}\n"))
+    assert keys[0].irk == IRK
+
+
+def test_a_base64_key_is_read_in_the_measured_order(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"{IDENTITY} random {IRK_B64}\n"))
+    assert keys[0].irk == (IRK[::-1] if KEYCHAIN_BASE64_REVERSED else IRK)
+
+
+def test_comments_blank_lines_and_line_numbers(tmp_path):
+    text = f"# my phone\n\n{IDENTITY} random {IRK_HEX}  # after\n"
+    assert parse_key_file(keyfile(tmp_path, text))[0].line == 3
+
+
+def test_a_notepad_file_with_bom_and_crlf_parses(tmp_path):
+    """Review focus 1: Notepad writes a byte-order mark and CRLF."""
+    path = tmp_path / "keys.txt"
+    path.write_bytes(("# phone\r\n" + f"{IDENTITY} random {IRK_HEX}\r\n")
+                     .encode("utf-8-sig"))
+    assert parse_key_file(path)[0].address == IDENTITY
+
+
+def test_the_identity_is_normalised(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"DE-AD-BE-EF-00-01 random {IRK_HEX}\n"))
+    assert keys[0].address == IDENTITY
+
+
+def test_the_key_is_not_in_the_repr(tmp_path):
+    keys = parse_key_file(keyfile(tmp_path, f"{IDENTITY} random {IRK_HEX}\n"))
+    assert IRK_HEX not in repr(keys[0]) and "ec02" not in repr(keys[0])
+
+
+@pytest.mark.parametrize("line, fragment", [
+    (f"{IRK_HEX} {IDENTITY}", "not a BLE address"),     # fields swapped
+    (f"{IDENTITY} sideways {IRK_HEX}", "public or random"),
+    (f"{IDENTITY} random {IRK_HEX[:-2]}", "32 hex digits"),
+    (f"{IDENTITY} random {IRK_HEX} extra", "fields"),
+    (f"{IDENTITY} {IRK_HEX} random", "public or random"),  # type after key
+    (f"{IDENTITY} random {'0' * 32}", "all-zero"),
+    (IRK_HEX, "fields"),
+])
+def test_a_bad_line_is_refused_by_line_without_echoing_it(tmp_path, line, fragment):
+    with pytest.raises(KeyFileError) as caught:
+        parse_key_file(keyfile(tmp_path, f"# first\n{line}\n"))
+    message = str(caught.value)
+    assert "line 2" in message and fragment in message
+    for token in line.split():
+        if token.lower() in ("public", "random"):
+            continue            # the format description names these words
+        assert token not in message, "an error message must never echo a field"
+
+
+def test_a_repeated_identity_is_refused(tmp_path):
+    text = f"{IDENTITY} random {IRK_HEX}\nDE:AD:BE:EF:00:01 public {IRK_B64}\n"
+    with pytest.raises(KeyFileError, match="line 2.*earlier"):
+        parse_key_file(keyfile(tmp_path, text))
+
+
+def test_more_than_eight_keys_is_refused(tmp_path):
+    lines = "".join(f"11:22:33:44:55:{n:02x} {IRK_HEX}\n" for n in range(9))
+    with pytest.raises(KeyFileError, match="9 keys"):
+        parse_key_file(keyfile(tmp_path, lines))
+
+
+def test_an_empty_file_is_refused(tmp_path):
+    with pytest.raises(KeyFileError, match="no device keys"):
+        parse_key_file(keyfile(tmp_path, "# nothing yet\n"))
+
+
+def test_a_missing_file_is_refused_by_name(tmp_path):
+    with pytest.raises(KeyFileError, match="missing.txt"):
+        parse_key_file(tmp_path / "missing.txt")
