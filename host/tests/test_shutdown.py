@@ -122,3 +122,25 @@ def test_the_silence_watch_is_checked_from_the_heartbeat(do_capture):
     """A filtered capture of a silent device yields no records, so a check
     that ran only in the record loop would never run."""
     assert calls(function_in(do_capture, "heartbeat"), "silent")
+
+
+def test_every_control_pipe_write_holds_the_lock(do_capture):
+    """The toolbar reader, the capture loop and the heartbeat all write to
+    Wireshark's control pipe. Two messages written at once interleave
+    mid-message, so every write must be inside `with control_lock:`."""
+    unlocked = []
+
+    def visit(node, locked):
+        if isinstance(node, ast.With) and any(
+                isinstance(item.context_expr, ast.Name)
+                and item.context_expr.id == "control_lock"
+                for item in node.items):
+            locked = True
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "control_write" and not locked):
+            unlocked.append(node.lineno)
+        for child in ast.iter_child_nodes(node):
+            visit(child, locked)
+
+    visit(do_capture, False)
+    assert not unlocked, f"control_write outside control_lock at lines {unlocked}"

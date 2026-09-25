@@ -1039,8 +1039,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     )
                     session.request_channel(wanted)
                     log(f"retuning to channel {wanted}")
-                    control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_STATUSBAR,
-                                  f"ESP32-C6: channel {wanted}".encode())
+                    with control_lock:
+                        control_write(fp_out, CTRL_ARG_NONE,
+                                      CTRL_CMD_STATUSBAR,
+                                      f"ESP32-C6: channel {wanted}".encode())
                 except (ValueError, UnicodeDecodeError) as exc:
                     # Selecting the other radio's channel lands here. Say so
                     # rather than silently ignoring it.
@@ -1301,12 +1303,14 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             log(f"four-way handshake captured for "
                                 f"{done.bssid} <- {done.station}: with the "
                                 f"passphrase, this session can be decrypted")
-                            control_write(
-                                fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
-                                (f"WPA handshake captured for {done.bssid}. "
-                                 f"Add the passphrase under Edit, Preferences, "
-                                 f"Protocols, IEEE 802.11 to decrypt this "
-                                 f"capture. Filter: pkt_comment").encode())
+                            with control_lock:
+                                control_write(
+                                    fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
+                                    (f"WPA handshake captured for {done.bssid}. "
+                                     f"Add the passphrase under Edit, "
+                                     f"Preferences, Protocols, IEEE 802.11 to "
+                                     f"decrypt this capture. Filter: "
+                                     f"pkt_comment").encode())
                     with write_lock:
                         writer.write_packet(record, timestamp,
                                             original_length=original_len,
@@ -1373,10 +1377,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                                 f"LOSS gaps={s.sequence_gaps} "
                                 f"isr={s.fw_isr_queue_full} "
                                 f"link={s.fw_link_rejected}{extra}")
-                            control_write(
-                                fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
-                                b"ESP32-C6 dropped frames; see the Log button",
-                            )
+                            with control_lock:
+                                control_write(
+                                    fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
+                                    b"ESP32-C6 dropped frames; see the Log "
+                                    b"button",
+                                )
             finally:
                 state["running"] = False
                 # The board's own counters, written into the file. Without
