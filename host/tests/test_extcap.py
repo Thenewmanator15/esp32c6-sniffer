@@ -499,3 +499,35 @@ def test_a_thread_file_that_does_not_exist_is_named():
         )
         assert result.returncode == 1
         assert "cannot read" in result.stderr
+
+
+def test_ble_offers_a_device_key_file():
+    out = _run("--extcap-config", "--extcap-interface", BLE_INTERFACE)
+    line = next(l for l in out.splitlines() if "--ble-keys" in l)
+    assert "{type=fileselect}" in line and "secret" in line
+    assert "never written into the capture" in line
+
+
+def test_the_filter_tooltip_no_longer_promises_eight_addresses():
+    out = _run("--extcap-config", "--extcap-interface", BLE_INTERFACE)
+    line = next(l for l in out.splitlines() if "--ble-filter" in l)
+    assert "up to eight addresses" not in line and "four" in line
+
+
+def test_the_toolbar_has_a_check_keys_button():
+    out = _run("--extcap-interfaces")
+    assert any("{number=3}" in l and "{type=button}" in l and "Check keys" in l
+               for l in out.splitlines())
+
+
+def test_a_bad_device_key_file_stops_the_capture_before_it_starts(tmp_path):
+    keys = tmp_path / "keys.txt"
+    keys.write_text("not a key file\n", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--capture", "--extcap-interface",
+         BLE_INTERFACE, "--fifo", str(tmp_path / "out.pcapng"),
+         "--port", "COM99", "--ble-keys", str(keys)],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 1
+    assert "keys.txt line 1" in result.stderr
+    assert "not a key file" not in result.stderr

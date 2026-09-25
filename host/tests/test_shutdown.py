@@ -105,3 +105,20 @@ def test_statistics_are_not_written_only_from_the_packet_loop(do_capture):
     not be told apart later from a capture that dropped nothing."""
     heartbeat = function_in(do_capture, "heartbeat")
     assert calls(heartbeat, "write_statistics")
+
+
+def test_the_toolbar_reader_starts_a_key_check(do_capture):
+    reader = function_in(do_capture, "reader")
+    assert "CTRL_ARG_CHECK_KEYS" in ast.unparse(reader)
+    assert calls(do_capture, "request_key_check")
+
+
+def test_typed_addresses_go_through_filter_entries(do_capture):
+    """The measured bug was bare strings reaching the accept list as public."""
+    assert calls(do_capture, "filter_entries")
+
+
+def test_the_silence_watch_is_checked_from_the_heartbeat(do_capture):
+    """A filtered capture of a silent device yields no records, so a check
+    that ran only in the record loop would never run."""
+    assert calls(function_in(do_capture, "heartbeat"), "silent")
