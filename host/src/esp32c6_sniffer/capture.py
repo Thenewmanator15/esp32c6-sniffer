@@ -15,7 +15,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Callable, Iterator
 
 import serial
 
@@ -38,7 +38,8 @@ from .boards import BRIDGE_FIRST_REPLY_S, board_by_id, bridged_board_ids
 from .framing import FrameType
 from .parser import SequenceTracker, StreamParser
 from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
-                  build_payload as build_ble_payload)
+                  build_payload as build_ble_payload, hci_of_record)
+from .ble_keys import KEY_CHECK_SECONDS
 from .csi import parse_csi_record
 from .recovery import ensure_wifi_ready
 from .radiotap import (
@@ -318,6 +319,15 @@ class CaptureStats:
         )
 
 
+@dataclass
+class _KeyCheck:
+    """A Check keys listen in progress: where its packets go, what to call
+    when it ends, and when that is."""
+    on_hci: Callable[[bytes], None]
+    on_done: Callable[[], None]
+    until: float
+
+
 class CaptureSession:
     """One capture run against the board.
 
@@ -409,6 +419,9 @@ class CaptureSession:
         self._csi_sink = csi_sink
         self._pending_channel: int | None = None
         self._pending_antenna: int | None = None
+        self._pending_check: tuple | None = None
+        #: The Check keys listen in progress, or None.
+        self._check: _KeyCheck | None = None
         self._pending_lock = threading.Lock()
         # Lets another thread end a capture without closing the port from
         # under the one doing the reading. Closing a serial port while a
@@ -717,6 +730,7 @@ class CaptureSession:
             if not waiting:
                 time.sleep(REPLY_POLL_S)
                 continue
+            reply = None
             for frame in self._parser.feed(self._serial.read(waiting)):
                 # Every frame is deferred, replies included, so records()
                 # observes them all in arrival order. Two rules matter here and
@@ -725,16 +739,23 @@ class CaptureSession:
                 # And observing a reply here while earlier frames wait in the
                 # deferred list feeds the tracker out of order, which the
                 # modulo-65536 arithmetic turns into gaps of tens of thousands.
+                #
+                # And every frame of this read, not only those before the
+                # reply: returning at the reply dropped whatever the same read
+                # had parsed after it, so a packet close behind any
+                # mid-capture command's reply was lost without a trace.
                 self._deferred.append(frame)
-                if frame.ftype is not FrameType.CONTROL_REPLY:
+                if reply is not None or frame.ftype is not FrameType.CONTROL_REPLY:
                     continue
-                reply = decode_reply(frame.payload)
-                if reply["command"] is command:
-                    if not reply["ok"]:
-                        raise RuntimeError(
-                            f"{command.name} failed, status {reply['status']}"
-                        )
-                    return reply
+                decoded = decode_reply(frame.payload)
+                if decoded["command"] is command:
+                    reply = decoded
+            if reply is not None:
+                if not reply["ok"]:
+                    raise RuntimeError(
+                        f"{command.name} failed, status {reply['status']}"
+                    )
+                return reply
         raise TimeoutError(f"no reply to {command.name} within {timeout}s")
 
     def request_channel(self, channel: int) -> None:
@@ -770,6 +791,57 @@ class CaptureSession:
             raise ValueError(f"antenna {antenna} is not 0 (internal) or 1 (external)")
         with self._pending_lock:
             self._pending_antenna = antenna
+
+    def request_key_check(self, on_hci, on_done,
+                          seconds: float = KEY_CHECK_SECONDS) -> bool:
+        """Listen with no keys and no filter for `seconds`, then put both back.
+
+        From another thread; applied between reads like request_channel().
+        What is heard meanwhile goes to on_hci (the HCI bytes) instead of
+        the capture, and on_done() is called on the capture thread once the
+        lists are restored. Returns False, and does nothing, if this is not
+        a BLE capture or a check is already pending or running.
+
+        The STOP replies are the boundaries: the board answers only after
+        acting, and the stream is ordered, so a packet read before the reply
+        was heard before the change.
+        """
+        if self._radio is not Radio.BLE:
+            return False
+        with self._pending_lock:
+            if self._pending_check is not None or self._check is not None:
+                return False
+            self._pending_check = (on_hci, on_done, seconds)
+        return True
+
+    @property
+    def key_check_running(self) -> bool:
+        return self._check is not None or self._pending_check is not None
+
+    def _key_check_step(self):
+        """Starts or finishes a check. A generator, because packets heard
+        before a STOP reply still belong to whichever side they came from."""
+        with self._pending_lock:
+            start = self._pending_check
+            self._pending_check = None
+        if start is not None:
+            on_hci, on_done, seconds = start
+            self._command(Command.STOP)
+            before, self._deferred = self._deferred, []
+            yield from self._records_from(before)
+            self._check = _KeyCheck(on_hci, on_done,
+                                    time.monotonic() + seconds)
+            self._send_ble_lists([], [])
+            self._command(Command.START)
+        elif self._check is not None and time.monotonic() >= self._check.until:
+            self._command(Command.STOP)
+            heard, self._deferred = self._deferred, []
+            for _ in self._records_from(heard):
+                pass                    # routed to the check; yields nothing
+            check, self._check = self._check, None
+            self._send_ble_lists(self._ble_keys, self._ble_filter)
+            self._command(Command.START)
+            check.on_done()
 
     def _apply_pending(self) -> None:
         with self._pending_lock:
@@ -846,62 +918,73 @@ class CaptureSession:
         """
         assert self._serial is not None, "call open() first"
         while self._serial is not None and not self._stop.is_set():
+            yield from self._key_check_step()
             self._apply_pending()
             chunk = self._serial.read(8192)
             frames = self._deferred + self._parser.feed(chunk)
             self._deferred = []
             if not frames:
                 continue
-            for frame in frames:
-                gap = self._tracker.observe(frame.seq)
-                self.stats.sequence_gaps += gap
+            yield from self._records_from(frames)
 
-                if frame.ftype is FrameType.STATS:
-                    self._update_stats(frame.payload)
+    def _records_from(self, frames):
+        """The records in a list of frames, as records() yields them. While
+        Check keys listens, the packets go to it instead."""
+        for frame in frames:
+            gap = self._tracker.observe(frame.seq)
+            self.stats.sequence_gaps += gap
+
+            if frame.ftype is FrameType.STATS:
+                self._update_stats(frame.payload)
+                continue
+
+            if frame.ftype is FrameType.CSI:
+                if self._csi_sink is not None:
+                    try:
+                        self._csi_sink(parse_csi_record(frame.payload))
+                    except ValueError:
+                        # A malformed record must not end a capture; the
+                        # board's own counters say how many were sent.
+                        self.stats.csi_malformed += 1
+                continue
+
+            if frame.ftype is FrameType.LINK:
+                self._update_link(frame.payload)
+                continue
+
+            # A batch is several packets sharing one header. Each entry
+            # is expanded into exactly the payload a PACKET frame would
+            # have carried and then handled by the same code, so a
+            # batched capture cannot decode differently from a plain one.
+            if frame.ftype is FrameType.BLE_BATCH:
+                payloads = self._expand_ble_batch(frame.payload)
+            elif frame.ftype is FrameType.PACKET_BATCH:
+                payloads = self._expand_batch(frame.payload)
+            elif frame.ftype is FrameType.PACKET:
+                payloads = (frame.payload,)
+            else:
+                continue
+
+            for payload in payloads:
+                # Length is checked inside _build_record, which knows
+                # which metadata layout applies. The two happen to be the
+                # same size, so a shared check here would look correct and
+                # stop being so the moment either changes.
+                built = self._build_record(payload)
+                if built is None:
+                    continue
+                record, body_len, device_us, original_len = built
+
+                if self._check is not None:
+                    # Heard while Check keys listens: not the capture's.
+                    self._check.on_hci(hci_of_record(record))
                     continue
 
-                if frame.ftype is FrameType.CSI:
-                    if self._csi_sink is not None:
-                        try:
-                            self._csi_sink(parse_csi_record(frame.payload))
-                        except ValueError:
-                            # A malformed record must not end a capture; the
-                            # board's own counters say how many were sent.
-                            self.stats.csi_malformed += 1
-                    continue
-
-                if frame.ftype is FrameType.LINK:
-                    self._update_link(frame.payload)
-                    continue
-
-                # A batch is several packets sharing one header. Each entry
-                # is expanded into exactly the payload a PACKET frame would
-                # have carried and then handled by the same code, so a
-                # batched capture cannot decode differently from a plain one.
-                if frame.ftype is FrameType.BLE_BATCH:
-                    payloads = self._expand_ble_batch(frame.payload)
-                elif frame.ftype is FrameType.PACKET_BATCH:
-                    payloads = self._expand_batch(frame.payload)
-                elif frame.ftype is FrameType.PACKET:
-                    payloads = (frame.payload,)
-                else:
-                    continue
-
-                for payload in payloads:
-                    # Length is checked inside _build_record, which knows
-                    # which metadata layout applies. The two happen to be the
-                    # same size, so a shared check here would look correct and
-                    # stop being so the moment either changes.
-                    built = self._build_record(payload)
-                    if built is None:
-                        continue
-                    record, body_len, device_us, original_len = built
-
-                    self.stats.frames += 1
-                    self.stats.bytes_captured += body_len
-                    self.stats.resyncs = self._parser.resync_count
-                    self.stats.bytes_discarded = self._parser.bytes_discarded
-                    yield record, self._anchor(device_us), original_len
+                self.stats.frames += 1
+                self.stats.bytes_captured += body_len
+                self.stats.resyncs = self._parser.resync_count
+                self.stats.bytes_discarded = self._parser.bytes_discarded
+                yield record, self._anchor(device_us), original_len
 
     def _expand_batch(self, payload: bytes) -> tuple[bytes, ...]:
         """Turns a PACKET_BATCH into the PACKET payloads it stands for.

@@ -132,3 +132,83 @@ def test_more_keys_than_the_board_holds_is_refused():
     with pytest.raises(ValueError, match="holds 5"):
         CaptureSession("COM_UNUSED", channel=0, radio=Radio.BLE,
                        board="esp32c6", ble_keys=keys)
+
+
+def distinct(n: int) -> bytes:
+    return ext_report(make_rpa(IRK, 0x400000 + n))
+
+
+def test_what_is_heard_during_a_check_goes_to_the_check(monkeypatch):
+    board = KeyedBoard("nrf54l15")
+    session = open_session(monkeypatch, board, [KEY], [(1, IDENTITY)])
+    a, b, c, d, e = (distinct(n) for n in range(1, 6))
+    board.packet(a)
+    board.before[Command.STOP] = [[b], [d]]    # in flight when STOP arrives
+    board.after[Command.START] = [[c], [e]]    # heard after each START
+    heard, done = [], []
+    records = session.records()
+
+    assert hci_of_record(next(records)[0]) == a
+    assert session.request_key_check(heard.append, lambda: done.append(1),
+                                     seconds=0.0)
+    assert hci_of_record(next(records)[0]) == b      # before the STOP reply
+    assert hci_of_record(next(records)[0]) == e      # after the restore
+    assert heard == [c, d] and done == [1]
+
+
+def test_the_check_clears_both_lists_then_restores_them(monkeypatch):
+    board = KeyedBoard("nrf54l15")
+    session = open_session(monkeypatch, board, [KEY], [(1, IDENTITY)])
+    board.after[Command.START] = [[], [distinct(1)]]
+    records = session.records()
+    session.request_key_check(lambda hci: None, lambda: None, seconds=0.0)
+    next(records)
+    start = board.sequence().index("START") + 1        # after open()'s START
+    assert board.sequence()[start:] == [
+        "STOP", "BLE_KEYS", "BLE_FILTER", "START",
+        "STOP", "BLE_KEYS", "BLE_FILTER", "START"]
+    payloads = [p for t, c, p in board.written[start:] if c is None]
+    assert payloads[0] == b"" and payloads[1] == b""
+    assert payloads[2] != b"" and payloads[3] != b""
+
+
+def test_a_second_request_while_one_runs_is_refused(monkeypatch):
+    """Review focus 4: two presses must not stop and start twice."""
+    session = open_session(monkeypatch, KeyedBoard("nrf54l15"), [KEY])
+    assert session.request_key_check(lambda hci: None, lambda: None)
+    assert not session.request_key_check(lambda hci: None, lambda: None)
+
+
+def test_a_check_is_refused_on_a_radio_that_is_not_ble(monkeypatch):
+    board = KeyedBoard("nrf54l15")
+    monkeypatch.setattr(capture.serial, "Serial", lambda *a, **k: board)
+    session = CaptureSession("COM_UNUSED", channel=11, radio=Radio.IEEE802154,
+                             board="nrf54l15", baud=1_000_000)
+    assert not session.request_key_check(lambda hci: None, lambda: None)
+
+
+def test_stopping_during_a_check_ends_cleanly(monkeypatch):
+    """Review focus 5: Wireshark closes the capture mid-check."""
+    board = KeyedBoard("nrf54l15")
+    session = open_session(monkeypatch, board, [KEY], [(1, IDENTITY)])
+    board.packet(distinct(1))
+    board.after[Command.START] = [[distinct(2)]]
+    heard, done = [], []
+    records = session.records()
+    next(records)
+    session.request_key_check(lambda hci: (heard.append(hci), session.request_stop()),
+                              lambda: done.append(1), seconds=60.0)
+    assert list(records) == []
+    assert heard and done == []
+
+
+def test_a_packet_read_together_with_a_reply_is_kept(monkeypatch):
+    """_await_reply returned at the reply it wanted and dropped whatever the
+    same read had parsed after it -- a packet close behind any mid-capture
+    command's reply was lost without a trace. Check keys stops and starts
+    the scan mid-capture, so its boundaries depend on this."""
+    board = KeyedBoard("nrf54l15")
+    session = open_session(monkeypatch, board)
+    board.after[Command.STOP] = [[distinct(1)]]
+    session._command(Command.STOP)
+    assert hci_of_record(next(session.records())[0]) == distinct(1)
