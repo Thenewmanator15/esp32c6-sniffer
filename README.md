@@ -943,6 +943,18 @@ Assistant fabric uses in practice, but if you ever see Matter-shaped UDP on
 another port, right-click the frame, choose **Decode As**, and set the UDP port
 to `Matter` by hand.
 
+The profile also decodes UDP 61631 as CoAP. That is Thread's own management
+traffic: address queries (`/a/aq`) and address notifications, plus, from
+Thread 1.2, multicast and domain-address registrations. CoAP claims only its
+standard port 5683, so without the entry these messages show as plain UDP and
+you can't see which URI each one carries.
+
+What stays unreadable is Matter's payload. Matter encrypts each session with
+its own keys, agreed between the controller and the device. The Thread key
+removes only the outer layer, so you see which device talks to which, when,
+and the session and counter fields, but not the commands. Apple, Google and
+Amazon controllers do not export those session keys.
+
 The dissector arrived in **Wireshark 4.2**. On 4.0 or 4.1 the profile still
 installs and every other button works; the `Decode As` entry simply refers to a
 dissector that is not there, and Matter frames stay labelled UDP.
