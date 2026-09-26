@@ -770,12 +770,18 @@ class CaptureSession:
         bytes mid-frame. This only sets a flag; records() applies it between
         reads.
 
-        A retune costs frames. Measured over 5 minutes with a change every
-        20 seconds: 7 sequence gaps across 14 retunes, against 0 gaps in 1920
-        frames with no retuning. That is roughly half a frame per change,
-        lost in flight while the radio is briefly off-channel. It is inherent
-        rather than a defect, but it means `stats.lossless` will read False
-        after any retune, and that is honest rather than broken.
+        A retune costs no frames the board captured. Measured over 5 minutes
+        with a change every 2 seconds between a busy channel and a quiet one:
+        0 sequence gaps across 150 retunes on each board, about 770 frames
+        each, and `stats.lossless` still True at the end.
+
+        It once looked otherwise: 7 gaps across 14 retunes, put down to frames
+        lost while the radio was off-channel. That explanation could never
+        have been right, since a frame the radio never heard never gets a
+        sequence number to leave a gap in. The gaps were the host's:
+        _await_reply dropped whatever the same read parsed after the
+        SET_CHANNEL reply. Traffic on the air during the brief retune is
+        still missed, as on any single radio, but it is not counted as loss.
         """
         low, high = channel_range(self._radio)
         if not low <= channel <= high:
