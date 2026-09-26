@@ -31,8 +31,19 @@ plugin_name="esp32c6-sniffer"
 # no Wireshark since reads, so the interfaces never appeared. 4.0 and earlier
 # -- Debian 12 ships 4.0 -- read only that one, so it gets an entry that runs
 # the real one; no Wireshark reads both, so none lists an interface twice.
-# Profiles are configuration, and stay where XDG_CONFIG_HOME puts them.
-config="${XDG_CONFIG_HOME:-$HOME/.config}/wireshark"
+# Profiles are configuration, and go to the folder Wireshark reads it from
+# (wsutil/filesystem.c): WIRESHARK_CONFIG_DIR if set, else
+# $XDG_CONFIG_HOME/wireshark if it exists, else ~/.wireshark if that does,
+# else the XDG one. Always the XDG one, as this was, left a user with an
+# old ~/.wireshark with profiles Wireshark never read.
+xdg_config="${XDG_CONFIG_HOME:-$HOME/.config}/wireshark"
+if [[ -n "${WIRESHARK_CONFIG_DIR:-}" ]]; then
+    config="$WIRESHARK_CONFIG_DIR"
+elif [[ ! -d "$xdg_config" && -d "$HOME/.wireshark" ]]; then
+    config="$HOME/.wireshark"
+else
+    config="$xdg_config"
+fi
 extcap_dir="$HOME/.local/lib/wireshark/extcap"
 legacy_dir="$config/extcap"
 profile_dir="$config/profiles"

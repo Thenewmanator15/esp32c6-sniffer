@@ -137,9 +137,12 @@ def fake_clone(root: pathlib.Path) -> pathlib.Path:
     return repo
 
 
-def run_install_sh(repo: pathlib.Path, home: pathlib.Path, *args: str):
-    env = {k: v for k, v in os.environ.items() if k != "XDG_CONFIG_HOME"}
+def run_install_sh(repo: pathlib.Path, home: pathlib.Path, *args: str,
+                   **extra_env: str):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("XDG_CONFIG_HOME", "WIRESHARK_CONFIG_DIR")}
     env["HOME"] = str(home)
+    env.update(extra_env)
     return subprocess.run([_git_bash(), str(repo / "extcap" / "install.sh"), *args],
                           env=env, capture_output=True, text=True, timeout=60)
 
@@ -208,3 +211,40 @@ def test_install_sh_that_fails_leaves_the_old_install_working(tmp_path):
     assert result.returncode != 0
     assert (old / "esp32c6-sniffer.py").exists()
     assert (old / "esp32c6-sniffer-venv").exists()
+
+
+@needs_bash
+def test_install_sh_uses_an_old_style_config_folder_wireshark_uses(tmp_path):
+    """Wireshark takes $XDG_CONFIG_HOME/wireshark if it exists, else
+    ~/.wireshark if that does (wsutil/filesystem.c). The profiles always went
+    to ~/.config/wireshark, which such a Wireshark never reads, and so did
+    the entry for 4.0."""
+    home = tmp_path / "home"
+    (home / ".wireshark").mkdir(parents=True)
+    result = run_install_sh(fake_clone(tmp_path), home)
+    assert result.returncode == 0, result.stderr
+    assert (home / ".wireshark" / "profiles" / "ESP32-C6 BLE"
+            / "preferences").is_file()
+    assert (home / ".wireshark" / "extcap" / "esp32c6-sniffer").is_file()
+    assert not (home / ".config" / "wireshark").exists()
+
+
+@needs_bash
+def test_install_sh_prefers_the_xdg_folder_when_both_exist(tmp_path):
+    home = tmp_path / "home"
+    (home / ".wireshark").mkdir(parents=True)
+    (home / ".config" / "wireshark").mkdir(parents=True)
+    assert run_install_sh(fake_clone(tmp_path), home).returncode == 0
+    assert (home / ".config" / "wireshark" / "profiles" / "ESP32-C6 BLE").is_dir()
+    assert not (home / ".wireshark" / "profiles").exists()
+
+
+@needs_bash
+def test_install_sh_follows_wireshark_config_dir(tmp_path):
+    """The variable Wireshark itself reads first."""
+    home, chosen = tmp_path / "home", tmp_path / "elsewhere"
+    home.mkdir()
+    result = run_install_sh(fake_clone(tmp_path), home,
+                            WIRESHARK_CONFIG_DIR=str(chosen))
+    assert result.returncode == 0, result.stderr
+    assert (chosen / "profiles" / "ESP32-C6 BLE").is_dir()
