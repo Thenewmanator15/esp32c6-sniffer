@@ -277,8 +277,11 @@ from a quiet channel. The counters are written *during* the capture, not at the
 end: Wireshark stops a capture by closing the pipe, so anything written in a
 cleanup path would never reach the file.
 
-The toolbar log reports the same figures live, and raises a warning in
-Wireshark if the board ever drops a frame.
+The toolbar log reports the same figures live, every second, and Wireshark
+shows a warning when packets are lost: how many, and at most once a minute
+however long the loss goes on. The log also counts any mid-capture command
+-- a retune, an antenna switch, Check keys -- that the board did not answer
+or refused; the capture carries on past it, in the state it was in.
 
 ## Decrypting your own traffic
 
