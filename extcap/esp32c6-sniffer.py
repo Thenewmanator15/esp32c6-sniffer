@@ -786,6 +786,46 @@ def control_write(fp, arg: int, cmd: int, payload: bytes) -> None:
         pass
 
 
+class HostGone(Exception):
+    """Wireshark closed the capture pipe, which is how it stops a capture."""
+
+
+class CapturePipe:
+    """The capture pipe, where a failed write means Wireshark has gone.
+
+    On Windows a write into the closed pipe fails with EINVAL, not
+    BrokenPipeError: an OSError like a serial fault's, so every stopped
+    capture was reported as a board that did not answer -- exit 1, and
+    "unplug the board and plug it back in" on stderr. Here the error is known
+    to be the pipe's, and becomes HostGone. A quiet capture meets it on
+    close, which flushes the last statistics block into the pipe that went.
+    """
+
+    def __init__(self, file):
+        self._file = file
+
+    def write(self, data: bytes) -> int:
+        try:
+            return self._file.write(data)
+        except OSError as exc:
+            raise HostGone() from exc
+
+    def flush(self) -> None:
+        try:
+            self._file.flush()
+        except OSError as exc:
+            raise HostGone() from exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self._file.close()
+        except OSError:
+            pass
+
+
 #: Key-file labels, and the length each key must be. Zigbee keys are 128-bit;
 #: anything else is a typo or a different kind of key, and embedding it would
 #: produce a capture that silently fails to decrypt.
@@ -1070,7 +1110,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         if csi_written % 50 == 0:
             csi_file.flush()
 
-    with open(fifo, "wb") as pipe:
+    with CapturePipe(open(fifo, "wb")) as pipe:
         # The link type comes from the interface table, which is the same
         # table --extcap-dlts answers from, so the file header and what
         # Wireshark was told can never disagree.
@@ -1589,6 +1629,8 @@ def main(argv: list[str] | None = None) -> int:
                               ble_filter=args.ble_filter,
                               ble_periodic=args.ble_periodic,
                               ble_keys_file=args.ble_keys_file)
+        except HostGone:
+            return 0
         except (OSError, RuntimeError) as exc:
             # Usually the wrong serial port, which used to reach the user as a
             # Python traceback in a Wireshark dialog.
