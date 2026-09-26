@@ -67,3 +67,23 @@ def test_check_keys_says_when_it_could_not_finish():
              and node.func.attr == "request_key_check"]
     assert calls
     assert all(any(k.arg == "on_failed" for k in call.keywords) for call in calls)
+
+
+def test_the_log_says_no_loss_when_there_was_none(plugin):
+    assert plugin.loss_summary(CaptureStats()) == "no loss"
+
+
+def test_the_log_counts_lost_packets_once_with_the_counters_beside(plugin):
+    s = CaptureStats(sequence_gaps=1, fw_link_rejected=1,
+                     fw_frames_dropped_ringfull=1)
+    assert plugin.loss_summary(s) == (
+        "LOSS 1 packet (gaps=1 isr=0 link=1 ring=1)")
+
+
+def test_a_refused_report_is_not_called_packet_loss(plugin):
+    """A STATS or LOG frame the board's ring refused: the line read "LOSS 0
+    packets", which says loss and then says none."""
+    s = CaptureStats(sequence_gaps=1, fw_frames_dropped_ringfull=1)
+    assert plugin.loss_summary(s) == (
+        "no packets lost; 1 of the board's own frames not sent "
+        "(gaps=1 isr=0 link=0 ring=1)")
