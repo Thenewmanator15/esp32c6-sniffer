@@ -1303,6 +1303,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             if session.recovered_from_802154:
                 deferred_log.append(
                     "802.15.4 had been used; power-cycled the radio first")
+            if session.power_cycled_for_deafness:
+                deferred_log.append(
+                    "the Wi-Fi receiver heard nothing at all, the latch this "
+                    "board is prone to; power-cycled the radio and started "
+                    "again")
             for message in deferred_log:
                 log(message)
 

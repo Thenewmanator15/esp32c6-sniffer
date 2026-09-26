@@ -63,8 +63,9 @@ def test_the_check_runs_before_the_port_is_opened(open_method):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
                 and node.func.id == "ensure_wifi_ready":
             order.append(("check", node.lineno))
+        # _start is _connect and then the handshake and configuration.
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
-                and node.func.attr == "_connect":
+                and node.func.attr in ("_connect", "_start"):
             order.append(("connect", node.lineno))
     order.sort(key=lambda pair: pair[1])
     assert [kind for kind, _ in order][:2] == ["check", "connect"], (

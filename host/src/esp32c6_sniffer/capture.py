@@ -41,7 +41,7 @@ from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
                   build_payload as build_ble_payload, hci_of_record)
 from .ble_keys import KEY_CHECK_SECONDS
 from .csi import parse_csi_record
-from .recovery import ensure_wifi_ready
+from .recovery import ensure_wifi_ready, power_cycle
 from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
     MCS_BW_20,
@@ -87,6 +87,15 @@ MID_CAPTURE_REPLY_S = 3.0
 #: -- a reply included -- waits with it. At 1 Mbaud the largest frame takes
 #: 45 ms, so half a second of nothing means nothing more is coming.
 STALL_RESYNC_S = 0.5
+
+#: How long a Wi-Fi capture that should be hearing beacons may hear nothing
+#: before its receiver is taken to have latched deaf. Access points beacon
+#: about ten times a second and are heard across the neighbouring channels,
+#: so a working receiver answers in a fraction of this.
+WIFI_DEAF_S = 3.0
+
+#: The ceiling on a passive sweep of the band, which takes a few seconds.
+WIFI_SCAN_TIMEOUT_S = 20.0
 
 #: Boards reached through a bridge that keeps data across a port close. The
 #: XIAO nRF54L15's SAMD11 holds the whole USB packets that were in flight when
@@ -423,6 +432,9 @@ class CaptureSession:
         #: Set when the session had to power-cycle the board because the
         #: 802.15.4 radio had been used since boot.
         self.recovered_from_802154 = False
+        #: Set when the session power-cycled the board because the Wi-Fi
+        #: receiver heard nothing at all once the capture started.
+        self.power_cycled_for_deafness = False
         self._t0_device: int | None = None
         self._last_stamp: float | None = None
         self._t0_host: float = 0.0
@@ -525,8 +537,23 @@ class CaptureSession:
         if self._radio is Radio.WIFI:
             self.recovered_from_802154 = ensure_wifi_ready(self._port_name)
 
-        self._connect()
+        self._start()
+        # The receiver latches deaf for other reasons too, and deaf is an
+        # empty capture with no error. Found that way on 2026-09-25 with the
+        # 802.15.4 flag reading clear. Power-cycled once, around the port as
+        # above; a receiver still deaf after that is left to the stall
+        # counters, which report it.
+        if (self._should_hear_beacons()
+                and not self._hears_within(WIFI_DEAF_S)
+                and self._band_is_silent()):
+            self._disconnect()
+            power_cycle(self._port_name)
+            self.power_cycled_for_deafness = True
+            self._start()
 
+    def _start(self) -> None:
+        """Connects, checks the firmware, and starts the capture."""
+        self._connect()
         # Closed on any failure from here: __exit__ does not run when
         # __enter__ raises, so a version mismatch or an unanswered command
         # left the port open and the radio configured.
@@ -541,6 +568,48 @@ class CaptureSession:
         except BaseException:
             self.close()
             raise
+
+    def _should_hear_beacons(self) -> bool:
+        return self._radio is Radio.WIFI and (
+            self._frame_filter is None
+            or bool(self._frame_filter & FrameFilter.MGMT))
+
+    def _hears_within(self, seconds: float) -> bool:
+        """Whether any packet arrives in this long. What arrives is kept for
+        records(), so the check costs the capture nothing."""
+        deadline = time.monotonic() + seconds
+        try:
+            while not any(f.ftype is FrameType.PACKET for f in self._deferred):
+                if time.monotonic() >= deadline:
+                    return False
+                self._deferred.extend(self._parser.feed(self._serial.read(4096)))
+        except BaseException:
+            self.close()
+            raise
+        return True
+
+    def _band_is_silent(self) -> bool:
+        """Whether a scan of the whole band finds nothing either.
+
+        One channel can be silent for real: channel 14 is, here, and a
+        capture opened on it power-cycled the board for nothing and took 15 s
+        to open. A deaf receiver finds nothing anywhere. The scan is passive
+        -- it listens and transmits nothing -- and it takes the radio out of
+        capture mode, so a band that is not silent gets the capture started
+        again. STOP first, or the board's scan leaves it believing it is
+        still capturing, and the restart would only retune.
+        """
+        try:
+            self._command(Command.STOP)
+            reply = self._command(Command.WIFI_SCAN, 0,
+                                  timeout=WIFI_SCAN_TIMEOUT_S)
+            if reply["value"] == 0:
+                return True
+            self._configure()
+        except BaseException:
+            self.close()
+            raise
+        return False
 
     def _handshake(self) -> dict:
         """GET_INFO -- asked a second time on a bridged board if stale data ate
@@ -739,6 +808,11 @@ class CaptureSession:
 
     def close(self) -> None:
         self._stop.set()
+        self._disconnect()
+
+    def _disconnect(self) -> None:
+        """Stops the radio and lets go of the port, without ending the
+        session: open() reconnects after a power cycle."""
         if self._serial is None:
             return
         try:

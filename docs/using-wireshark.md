@@ -337,7 +337,7 @@ means capturing at the moment a device joins.
 | Board is not a COM port at all | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
 | `cannot capture on COM3` | The board is elsewhere; the message names the port it found. |
 | `could not open port` | Something else holds it — another capture, a serial monitor, or a previous run that has not exited. |
-| Wi-Fi empty, 802.15.4 fine | The 802.15.4 radio was left enabled by a crashed host, leaving the shared front end deaf. The host power-cycles automatically when it sees the flag; the toolbar log says when it has. |
+| Wi-Fi empty, 802.15.4 fine | The Wi-Fi receiver has latched deaf, which this board does, most often after the 802.15.4 radio has run. The host power-cycles automatically: after any 802.15.4 use, and when a capture hears nothing and a passive scan of the band finds nothing either. The toolbar log says when it has. If it persists, run `tools\wifi_survey.py --recover`. |
 | A channel looks empty | It probably is. Run `survey.py` and `spectrum.py` before believing a capture. |
 
 ## What you will not get

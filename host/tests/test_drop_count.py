@@ -84,6 +84,7 @@ def test_the_file_records_each_lost_packet_once(monkeypatch):
             self.stats = CaptureStats(sequence_gaps=1, fw_link_rejected=1,
                                       fw_frames_dropped_ringfull=1)
             self.recovered_from_802154 = False
+            self.power_cycled_for_deafness = False
             self._stop = threading.Event()
 
         def __enter__(self):
