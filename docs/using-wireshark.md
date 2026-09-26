@@ -218,7 +218,7 @@ into
 | Data | Named | Connectable |
 | No acks | Data | Discoverable |
 | Beacons | Management | Extended (BLE 5 PDUs) |
-| Encrypted | No acks | Apple |
+| Encrypted | No acks | Followed |
 | Strong | Encrypted | Strong |
 | | 11ax | |
 | | Strong | |
@@ -228,6 +228,22 @@ two earlier ones were caught: `No acks` combined two `!=` tests, and in
 Wireshark a `!=` on an *absent* field is false, so on a capture with only one
 radio it matched nothing at all; and `Named BLE` used a field that exists but
 never appears in an advertising report.
+
+**Picking out one BLE device.** Wireshark's filter bar cannot hold a list
+that fills itself from the capture, so the BLE profile shows the devices as
+columns instead: **Advertiser** (the address), **Address kind** (public,
+random, or an identity the board resolved) and **Maker** (whose manufacturer
+data the advert carries -- "Apple, Inc.", "Microsoft" and so on). Click a
+column heading to sort, which groups each device's adverts together. Then
+right-click a cell and choose **Apply as Filter → Selected** to see only that
+device, that maker or that kind of address.
+
+**Followed** shows the adverts the board resolved with your device key file
+(see [Following a device that changes its address](../README.md#following-a-device-that-changes-its-address)),
+which it reports under the device's identity address. An advert a keyed
+device sends under its identity address directly is reported as an ordinary
+public or random address, so it appears under Advertiser but not under
+Followed.
 
 **Colouring**, first match winning, per radio. On a 135-frame 802.15.4 capture
 the rules accounted for every frame: 68 Zigbee, 67 acknowledgements, with a

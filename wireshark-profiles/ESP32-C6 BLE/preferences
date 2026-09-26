@@ -11,12 +11,21 @@
 #
 # No channel column: the controller rotates the three advertising channels
 # itself and does not report which one a report came from.
+#
+# Address kind and Maker tell the devices in a capture apart. Wireshark's
+# filter bar cannot hold a list that fills itself from the capture, so these
+# are that list: sort by a column to group its devices, right-click a cell
+# and Apply as Filter to see one device, one maker or one kind of address.
+# Address kind is where a device the board follows by its key shows up, as an
+# identity address instead of the private one it sent.
 
 gui.column.format:
 	"No.", "%m",
 	"Time", "%t",
 	"RSSI", "%Cus:bthci_evt.rssi:0:R",
 	"Advertiser", "%Cus:bthci_evt.bd_addr:0:R",
+	"Address kind", "%Cus:bthci_evt.le_peer_address_type:0:R",
+	"Maker", "%Cus:btcommon.eir_ad.entry.company_id:0:R",
 	"Name", "%Cus:btcommon.eir_ad.entry.device_name:0:R",
 	"Iface", "%Cus:frame.interface_name:0:R",
 	"Protocol", "%p",

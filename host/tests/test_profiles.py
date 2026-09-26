@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from pathlib import Path
 
 import pytest
@@ -194,3 +195,39 @@ def test_profiles_carry_no_keys_or_secrets():
     for directory in profile_dirs():
         present = {p.name for p in directory.iterdir()} & forbidden
         assert not present, f"{directory.name} contains {sorted(present)}"
+
+
+def ble_columns() -> dict[str, str]:
+    """The BLE profile's column titles, each with the field it shows."""
+    text = (PROFILE_ROOT / "ESP32-C6 BLE" / "preferences").read_text(encoding="utf-8")
+    return dict(re.findall(r'"([^"]+)",\s*"%Cus:([^:"]+)', text))
+
+
+def ble_buttons() -> dict[str, str]:
+    rows = (next(csv.reader(io.StringIO(line)))
+            for line in content_lines(PROFILE_ROOT / "ESP32-C6 BLE" / "dfilter_buttons"))
+    return {row[1]: row[2] for row in rows}
+
+
+def test_the_ble_profile_tells_devices_apart():
+    """Which device, what kind of address and whose, on every advert.
+
+    Wireshark's filter bar cannot hold a list that fills itself from the
+    capture, so the devices a capture contains are shown as columns instead:
+    sort by one to group them, right-click a cell and Apply as Filter to see
+    one device, one maker or one kind of address.
+    """
+    columns = ble_columns()
+    assert columns["Advertiser"] == "bthci_evt.bd_addr"
+    assert columns["Address kind"] == "bthci_evt.le_peer_address_type"
+    assert columns["Maker"] == "btcommon.eir_ad.entry.company_id"
+
+
+def test_the_ble_profile_has_a_followed_button_rather_than_apple():
+    """One maker's button was the only one the bar had room for. The Maker
+    column serves every maker; the button now shows the devices the board is
+    following by their device keys -- reported under an identity address,
+    public (2) or random (3)."""
+    buttons = ble_buttons()
+    assert "Apple" not in buttons
+    assert buttons["Followed"] == "bthci_evt.le_peer_address_type in {2, 3}"
