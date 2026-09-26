@@ -826,6 +826,48 @@ class CapturePipe:
             pass
 
 
+class LossWarning:
+    """When to raise Wireshark's warning about lost packets.
+
+    It was raised every second once a capture had lost anything: a dialog a
+    second, for a loss that might be long over. Now it is raised when more
+    is lost, and no more than once a minute however often that is. The log
+    still carries the figures every second.
+    """
+
+    def __init__(self, every_s: float = 60.0):
+        self._every_s = every_s
+        self._told = 0
+        self._next = float("-inf")
+
+    def due(self, dropped: int, now: float) -> int:
+        """Packets lost since the last warning, if one is due; else 0."""
+        if dropped <= self._told or now < self._next:
+            return 0
+        fresh, self._told = dropped - self._told, dropped
+        self._next = now + self._every_s
+        return fresh
+
+
+def command_note(stats) -> str:
+    """Commands sent mid-capture that the board missed or refused.
+
+    The capture carries on past either, in whatever state it was in -- a
+    retune not answered leaves it on the old channel -- so the log says so.
+    """
+    def commands(n: int) -> str:
+        return f"{n} command{'s' if n != 1 else ''}"
+
+    unanswered, refused = stats.commands_unanswered, stats.commands_refused
+    if unanswered and refused:
+        return f", {commands(unanswered)} unanswered, {refused} refused"
+    if unanswered:
+        return f", {commands(unanswered)} unanswered"
+    if refused:
+        return f", {commands(refused)} refused"
+    return ""
+
+
 #: Key-file labels, and the length each key must be. Zigbee keys are 128-bit;
 #: anything else is a typo or a different kind of key, and embedding it would
 #: produce a capture that silently fails to decrypt.
@@ -1029,7 +1071,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
                               "\n".join(lines).encode("utf-8"))
 
-        if session.request_key_check(check.observe, done):
+        def failed() -> None:
+            log("Check keys did not finish: the board missed a command. Its "
+                "keys and filter were sent back; if no packets arrive now, "
+                "stop the capture and start it again", popup=True)
+
+        if session.request_key_check(check.observe, done, on_failed=failed):
             log(f"Check keys: listening {KEY_CHECK_SECONDS:.0f} s with no keys "
                 f"and no filter; those packets are left out of the capture")
         else:
@@ -1310,6 +1357,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             threading.Thread(target=heartbeat, daemon=True).start()
 
             next_report = time.monotonic() + 1.0
+            loss_warning = LossWarning()
+            board_display = board_for_interface(interface)["display"]
             try:
                 for record, timestamp, original_len in session.records():
                     note = None
@@ -1407,20 +1456,26 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             # until the BLE counters were read at all.
                             extra += (f", {s.fw_ble_periodic_refused} periodic "
                                       f"syncs refused")
+                        extra += command_note(s)
                         if s.lossless:
                             log(f"ch {session._channel}: {s.frames} frames, "
                                 f"no loss{extra}")
                         else:
                             log(f"ch {session._channel}: {s.frames} frames, "
-                                f"LOSS gaps={s.sequence_gaps} "
+                                f"LOSS {s.packets_dropped} packets "
+                                f"(gaps={s.sequence_gaps} "
                                 f"isr={s.fw_isr_queue_full} "
-                                f"link={s.fw_link_rejected}{extra}")
+                                f"link={s.fw_link_rejected} "
+                                f"ring={s.fw_frames_dropped_ringfull})"
+                                f"{extra}")
+                        fresh = loss_warning.due(s.packets_dropped, now)
+                        if fresh:
                             with control_lock:
                                 control_write(
                                     fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
-                                    b"ESP32-C6 dropped frames; see the Log "
-                                    b"button",
-                                )
+                                    (f"{board_display} lost {fresh} packet"
+                                     f"{'s' if fresh != 1 else ''}; see the "
+                                     f"Log button").encode())
             finally:
                 state["running"] = False
                 # The board's own counters, written into the file. Without
