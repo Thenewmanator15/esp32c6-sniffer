@@ -255,3 +255,27 @@ def test_an_hci_packet_longer_than_255_bytes_survives_a_batch():
     back = decode_ble_batch(encode_ble_batch(entries))
     assert [len(e.hci) for e in back] == [258, 258]
     assert [e.hci for e in back] == [big, big]
+
+
+def _near_the_top(ble: bool) -> bytes:
+    """A batch whose base plus deltas passes 2**64."""
+    base = 2 ** 64 - 5
+    if ble:
+        hci = b"\x04\x3e\x00"
+        return (batch.BLE_BATCH_HEADER.pack(base, 2)
+                + batch.BLE_BATCH_ENTRY.pack(0, len(hci), 0, len(hci)) + hci
+                + batch.BLE_BATCH_ENTRY.pack(10, len(hci), 0, len(hci)) + hci)
+    return (batch.BATCH_HEADER.pack(base, 11, 2)
+            + batch.BATCH_ENTRY.pack(0, 200, -40, 1) + b"x"
+            + batch.BATCH_ENTRY.pack(10, 200, -40, 1) + b"y")
+
+
+@pytest.mark.parametrize("ble", [False, True])
+def test_a_timestamp_past_64_bits_is_a_malformed_batch(ble):
+    """It used to decode, and then struct.pack('Q') raised on the way to the
+    pcap record -- outside any handler, so the capture died with a Python
+    traceback. A batch can reach the host inside a captured radio frame, so
+    this is not only a firmware fault."""
+    decode = batch.decode_ble_batch if ble else batch.decode_packet_batch
+    with pytest.raises(BatchError, match="64 bits"):
+        decode(_near_the_top(ble))
