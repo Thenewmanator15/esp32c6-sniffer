@@ -174,10 +174,15 @@ static int vhci_receive(uint8_t *data, uint16_t len)
         const uint8_t *report = data + 5;
         const uint16_t periodic_interval =
             (uint16_t)(report[14] | (report[15] << 8));
-        if (periodic_interval != 0 && s_sync_queue != NULL) {
+        /* The report's address type can be 0x02 or 0x03, an identity the
+         * resolving list resolved, and Create Sync takes only 0x00 or 0x01
+         * -- public or random, "or identity" -- so it refused every train a
+         * device key had resolved. 0xFF is anonymous: nothing to sync to. */
+        if (periodic_interval != 0 && s_sync_queue != NULL &&
+            report[2] != 0xFF) {
             sync_request_t request = {
                 .sid = report[11],
-                .address_type = report[2],
+                .address_type = (uint8_t)(report[2] & 0x01u),
             };
             memcpy(request.address, report + 3, 6);
             s_stats.periodic_seen++;
