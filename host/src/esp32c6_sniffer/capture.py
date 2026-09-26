@@ -317,6 +317,26 @@ class CaptureStats:
     #: The capture carries on past both; these say it happened.
     commands_unanswered: int = 0
     commands_refused: int = 0
+    #: Whether a frame the board's ring refused still took a sequence
+    #: number, so that the host counts it as a gap as well. The board's
+    #: `refusal_leaves_gap`.
+    refusals_leave_gaps: bool = True
+
+    @property
+    def packets_dropped(self) -> int:
+        """Packets heard and never delivered, each counted once.
+
+        The board counts a packet it could not send twice -- once refused by
+        the radio's side (isr_queue_full, link_rejected), once by the ring
+        (ringfull) -- and on a board where the refusal took a sequence
+        number the host counts it a third time, as a gap. Only a gap no
+        refusal explains is a frame lost on the way, and it is counted in
+        frames: what a lost batch held cannot be known.
+        """
+        explained = (self.fw_frames_dropped_ringfull
+                     if self.refusals_leave_gaps else 0)
+        return (self.fw_isr_queue_full + self.fw_link_rejected
+                + max(0, self.sequence_gaps - explained))
 
     def fcs_failure_note(self) -> str | None:
         """What the board said about corrupt frames, or None if it cannot say."""
@@ -457,7 +477,8 @@ class CaptureSession:
         self._deferred: list = []
         #: When bytes last arrived, for giving up on a frame cut short.
         self._last_rx = time.monotonic()
-        self.stats = CaptureStats()
+        self.stats = CaptureStats(
+            refusals_leave_gaps=board_by_id(board)["refusal_leaves_gap"])
 
     @property
     def radio(self) -> Radio:

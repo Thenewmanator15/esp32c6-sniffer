@@ -51,6 +51,9 @@ BOARDS = {
         "baud": 115200,
         # Resets when its port opens, so nothing is left over to hand across.
         "bridged": False,
+        # A frame its outbound ring refuses has already taken a sequence
+        # number (usb_link.c), so the host sees the refusal as a gap too.
+        "refusal_leaves_gap": True,
         # Order is load-bearing: it is the order interfaces appear in
         # Wireshark's list, and it reproduces the order the hand-written
         # INTERFACES table used before this was generated.
@@ -82,6 +85,9 @@ BOARDS = {
         # previous session closed, and releases them in front of the next
         # thing the board sends -- on opening, the reply to GET_INFO.
         "bridged": True,
+        # A frame its ring refuses takes no sequence number (link.c), so a
+        # refusal leaves no gap behind it.
+        "refusal_leaves_gap": False,
         # No Wi-Fi radio exists on this part -- within the nRF54L family a
         # USB device controller and Wi-Fi are both absent. BLE is the
         # controller's own, driven over HCI exactly as the C6's is.

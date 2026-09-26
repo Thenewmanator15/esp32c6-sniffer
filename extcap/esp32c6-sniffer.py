@@ -1155,15 +1155,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             toolbar log that nobody keeps, and a capture read back months
             later cannot be told apart from a quiet channel.
 
-            Sequence gaps count as drops because that is what they are: frames
-            the board numbered and the host never received.
+            Each lost packet once. This added the board's two counts and the
+            host's gaps, and one packet a C6 could not send is all three.
             """
             try:
                 writer.write_statistics(
                     received=s.fw_frames_captured or s.frames,
-                    dropped=(s.fw_isr_queue_full + s.fw_link_rejected
-                             + s.fw_frames_dropped_ringfull
-                             + s.sequence_gaps),
+                    dropped=s.packets_dropped,
                     start_time_s=capture_started,
                     end_time_s=time.time(),
                     comment=s.fcs_failure_note())
