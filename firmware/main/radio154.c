@@ -264,8 +264,14 @@ void sn_radio154_stop(void)
 #endif
     esp_ieee802154_disable();
     s_running = false;
-    /* The front end is handed back, so the next boot has nothing to undo. */
-    set_front_end_dirty(false);
+    /* The flag is left set: only the radio power cycle clears it (main.c).
+     * A clean stop was measured handing the front end back (564 Wi-Fi frames
+     * before, 449 after), and this cleared the flag on the strength of it --
+     * but on 2026-09-25 the Wi-Fi receiver was found deaf after a day of
+     * 802.15.4 use with the flag reading clear, so the host never
+     * power-cycled and the scan came back empty. A needless power cycle
+     * costs a few seconds before the next Wi-Fi capture; a missed one costs
+     * the capture. */
     sn_trace(SN_TRACE_154_STOP_OUT, 1, 0);
     ESP_LOGI(TAG, "capture stopped");
 }

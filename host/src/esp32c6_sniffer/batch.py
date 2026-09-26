@@ -79,6 +79,11 @@ from dataclasses import dataclass
 BATCH_HEADER = struct.Struct("<QBB")   # base_timestamp_us, channel, count
 BATCH_ENTRY = struct.Struct("<HBbB")   # dt_us, lqi, rssi_dbm, len
 BLE_BATCH_HEADER = struct.Struct("<QB")     # base_timestamp_us, count
+
+#: A reconstructed timestamp past this cannot be written back into a record's
+#: 64-bit metadata; struct.pack raised, outside any handler, and ended the
+#: capture. A batch can arrive inside a captured radio frame, so it is input.
+_U64_MAX = 2 ** 64 - 1
 BLE_BATCH_ENTRY = struct.Struct("<HHBH")    # dt_us, orig_len, flags, len
 LINK_STATUS = struct.Struct("<III")    # queued_bytes, high_water, capacity
 
@@ -188,6 +193,8 @@ def decode_packet_batch(payload: bytes) -> tuple[int, list[BatchEntry]]:
         if len(payload) - at < length:
             raise BatchError("payload ends inside a psdu")
         ts += dt
+        if ts > _U64_MAX:
+            raise BatchError("timestamp does not fit in 64 bits")
         entries.append(BatchEntry(ts, lqi, rssi, bytes(payload[at:at + length])))
         at += length
     if at != len(payload):
@@ -271,6 +278,8 @@ def decode_ble_batch(payload: bytes) -> list[BleBatchEntry]:
         if len(payload) - at < length:
             raise BatchError("payload ends inside an hci packet")
         ts += dt
+        if ts > _U64_MAX:
+            raise BatchError("timestamp does not fit in 64 bits")
         entries.append(BleBatchEntry(ts, orig_len, flags,
                                      bytes(payload[at:at + length])))
         at += length

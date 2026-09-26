@@ -43,6 +43,11 @@ class KeyedBoard:
         self.before: dict[int, list[list[bytes]]] = {}
         self.after: dict[int, list[list[bytes]]] = {}
         self.reads = 0
+        #: Commands whose reply is lost, as a full ring would lose it.
+        self.unanswered: set[int] = set()
+        #: What a command's reply carries, where it is not the value sent.
+        self.values: dict[int, int] = {}
+        self.closed = False
 
     def set_buffer_size(self, **_):
         pass
@@ -58,7 +63,7 @@ class KeyedBoard:
         pass
 
     def close(self):
-        pass
+        self.closed = True
 
     def read(self, n=1):
         self.reads += 1
@@ -89,9 +94,13 @@ class KeyedBoard:
             self._emit(self.before, command)
             if command == Command.GET_INFO:
                 value = self.version
-            self.rx += encode_frame(FrameType.CONTROL_REPLY, self.seq,
-                                    struct.pack("<BBI", command, 0, value))
-            self.seq += 1
+            value = self.values.get(command, value)
+            if command in self.unanswered:
+                self.seq += 1           # sent, and lost on the way
+            else:
+                self.rx += encode_frame(FrameType.CONTROL_REPLY, self.seq,
+                                        struct.pack("<BBI", command, 0, value))
+                self.seq += 1
             self._emit(self.after, command)
         return len(data)
 

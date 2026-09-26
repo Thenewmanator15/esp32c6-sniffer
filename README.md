@@ -126,9 +126,10 @@ python3 -m venv .venv
 ./extcap/install.sh         # Linux / macOS
 ```
 
-It installs per-user — `%APPDATA%\Wireshark\extcap` or
-`~/.config/wireshark/extcap` — so it needs no administrator rights and
-survives a Wireshark upgrade. It also installs a **configuration profile per
+It installs per-user — `%APPDATA%\Wireshark\extcap`, or on Linux and macOS
+`~/.local/lib/wireshark/extcap`, where Wireshark 4.1 and later look, with an
+entry in `~/.config/wireshark/extcap` for 4.0 — so it needs no administrator
+rights and survives a Wireshark upgrade. It also installs a **configuration profile per
 radio**, each with the columns, colouring and filter buttons for that radio,
 and each selecting itself when you capture on it. Confirm it registered:
 
@@ -249,12 +250,32 @@ and the board's own dirty flag — the effect is not there:
 
 24 planned trials across both instruments, zero reproductions, with the board
 reporting the front end still owned in every dirty trial. The frame measure is
-the one the original table used, so this is like-for-like.
+the one the original table used, so this is like-for-like. The access-point
+counts were capped at four by a scan bug found since — the board sent the
+first four results and dropped the rest — but a deaf receiver reads zero, so
+that column still tells deaf from hearing.
 
 The mitigation stays — `esp_ieee802154_sleep()` before `disable()`, the
 `RADIO_DIRTY` flag, and an automatic power-cycle when the host sees it set. It
 is cheap, it is harmless, and something did produce those original zeros. What
 is gone is the claim to know what.
+
+The flag now stays set until the power cycle; a clean stop used to clear it,
+and on 2026-09-25 the receiver was found deaf with the flag reading clear. And
+because the latch has causes nobody has pinned down, a Wi-Fi capture that
+hears nothing at all in its first three seconds scans the band — passively,
+transmitting nothing — and power-cycles only if that finds nothing either:
+
+```
+Wi-Fi heard nothing on this channel, and a scan found no network anywhere: the receiver latch this board is prone to, or no Wi-Fi within range. Power-cycled the radio and started again
+```
+
+A band with no Wi-Fi in it at all — a shielded box, or the external antenna
+selected with none fitted — gets the power cycle anyway, 10 to 15 seconds at
+each start; the message says which two things it could be. A channel that is
+quiet in a band that is not costs about five seconds at the start of the
+capture, and no power cycle: measured on channel 14 here, 8 s to
+open where the check without the scan power-cycled and took 15.
 
 
 The board records the condition in RTC memory, where it survives the reset that
@@ -1079,7 +1100,7 @@ right to send.
 | The board does not appear as a COM port | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
 | `cannot capture on COM3` | The board is on a different port. The message names the one it found; set it in the interface options. The board is the device with USB id `303A:1001`, and a machine can easily have another serial device on COM3. |
 | `could not open port` | Something else holds it: another capture, a serial monitor, or a previous run that has not exited. The three radios cannot capture at once. |
-| Wi-Fi captures nothing, 802.15.4 works | The receiver has gone deaf; the cause is not established (see above). The host power-cycles the radio automatically when it sees the flag; if it persists, run `tools\wifi_survey.py --recover`. |
+| Wi-Fi captures nothing, 802.15.4 works | The receiver has gone deaf; the cause is not established (see above). The host power-cycles the radio automatically when it sees the flag, or when a capture hears nothing and a scan of the band finds nothing either; if it persists, run `tools\wifi_survey.py --recover`. |
 | Flashing fails | Hold **BOOT**, tap **RESET**, release **BOOT**, retry. `flash.ps1` already retries three times. |
 | A channel looks empty | It probably is. The sniffer is passive and shows only traffic that already exists. On Wi-Fi, check the toolbar log first. |
 

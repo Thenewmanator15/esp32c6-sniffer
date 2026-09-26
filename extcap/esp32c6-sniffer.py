@@ -512,19 +512,26 @@ def scanned_channel_labels(interface: str, port: str) -> dict[int, str]:
     spec = INTERFACES[interface]
     channels = range(spec["min"], spec["max"] + 1)
     try:
-        from esp32c6_sniffer.scan import busiest_channels, scan_access_points
+        from esp32c6_sniffer.scan import (IncompleteScan, busiest_channels,
+                                          scan_access_points)
 
-        counts = busiest_channels(scan_access_points(port))
+        try:
+            counts, short = busiest_channels(scan_access_points(port)), False
+        except IncompleteScan as exc:
+            # Some records did not arrive -- every time, on a board still
+            # on firmware that sent only four. What did is a lower bound.
+            counts, short = busiest_channels(exc.found), True
     except Exception as exc:
         note = f"  [scan failed: {type(exc).__name__}]"
         return {channel: note for channel in channels}
 
+    more = "+" if short else ""
     labels = {}
     for channel in channels:
         found = counts.get(channel, 0)
         labels[channel] = (
-            f"  [{found} network{'s' if found > 1 else ''}]" if found
-            else "  [quiet]")
+            f"  [{found}{more} network{'s' if found > 1 else ''}]" if found
+            else f"  [quiet{'?' if short else ''}]")
     return labels
 
 
@@ -786,6 +793,88 @@ def control_write(fp, arg: int, cmd: int, payload: bytes) -> None:
         pass
 
 
+class HostGone(Exception):
+    """Wireshark closed the capture pipe, which is how it stops a capture."""
+
+
+class CapturePipe:
+    """The capture pipe, where a failed write means Wireshark has gone.
+
+    On Windows a write into the closed pipe fails with EINVAL, not
+    BrokenPipeError: an OSError like a serial fault's, so every stopped
+    capture was reported as a board that did not answer -- exit 1, and
+    "unplug the board and plug it back in" on stderr. Here the error is known
+    to be the pipe's, and becomes HostGone. A quiet capture meets it on
+    close, which flushes the last statistics block into the pipe that went.
+    """
+
+    def __init__(self, file):
+        self._file = file
+
+    def write(self, data: bytes) -> int:
+        try:
+            return self._file.write(data)
+        except OSError as exc:
+            raise HostGone() from exc
+
+    def flush(self) -> None:
+        try:
+            self._file.flush()
+        except OSError as exc:
+            raise HostGone() from exc
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        try:
+            self._file.close()
+        except OSError:
+            pass
+
+
+class LossWarning:
+    """When to raise Wireshark's warning about lost packets.
+
+    It was raised every second once a capture had lost anything: a dialog a
+    second, for a loss that might be long over. Now it is raised when more
+    is lost, and no more than once a minute however often that is. The log
+    still carries the figures every second.
+    """
+
+    def __init__(self, every_s: float = 60.0):
+        self._every_s = every_s
+        self._told = 0
+        self._next = float("-inf")
+
+    def due(self, dropped: int, now: float) -> int:
+        """Packets lost since the last warning, if one is due; else 0."""
+        if dropped <= self._told or now < self._next:
+            return 0
+        fresh, self._told = dropped - self._told, dropped
+        self._next = now + self._every_s
+        return fresh
+
+
+def command_note(stats) -> str:
+    """Commands sent mid-capture that the board missed or refused.
+
+    The capture carries on past either, in whatever state it was in -- a
+    retune not answered leaves it on the old channel -- so the log says so.
+    """
+    def commands(n: int) -> str:
+        return f"{n} command{'s' if n != 1 else ''}"
+
+    unanswered, refused = stats.commands_unanswered, stats.commands_refused
+    if unanswered and refused:
+        return f", {commands(unanswered)} unanswered, {refused} refused"
+    if unanswered:
+        return f", {commands(unanswered)} unanswered"
+    if refused:
+        return f", {commands(refused)} refused"
+    return ""
+
+
 #: Key-file labels, and the length each key must be. Zigbee keys are 128-bit;
 #: anything else is a typo or a different kind of key, and embedding it would
 #: produce a capture that silently fails to decrypt.
@@ -989,7 +1078,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
                               "\n".join(lines).encode("utf-8"))
 
-        if session.request_key_check(check.observe, done):
+        def failed() -> None:
+            log("Check keys did not finish: the board missed a command. Its "
+                "keys and filter were sent back; if no packets arrive now, "
+                "stop the capture and start it again", popup=True)
+
+        if session.request_key_check(check.observe, done, on_failed=failed):
             log(f"Check keys: listening {KEY_CHECK_SECONDS:.0f} s with no keys "
                 f"and no filter; those packets are left out of the capture")
         else:
@@ -1070,7 +1164,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         if csi_written % 50 == 0:
             csi_file.flush()
 
-    with open(fifo, "wb") as pipe:
+    with CapturePipe(open(fifo, "wb")) as pipe:
         # The link type comes from the interface table, which is the same
         # table --extcap-dlts answers from, so the file header and what
         # Wireshark was told can never disagree.
@@ -1115,15 +1209,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             toolbar log that nobody keeps, and a capture read back months
             later cannot be told apart from a quiet channel.
 
-            Sequence gaps count as drops because that is what they are: frames
-            the board numbered and the host never received.
+            Each lost packet once. This added the board's two counts and the
+            host's gaps, and one packet a C6 could not send is all three.
             """
             try:
                 writer.write_statistics(
                     received=s.fw_frames_captured or s.frames,
-                    dropped=(s.fw_isr_queue_full + s.fw_link_rejected
-                             + s.fw_frames_dropped_ringfull
-                             + s.sequence_gaps),
+                    dropped=s.packets_dropped,
                     start_time_s=capture_started,
                     end_time_s=time.time(),
                     comment=s.fcs_failure_note())
@@ -1218,6 +1310,12 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             if session.recovered_from_802154:
                 deferred_log.append(
                     "802.15.4 had been used; power-cycled the radio first")
+            if session.power_cycled_for_deafness:
+                deferred_log.append(
+                    "Wi-Fi heard nothing on this channel, and a scan found no "
+                    "network anywhere: the receiver latch this board is prone "
+                    "to, or no Wi-Fi within range. Power-cycled the radio and "
+                    "started again")
             for message in deferred_log:
                 log(message)
 
@@ -1272,6 +1370,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             threading.Thread(target=heartbeat, daemon=True).start()
 
             next_report = time.monotonic() + 1.0
+            loss_warning = LossWarning()
+            board_display = board_for_interface(interface)["display"]
             try:
                 for record, timestamp, original_len in session.records():
                     note = None
@@ -1369,20 +1469,26 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             # until the BLE counters were read at all.
                             extra += (f", {s.fw_ble_periodic_refused} periodic "
                                       f"syncs refused")
+                        extra += command_note(s)
                         if s.lossless:
                             log(f"ch {session._channel}: {s.frames} frames, "
                                 f"no loss{extra}")
                         else:
                             log(f"ch {session._channel}: {s.frames} frames, "
-                                f"LOSS gaps={s.sequence_gaps} "
+                                f"LOSS {s.packets_dropped} packets "
+                                f"(gaps={s.sequence_gaps} "
                                 f"isr={s.fw_isr_queue_full} "
-                                f"link={s.fw_link_rejected}{extra}")
+                                f"link={s.fw_link_rejected} "
+                                f"ring={s.fw_frames_dropped_ringfull})"
+                                f"{extra}")
+                        fresh = loss_warning.due(s.packets_dropped, now)
+                        if fresh:
                             with control_lock:
                                 control_write(
                                     fp_out, CTRL_ARG_NONE, CTRL_CMD_WARNING,
-                                    b"ESP32-C6 dropped frames; see the Log "
-                                    b"button",
-                                )
+                                    (f"{board_display} lost {fresh} packet"
+                                     f"{'s' if fresh != 1 else ''}; see the "
+                                     f"Log button").encode())
             finally:
                 state["running"] = False
                 # The board's own counters, written into the file. Without
@@ -1589,6 +1695,8 @@ def main(argv: list[str] | None = None) -> int:
                               ble_filter=args.ble_filter,
                               ble_periodic=args.ble_periodic,
                               ble_keys_file=args.ble_keys_file)
+        except HostGone:
+            return 0
         except (OSError, RuntimeError) as exc:
             # Usually the wrong serial port, which used to reach the user as a
             # Python traceback in a Wireshark dialog.

@@ -277,8 +277,11 @@ from a quiet channel. The counters are written *during* the capture, not at the
 end: Wireshark stops a capture by closing the pipe, so anything written in a
 cleanup path would never reach the file.
 
-The toolbar log reports the same figures live, and raises a warning in
-Wireshark if the board ever drops a frame.
+The toolbar log reports the same figures live, every second, and Wireshark
+shows a warning when packets are lost: how many, and at most once a minute
+however long the loss goes on. The log also counts any mid-capture command
+-- a retune, an antenna switch, Check keys -- that the board did not answer
+or refused; the capture carries on past it, in the state it was in.
 
 ## Decrypting your own traffic
 
@@ -334,7 +337,7 @@ means capturing at the moment a device joins.
 | Board is not a COM port at all | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
 | `cannot capture on COM3` | The board is elsewhere; the message names the port it found. |
 | `could not open port` | Something else holds it — another capture, a serial monitor, or a previous run that has not exited. |
-| Wi-Fi empty, 802.15.4 fine | The 802.15.4 radio was left enabled by a crashed host, leaving the shared front end deaf. The host power-cycles automatically when it sees the flag; the toolbar log says when it has. |
+| Wi-Fi empty, 802.15.4 fine | The Wi-Fi receiver has latched deaf, which this board does, most often after the 802.15.4 radio has run. The host power-cycles automatically: after any 802.15.4 use, and when a capture hears nothing and a passive scan of the band finds nothing either. The toolbar log says when it has. If it persists, run `tools\wifi_survey.py --recover`. |
 | A channel looks empty | It probably is. Run `survey.py` and `spectrum.py` before believing a capture. |
 
 ## What you will not get

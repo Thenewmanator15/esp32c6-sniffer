@@ -978,39 +978,37 @@ esp_err_t sn_radio80211_scan(uint16_t *out_ap_count, bool active)
         return ESP_OK;
     }
 
-    /* Fetched in small batches rather than all at once: wifi_ap_record_t is
-     * around 700 bytes here, so a busy area would otherwise need tens of
-     * kilobytes of heap on a chip with a few hundred. */
-    static const uint16_t BATCH = 4;
-    wifi_ap_record_t *records = calloc(BATCH, sizeof(wifi_ap_record_t));
-    if (records == NULL) {
+    /* One record at a time. esp_wifi_scan_get_ap_records() frees the whole
+     * list on its first call, whatever it is asked for, so fetching it in
+     * batches of four sent four access points and dropped the rest: measured,
+     * 7 counted and 4 sent. The singular call frees only the record it
+     * returns, and keeps the heap cost to one wifi_ap_record_t. */
+    wifi_ap_record_t *record = malloc(sizeof(*record));
+    if (record == NULL) {
+        esp_wifi_clear_ap_list();
         return ESP_ERR_NO_MEM;
     }
 
-    uint16_t remaining = n;
-    while (remaining > 0) {
-        uint16_t want = (remaining > BATCH) ? BATCH : remaining;
-        /* esp_wifi_scan_get_ap_records() drains the list, so each call returns
-         * the next batch and the results are freed as they go. */
-        if (esp_wifi_scan_get_ap_records(&want, records) != ESP_OK || want == 0) {
-            break;
+    uint16_t sent = 0;
+    while (esp_wifi_scan_get_ap_record(record) == ESP_OK) {
+        uint8_t out[SN_80211_AP_RECORD_HEADER + 32];
+        size_t ssid_len = strnlen((const char *)record->ssid, 32);
+        out[0] = (uint8_t)record->rssi;
+        out[1] = record->primary;
+        out[2] = (uint8_t)record->authmode;
+        out[3] = (uint8_t)ssid_len;
+        memcpy(out + 4, record->bssid, 6);
+        memcpy(out + SN_80211_AP_RECORD_HEADER, record->ssid, ssid_len);
+        /* Blocking: a scan result is small, rare, and worth waiting for.
+         * Dropping it would leave the host with a count it cannot explain. */
+        if (sn_usb_link_send_wait(SN_FRAME_AP_RECORD, out,
+                                  SN_80211_AP_RECORD_HEADER + ssid_len, 1000)) {
+            sent++;
         }
-        for (uint16_t i = 0; i < want; i++) {
-            uint8_t out[SN_80211_AP_RECORD_HEADER + 32];
-            size_t ssid_len = strnlen((const char *)records[i].ssid, 32);
-            out[0] = (uint8_t)records[i].rssi;
-            out[1] = records[i].primary;
-            out[2] = (uint8_t)records[i].authmode;
-            out[3] = (uint8_t)ssid_len;
-            memcpy(out + 4, records[i].bssid, 6);
-            memcpy(out + SN_80211_AP_RECORD_HEADER, records[i].ssid, ssid_len);
-            /* Blocking: a scan result is small, rare, and worth waiting for.
-             * Dropping it would leave the host with a count it cannot explain. */
-            sn_usb_link_send_wait(SN_FRAME_AP_RECORD, out,
-                                  SN_80211_AP_RECORD_HEADER + ssid_len, 1000);
-        }
-        remaining -= want;
     }
-    free(records);
+    /* Anything not fetched stays allocated until the next scan otherwise. */
+    esp_wifi_clear_ap_list();
+    free(record);
+    ESP_LOGI(TAG, "scan sent %u of %u records", (unsigned)sent, (unsigned)n);
     return ESP_OK;
 }

@@ -8,12 +8,16 @@ one fault this found in practice is recorded in test_a_deaf_receiver_... below
 
 import importlib.util
 import io
+import struct
 from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
 
 from esp32c6_sniffer.apscan import AccessPoint
+from esp32c6_sniffer.control import Command
+from esp32c6_sniffer.framing import FrameType, encode_frame
+from esp32c6_sniffer.parser import StreamParser
 from esp32c6_sniffer.scan import busiest_channels
 
 PLUGIN = Path(__file__).resolve().parents[2] / "extcap" / "esp32c6-sniffer.py"
@@ -129,3 +133,87 @@ def test_a_deaf_receiver_would_report_an_empty_band_not_an_error():
     assert "ensure_wifi_ready" in source
     # Before the port is opened, or it cannot power-cycle.
     assert source.index("ensure_wifi_ready") < source.index("serial.Serial")
+
+
+def ap_record(channel: int, ssid: bytes = b"net") -> bytes:
+    return (struct.pack("<bBBB", -50, channel, 3, len(ssid))
+            + bytes.fromhex("112233445566") + ssid)
+
+
+class ScanningBoard:
+    """Answers SET_RADIO, and answers WIFI_SCAN with `sent` records and a
+    reply counting `counted` -- what the ESP32-C6 did when it fetched the
+    results four at a time: counted 7, sent 4."""
+
+    def __init__(self, counted: int, sent: int):
+        self.counted, self.sent = counted, sent
+        self.rx = bytearray()
+        self.seq = 0
+
+    def _frame(self, ftype, payload):
+        self.rx += encode_frame(ftype, self.seq, payload)
+        self.seq += 1
+
+    def write(self, data):
+        for frame in StreamParser().feed(bytes(data)):
+            command, _ = struct.unpack_from("<BI", frame.payload)
+            value = 0
+            if command == Command.WIFI_SCAN:
+                for i in range(self.sent):
+                    self._frame(FrameType.AP_RECORD, ap_record(1 + i))
+                value = self.counted
+            self._frame(FrameType.CONTROL_REPLY,
+                        struct.pack("<BBI", command, 0, value))
+        return len(data)
+
+    def read(self, n=1):
+        out = bytes(self.rx[:n])
+        del self.rx[:n]
+        return out
+
+    def flush(self):
+        pass
+
+    def set_buffer_size(self, **_):
+        pass
+
+    def close(self):
+        pass
+
+
+def run_scan(monkeypatch, board):
+    from esp32c6_sniffer import scan
+
+    monkeypatch.setattr(scan, "ensure_wifi_ready", lambda port: False)
+    monkeypatch.setattr(scan.serial, "Serial", lambda *a, **k: board)
+    return scan.scan_access_points("COM_UNUSED", settle=0.0, timeout=2.0)
+
+
+def test_a_scan_returns_every_access_point_the_board_counted(monkeypatch):
+    assert len(run_scan(monkeypatch, ScanningBoard(counted=7, sent=7))) == 7
+
+
+def test_a_scan_that_lost_records_says_so(monkeypatch):
+    """The board counted 7 and sent 4, and the four came back as the whole
+    band. The count was in the reply all along."""
+    from esp32c6_sniffer.scan import IncompleteScan
+
+    with pytest.raises(IncompleteScan, match="counted 7 .* sent 4") as caught:
+        run_scan(monkeypatch, ScanningBoard(counted=7, sent=4))
+    assert len(caught.value.found) == 4
+
+
+def test_a_scan_short_of_records_still_labels_what_it_heard(monkeypatch):
+    """The whole list was thrown away as a failed scan -- which a board
+    still on the old firmware, which sends only four records, would give on
+    every reload. What arrived is a lower bound, and labelled as one."""
+    from esp32c6_sniffer import scan
+
+    def short(port):
+        raise scan.IncompleteScan([ap(6), ap(6), ap(11)], counted=7)
+
+    monkeypatch.setattr(scan, "scan_access_points", short)
+    labels = plugin.scanned_channel_labels("esp32c6-wifi", "COM_UNUSED")
+    assert labels[6] == "  [2+ networks]"
+    assert labels[11] == "  [1+ network]"
+    assert labels[1] == "  [quiet?]"

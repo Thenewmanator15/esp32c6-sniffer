@@ -40,6 +40,11 @@ class StreamParser:
         #: a header starting inside them. Dropped rather than delivered.
         self.frames_truncated = 0
 
+    @property
+    def buffered(self) -> int:
+        """Bytes held back: a frame still arriving, or one cut short."""
+        return len(self._buf)
+
     def feed(self, data: bytes) -> list[Frame]:
         self._buf.extend(data)
         frames: list[Frame] = []
@@ -62,17 +67,38 @@ class StreamParser:
         On a live stream the stall rarely lasts: the next frame's bytes arrive
         and fill the declared length, and the splice this avoids by waiting
         would happen anyway. _inner_header_at catches it at that point.
+
+        A frame received whole, held only for what follows it (see _try_one),
+        is released as it stands. Resyncing inside it, as this once did,
+        dropped the real frame and delivered whatever header a transmitter
+        had put in its payload.
         """
+        whole = self._whole_frame()
+        if whole is not None:
+            del self._buf[: HEADER_LEN + len(whole.payload)]
+            self.frames_parsed += 1
+            return [whole] + self.feed(b"")
         if self._buf:
             self._discard_one_byte_and_resync()
         return self.feed(b"")
+
+    def _whole_frame(self) -> Frame | None:
+        """The frame at the head of the buffer, if all of it has arrived."""
+        if len(self._buf) < HEADER_LEN:
+            return None
+        try:
+            return decode_frame(bytes(self._buf[:HEADER_LEN + MAX_PAYLOAD]))
+        except FrameError:
+            return None
 
     def _try_one(self) -> Frame | None:
         while True:
             if len(self._buf) < HEADER_LEN:
                 return None
             try:
-                frame = decode_frame(bytes(self._buf))
+                # At most one frame's worth: copying the whole buffer for each
+                # frame made a large read quadratic -- 1.2 s for 1 MB.
+                frame = decode_frame(bytes(self._buf[:HEADER_LEN + MAX_PAYLOAD]))
             except FrameError:
                 # Either this is not a frame start, or the payload has not
                 # arrived yet. A valid header with a short payload must wait.
@@ -82,15 +108,27 @@ class StreamParser:
                 continue
             cut = self._inner_header_at(len(frame.payload), frame.seq)
             if cut is not None:
-                # Lost its tail in transit; see _inner_header_at. The damaged
-                # frame is dropped and parsing resumes at the header inside
-                # it, which is the frame that followed -- recovered rather than
-                # lost in the damaged one's place.
-                self.bytes_discarded += cut
-                self.resync_count += 1
-                self.frames_truncated += 1
-                del self._buf[:cut]
-                continue
+                # A header inside the payload is either the frame that
+                # followed, because this one lost its tail in transit, or
+                # bytes that merely form one. A PACKET's payload is whatever
+                # went over the air, so the second is anyone's to send. What
+                # starts at the declared end tells them apart: the very next
+                # frame, exactly there, means nothing was lost. Any later one
+                # is no evidence -- a frame cut short declares the bytes of
+                # the frames after it, and one of their headers can begin
+                # exactly at its end.
+                end = HEADER_LEN + len(frame.payload)
+                if len(self._buf) < end + HEADER_LEN:
+                    return None         # wait for it rather than guess
+                if not self._continues(end, frame.seq, window=1):
+                    # Lost its tail. The damaged frame is dropped and parsing
+                    # resumes at the header inside it, the frame that
+                    # followed -- recovered rather than lost in its place.
+                    self.bytes_discarded += cut
+                    self.resync_count += 1
+                    self.frames_truncated += 1
+                    del self._buf[:cut]
+                    continue
             del self._buf[: HEADER_LEN + len(frame.payload)]
             self.frames_parsed += 1
             return frame
@@ -108,7 +146,9 @@ class StreamParser:
         The frame that followed shows up as a whole header starting inside the
         declared payload: magic, a header CRC that matches, a length a frame
         could have, and a sequence number just ahead of this one. A payload
-        holds all four by chance about once in 2^42 positions.
+        holds all four by chance about once in 2^42 positions -- but a
+        PACKET's payload is radio traffic, and a transmitter can hold them on
+        purpose, so _try_one also checks what follows the declared end.
 
         Only headers already wholly buffered are examined. Waiting for one still
         arriving would hold frames back -- control replies among them -- for
@@ -119,15 +159,24 @@ class StreamParser:
         while pos != -1:
             if len(self._buf) < pos + HEADER_LEN:
                 return None
-            head = bytes(self._buf[pos:pos + 8])
-            crc = struct.unpack_from("<H", self._buf, pos + 8)[0]
-            inner_seq, inner_len = struct.unpack_from("<HH", head, 4)
-            if (crc16_ccitt_false(head) == crc and inner_len <= MAX_PAYLOAD
-                    and 1 <= (inner_seq - seq) % 65536
-                    <= _TRUNCATION_SEQ_WINDOW):
+            if self._continues(pos, seq):
                 return pos
             pos = self._buf.find(_MAGIC_BYTES, pos + 1, end + 1)
         return None
+
+    def _continues(self, pos: int, seq: int,
+                   window: int = _TRUNCATION_SEQ_WINDOW) -> bool:
+        """A whole header at pos with a sequence number up to `window` ahead
+        of seq."""
+        if len(self._buf) < pos + HEADER_LEN:
+            return False
+        head = bytes(self._buf[pos:pos + 8])
+        if head[:2] != _MAGIC_BYTES:
+            return False
+        crc = struct.unpack_from("<H", self._buf, pos + 8)[0]
+        inner_seq, inner_len = struct.unpack_from("<HH", head, 4)
+        return (crc16_ccitt_false(head) == crc and inner_len <= MAX_PAYLOAD
+                and 1 <= (inner_seq - seq) % 65536 <= window)
 
     def _header_is_valid_but_incomplete(self) -> bool:
         head = bytes(self._buf[:8])

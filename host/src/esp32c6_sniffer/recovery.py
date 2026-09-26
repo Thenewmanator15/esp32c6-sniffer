@@ -79,13 +79,35 @@ def ensure_wifi_ready(port: str, settle: float = 2.0) -> bool:
         reply = _ask(ser, parser, Command.RADIO_DIRTY)
         if reply is None or not reply["ok"] or not reply["value"]:
             return False
-        _ask(ser, parser, Command.RADIO_POWER_CYCLE)
-        time.sleep(2.0)
+        _power_cycle_on(ser, parser)
     finally:
         ser.close()
-
-    time.sleep(POWER_CYCLE_SETTLE_S)
-    # Prove it came back rather than assuming, so a caller that gets True can
-    # rely on the port existing.
-    _open(port).close()
+    _await_return(port)
     return True
+
+
+def power_cycle(port: str) -> None:
+    """Power-gates the radio domain and waits for the board to come back.
+
+    For a receiver found deaf with no 802.15.4 run to blame: it latches for
+    other reasons too, and this is the one cure for all of them. Opens and
+    closes the port itself, like ensure_wifi_ready.
+    """
+    ser = _open(port)
+    try:
+        _power_cycle_on(ser, StreamParser())
+    finally:
+        ser.close()
+    _await_return(port)
+
+
+def _power_cycle_on(ser: serial.Serial, parser: StreamParser) -> None:
+    _ask(ser, parser, Command.RADIO_POWER_CYCLE)
+    time.sleep(2.0)
+
+
+def _await_return(port: str) -> None:
+    time.sleep(POWER_CYCLE_SETTLE_S)
+    # Prove it came back rather than assuming, so a caller can rely on the
+    # port existing.
+    _open(port).close()

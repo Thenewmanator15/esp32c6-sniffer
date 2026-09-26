@@ -21,6 +21,33 @@ def test_crc_of_empty_input_is_init_value():
     assert crc16_ccitt_false(b"") == 0xFFFF
 
 
+def _bitwise_crc(data: bytes, crc: int = 0xFFFF) -> int:
+    """The polynomial loop the C firmware runs, as the reference."""
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def test_crc_matches_the_firmwares_loop_on_random_headers():
+    import random
+    rng = random.Random(1)
+    for _ in range(5000):
+        data = bytes(rng.getrandbits(8) for _ in range(rng.randrange(0, 12)))
+        seed = rng.getrandbits(16)
+        assert crc16_ccitt_false(data, seed) == _bitwise_crc(data, seed)
+
+
+def test_crc_is_fast_enough_for_the_hot_path():
+    """Half the per-frame parse cost was this function in pure Python: 4.8 us
+    of 6.5 us, measured. The stdlib's C version gives the same answers."""
+    import timeit
+    per_call = timeit.timeit(lambda: crc16_ccitt_false(b"\xc6\x5a\x01\x00\x07\x00\x10\x00"),
+                             number=2000) / 2000
+    assert per_call < 1e-6, f"{per_call * 1e6:.2f} us per 8-byte header"
+
+
 def test_encoded_header_is_ten_bytes():
     frame = encode_frame(FrameType.HEARTBEAT, seq=0, payload=b"")
     assert len(frame) == HEADER_LEN

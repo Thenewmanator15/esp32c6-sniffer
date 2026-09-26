@@ -319,6 +319,11 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
         /* One 2.4 GHz front end, shared. A scan issued without a preceding
          * SET_RADIO would otherwise run while 802.15.4 still owns the radio. */
         sn_radio154_stop();
+        /* And a Wi-Fi capture is stopped properly: the scan turns promiscuous
+         * mode off and switches to station mode, but left the capture marked
+         * running, so the next SET_CHANNEL only retuned a receiver that was
+         * no longer capturing. */
+        sn_radio80211_stop();
         /* value 0 = passive, 1 = active. Passive is the default because an
          * active scan transmits probe requests, and this instrument is
          * supposed to be silent unless explicitly told otherwise. */

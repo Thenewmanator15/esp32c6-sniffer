@@ -35,6 +35,34 @@ RADIO_SETTLE_S = 3.0
 DEFAULT_TIMEOUT_S = 20.0
 
 
+class IncompleteScan(RuntimeError):
+    """The board counted more access points than it sent records for.
+
+    `found` holds the ones that did arrive, for a caller that would rather
+    have part of the band than none of it.
+    """
+
+    def __init__(self, found: list[AccessPoint], counted: int):
+        super().__init__(f"the board counted {counted} access points and "
+                         f"sent {len(found)}")
+        self.found = found
+        self.counted = counted
+
+
+def scan_result(found: list[AccessPoint], reply: dict) -> list[AccessPoint]:
+    """The access points, once the board's reply has said the scan is over.
+
+    The reply carries how many the board found. The ESP32-C6 once sent the
+    first four and dropped the rest -- 7 counted, 4 sent -- and the four came
+    back as the whole band, because nothing compared them.
+    """
+    if not reply["ok"]:
+        raise RuntimeError(f"scan failed, status {reply['status']}")
+    if len(found) < reply["value"]:
+        raise IncompleteScan(found, reply["value"])
+    return found
+
+
 def scan_access_points(
     port: str,
     *,
@@ -44,9 +72,10 @@ def scan_access_points(
 ) -> list[AccessPoint]:
     """Scans for access points, opening and closing the port itself.
 
-    Raises TimeoutError if the board never reports the scan complete, and
-    RuntimeError if it reports a failure. A malformed record is skipped rather
-    than fatal: one bad record must not lose the whole scan.
+    Raises TimeoutError if the board never reports the scan complete,
+    RuntimeError if it reports a failure, and IncompleteScan if fewer records
+    arrived than it counted. A malformed record is skipped rather than fatal,
+    and counts as one that did not arrive.
 
     The completion reply arrives *after* the records, which is what makes the
     list complete rather than merely quiet at that moment -- returning on a
@@ -91,10 +120,7 @@ def scan_access_points(
                 elif frame.ftype is FrameType.CONTROL_REPLY:
                     reply = decode_reply(frame.payload)
                     if reply["command"] is Command.WIFI_SCAN:
-                        if not reply["ok"]:
-                            raise RuntimeError(
-                                f"scan failed, status {reply['status']}")
-                        return found
+                        return scan_result(found, reply)
         raise TimeoutError(f"no scan reply from {port} within {timeout:.0f}s")
     finally:
         handle.close()
