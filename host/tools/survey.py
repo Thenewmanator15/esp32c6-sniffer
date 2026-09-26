@@ -51,6 +51,22 @@ def channel_mhz(channel: int) -> int:
     return 2405 + 5 * (channel - CHANNEL_MIN)
 
 
+def _packets(frame) -> tuple[int | None, list[tuple[int, bytes]]]:
+    """The channel a frame's packets were heard on, and the packets, decoded
+    once for both packet_entries and heard_on. No channel and no packets for
+    any other frame, or for a batch that does not decode whole."""
+    if frame.ftype is FrameType.PACKET and len(frame.payload) > _META.size:
+        channel, _lqi, rssi, _flags, _ts = _META.unpack_from(frame.payload)
+        return channel, [(rssi, frame.payload[_META.size:])]
+    if frame.ftype is FrameType.PACKET_BATCH:
+        try:
+            channel, entries = decode_packet_batch(frame.payload)
+        except BatchError:
+            return None, []
+        return channel, [(entry.rssi_dbm, entry.psdu) for entry in entries]
+    return None, []
+
+
 def packet_entries(frame) -> list[tuple[int, bytes]]:
     """The signal strength and bytes of every 802.15.4 packet a frame carries.
 
@@ -59,15 +75,7 @@ def packet_entries(frame) -> list[tuple[int, bytes]]:
     surveyed every channel on that board as quiet. Nothing for any other frame,
     or for a batch that does not decode whole.
     """
-    if frame.ftype is FrameType.PACKET and len(frame.payload) > _META.size:
-        return [(_META.unpack_from(frame.payload)[2], frame.payload[_META.size:])]
-    if frame.ftype is FrameType.PACKET_BATCH:
-        try:
-            _channel, entries = decode_packet_batch(frame.payload)
-        except BatchError:
-            return []
-        return [(entry.rssi_dbm, entry.psdu) for entry in entries]
-    return []
+    return _packets(frame)[1]
 
 
 def heard_on(frame, channel: int) -> list[tuple[int, bytes]]:
@@ -77,18 +85,12 @@ def heard_on(frame, channel: int) -> list[tuple[int, bytes]]:
     not the channel the survey was on when the frame arrived: the nRF54L15
     batches its packets, so a batch from the channel just left can arrive
     after the retune. Counted as the new channel's, it put a channel-15
-    network on channel 20.
+    network on channel 20. Such a batch is dropped rather than credited back:
+    its channel has already been reported, so that channel undercounts a
+    little instead.
     """
-    if frame.ftype is FrameType.PACKET and len(frame.payload) > _META.size:
-        heard = _META.unpack_from(frame.payload)[0]
-    elif frame.ftype is FrameType.PACKET_BATCH:
-        try:
-            heard, _entries = decode_packet_batch(frame.payload)
-        except BatchError:
-            return []
-    else:
-        return []
-    return packet_entries(frame) if heard == channel else []
+    heard, entries = _packets(frame)
+    return entries if heard == channel else []
 
 
 def packet_rssis(frame) -> list[int]:
@@ -175,9 +177,9 @@ def main() -> None:
 
         print(f"phase 2: traffic, {args.dwell:.0f} s per channel")
         for channel in channels:
+            # No drain after the retune: heard_on drops whatever arrives from
+            # the channel just left, by the channel each packet carries.
             link.command(Command.SET_CHANNEL, channel)
-            time.sleep(0.3)
-            parser.feed(ser.read(65536))     # drain the retune boundary
             heard: list[tuple[int, bytes]] = []
             end = time.monotonic() + args.dwell
             while time.monotonic() < end:

@@ -140,3 +140,10 @@ def test_a_single_packet_counts_for_the_channel_in_its_metadata():
     packet = frame(FrameType.PACKET, meta + b"\x41\x88\x07")
     assert survey.heard_on(packet, 15) == [(-60, b"\x41\x88\x07")]
     assert survey.heard_on(packet, 20) == []
+
+
+def test_a_frame_that_is_not_a_packet_is_heard_on_no_channel():
+    assert survey.heard_on(frame(FrameType.LOG, b"hello"), 15) == []
+    assert survey.heard_on(frame(FrameType.PACKET_BATCH, b"\x19"), 15) == []
+    short = struct.pack("<BBbBQ", 15, 200, -60, 0, 123456)
+    assert survey.heard_on(frame(FrameType.PACKET, short), 15) == []
