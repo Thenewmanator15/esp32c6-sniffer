@@ -38,6 +38,7 @@ from esp32c6_sniffer.apscan import parse_ap_record
 from esp32c6_sniffer.control import Command, Radio, decode_reply, encode_command
 from esp32c6_sniffer.framing import FrameType
 from esp32c6_sniffer.parser import StreamParser
+from esp32c6_sniffer.scan import IncompleteScan, scan_result
 from esp32c6_sniffer.recovery import ensure_wifi_ready
 
 # One Wi-Fi channel is about 22 MHz wide against 802.15.4's 2 MHz.
@@ -85,13 +86,14 @@ def scan_once(ser: serial.Serial, parser: StreamParser,
             elif frame.ftype is FrameType.CONTROL_REPLY:
                 reply = decode_reply(frame.payload)
                 if reply["command"] is Command.WIFI_SCAN:
-                    if not reply["ok"]:
-                        raise RuntimeError(
-                            f"scan failed, status {reply['status']}"
-                        )
                     # The reply arrives after the records, so it is the signal
-                    # that the list is complete rather than merely quiet.
-                    return found
+                    # that the list is complete rather than merely quiet --
+                    # and it says how many there should have been.
+                    try:
+                        return scan_result(found, reply)
+                    except IncompleteScan as exc:
+                        print(f"  WARNING: {exc}; showing those that arrived")
+                        return exc.found
     raise TimeoutError("no scan reply within the timeout")
 
 
