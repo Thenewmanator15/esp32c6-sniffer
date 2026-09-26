@@ -68,14 +68,6 @@ fi
 
 mkdir -p "$extcap_dir"
 
-for path in "${legacy_leftovers[@]}"; do
-    if [[ -e "$path" ]]; then
-        rm -rf "$path"
-        echo "removed the superseded $path"
-    fi
-done
-rmdir "$legacy_dir/lib" 2>/dev/null || true
-
 # Two layouts run this script and it detects which. A clone has the project's
 # virtual environment and wins where it exists, so a developer's install is
 # unchanged. A release zip has a wheel beside this script instead, and gets an
@@ -138,6 +130,17 @@ if [[ -e "$target_lib" ]]; then
     echo "removed the superseded $target_lib"
 fi
 rmdir "$extcap_dir/lib" 2>/dev/null || true
+
+# What an install into the old folder left there. Only now, with an
+# interpreter in hand: removed before that, a reinstall that stopped for
+# want of Python broke a Wireshark 4.0 install that had been working.
+for path in "${legacy_leftovers[@]}"; do
+    if [[ -e "$path" ]]; then
+        rm -rf "$path"
+        echo "removed the superseded $path"
+    fi
+done
+rmdir "$legacy_dir/lib" 2>/dev/null || true
 
 if [[ "$from_wheel" -eq 1 ]]; then
     # A release has no repository to point at. The plugin goes beside the

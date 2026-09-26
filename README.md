@@ -267,11 +267,14 @@ hears nothing at all in its first three seconds scans the band — passively,
 transmitting nothing — and power-cycles only if that finds nothing either:
 
 ```
-the Wi-Fi receiver heard nothing at all, the latch this board is prone to; power-cycled the radio and started again
+Wi-Fi heard nothing on this channel, and a scan found no network anywhere: the receiver latch this board is prone to, or no Wi-Fi within range. Power-cycled the radio and started again
 ```
 
-A channel that is quiet in a band that is not costs about five seconds at the
-start of the capture, and no power cycle: measured on channel 14 here, 8 s to
+A band with no Wi-Fi in it at all — a shielded box, or the external antenna
+selected with none fitted — gets the power cycle anyway, 10 to 15 seconds at
+each start; the message says which two things it could be. A channel that is
+quiet in a band that is not costs about five seconds at the start of the
+capture, and no power cycle: measured on channel 14 here, 8 s to
 open where the check without the scan power-cycled and took 15.
 
 

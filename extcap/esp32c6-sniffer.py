@@ -512,19 +512,26 @@ def scanned_channel_labels(interface: str, port: str) -> dict[int, str]:
     spec = INTERFACES[interface]
     channels = range(spec["min"], spec["max"] + 1)
     try:
-        from esp32c6_sniffer.scan import busiest_channels, scan_access_points
+        from esp32c6_sniffer.scan import (IncompleteScan, busiest_channels,
+                                          scan_access_points)
 
-        counts = busiest_channels(scan_access_points(port))
+        try:
+            counts, short = busiest_channels(scan_access_points(port)), False
+        except IncompleteScan as exc:
+            # Some records did not arrive -- every time, on a board still
+            # on firmware that sent only four. What did is a lower bound.
+            counts, short = busiest_channels(exc.found), True
     except Exception as exc:
         note = f"  [scan failed: {type(exc).__name__}]"
         return {channel: note for channel in channels}
 
+    more = "+" if short else ""
     labels = {}
     for channel in channels:
         found = counts.get(channel, 0)
         labels[channel] = (
-            f"  [{found} network{'s' if found > 1 else ''}]" if found
-            else "  [quiet]")
+            f"  [{found}{more} network{'s' if found > 1 else ''}]" if found
+            else f"  [quiet{'?' if short else ''}]")
     return labels
 
 
@@ -1305,9 +1312,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     "802.15.4 had been used; power-cycled the radio first")
             if session.power_cycled_for_deafness:
                 deferred_log.append(
-                    "the Wi-Fi receiver heard nothing at all, the latch this "
-                    "board is prone to; power-cycled the radio and started "
-                    "again")
+                    "Wi-Fi heard nothing on this channel, and a scan found no "
+                    "network anywhere: the receiver latch this board is prone "
+                    "to, or no Wi-Fi within range. Power-cycled the radio and "
+                    "started again")
             for message in deferred_log:
                 log(message)
 

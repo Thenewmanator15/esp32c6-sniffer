@@ -50,9 +50,12 @@ def test_the_release_zip_keeps_install_sh_executable(tmp_path):
                     "--version", "v0.0.0", "--wheel", str(wheel),
                     "--out", str(tmp_path)], check=True, capture_output=True)
     with zipfile.ZipFile(tmp_path / "esp32c6-sniffer-plugin-v0.0.0.zip") as z:
-        mode = z.getinfo("install.sh").external_attr >> 16
+        info = z.getinfo("install.sh")
         script = z.read("install.sh")
-    assert mode & 0o111 == 0o111
+    assert info.external_attr >> 16 & 0o111 == 0o111
+    # And marked as made on Unix: unzip ignores the mode of an entry marked
+    # FAT, which is what a zip built on Windows marks every entry.
+    assert info.create_system == 3
     # A Windows checkout has CRLF, and bash reads the \r as part of each line.
     assert b"\r" not in script
 
@@ -98,9 +101,16 @@ def test_the_windows_launcher_runs_from_a_non_ascii_path(
         env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
     launcher = appdata / "Wireshark" / "extcap" / "esp32c6-sniffer.bat"
-    # As Wireshark runs it: the .bat, by cmd, with no console of its own.
+    # As Wireshark runs it (wsutil/ws_pipe.c): a console of its own, hidden,
+    # with the pipes as its standard handles -- the console is what the
+    # launcher's chcp acts on.
+    hidden = subprocess.STARTUPINFO()
+    hidden.dwFlags = subprocess.STARTF_USESHOWWINDOW | subprocess.STARTF_USESTDHANDLES
+    hidden.wShowWindow = 0                                  # SW_HIDE
     listed = subprocess.run(["cmd", "/c", str(launcher), "--extcap-interfaces"],
-                            capture_output=True, text=True, timeout=60)
+                            capture_output=True, text=True, timeout=60,
+                            creationflags=subprocess.CREATE_NEW_CONSOLE,
+                            startupinfo=hidden)
     assert "extcap {version=" in listed.stdout, listed.stdout + listed.stderr
 
 
@@ -181,3 +191,20 @@ def test_install_sh_uninstall_removes_both_entries(tmp_path):
                 / "esp32c6-sniffer").exists()
     assert not (home / ".config" / "wireshark" / "extcap"
                 / "esp32c6-sniffer").exists()
+
+
+@needs_bash
+def test_install_sh_that_fails_leaves_the_old_install_working(tmp_path):
+    """The old folder's files were removed before the script knew it had a
+    Python to install with, so a reinstall that stopped there broke a
+    Wireshark 4.0 install that had been working."""
+    home = tmp_path / "home"
+    old = home / ".config" / "wireshark" / "extcap"
+    (old / "esp32c6-sniffer-venv").mkdir(parents=True)
+    (old / "esp32c6-sniffer.py").write_text("# the working copy\n")
+    repo = fake_clone(tmp_path)
+    shutil.rmtree(repo / "host" / ".venv")        # nothing to install with
+    result = run_install_sh(repo, home)
+    assert result.returncode != 0
+    assert (old / "esp32c6-sniffer.py").exists()
+    assert (old / "esp32c6-sniffer-venv").exists()

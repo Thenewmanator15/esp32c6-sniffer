@@ -116,6 +116,9 @@ def main() -> int:
         # unpacked script was refused by ./install.sh, or read by bash with
         # a \r on the end of every line.
         script = zipfile.ZipInfo("install.sh", date_time=time.localtime()[:6])
+        # Made on Unix, or unzip ignores the mode: an entry built on Windows
+        # is marked FAT, and FAT has no execute bit to honour.
+        script.create_system = 3
         script.external_attr = 0o100755 << 16
         script.compress_type = zipfile.ZIP_DEFLATED
         z.writestr(script, (EXTCAP / "install.sh").read_bytes()

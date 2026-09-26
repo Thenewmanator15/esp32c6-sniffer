@@ -201,3 +201,19 @@ def test_a_scan_that_lost_records_says_so(monkeypatch):
     with pytest.raises(IncompleteScan, match="counted 7 .* sent 4") as caught:
         run_scan(monkeypatch, ScanningBoard(counted=7, sent=4))
     assert len(caught.value.found) == 4
+
+
+def test_a_scan_short_of_records_still_labels_what_it_heard(monkeypatch):
+    """The whole list was thrown away as a failed scan -- which a board
+    still on the old firmware, which sends only four records, would give on
+    every reload. What arrived is a lower bound, and labelled as one."""
+    from esp32c6_sniffer import scan
+
+    def short(port):
+        raise scan.IncompleteScan([ap(6), ap(6), ap(11)], counted=7)
+
+    monkeypatch.setattr(scan, "scan_access_points", short)
+    labels = plugin.scanned_channel_labels("esp32c6-wifi", "COM_UNUSED")
+    assert labels[6] == "  [2+ networks]"
+    assert labels[11] == "  [1+ network]"
+    assert labels[1] == "  [quiet?]"
