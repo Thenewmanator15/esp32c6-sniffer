@@ -135,6 +135,53 @@ def test_a_valid_header_far_off_in_sequence_is_just_payload():
     assert parser.frames_truncated == 0
 
 
+def test_a_header_inside_captured_bytes_does_not_cut_the_frame():
+    """A PACKET's payload is whatever went over the air, and anyone can send
+    a radio frame holding a valid sniffer header with a sequence number just
+    ahead. The check used to take that for a truncation: the real frame was
+    dropped, the transmitter's bytes were parsed as a board frame, and 65536
+    sequence gaps were counted. What follows the declared end settles it --
+    the next frame in sequence, exactly there, means nothing was lost."""
+    injected = encode_frame(FrameType.PACKET, 6, b"INJECTED")
+    captured = b"\x41\x88" + injected + b"\x00\x01"
+    real = encode_frame(FrameType.PACKET, 5, captured)
+    following = encode_frame(FrameType.PACKET, 6, b"next")
+
+    parser = StreamParser()
+    frames = parser.feed(real + following)
+
+    assert [(f.seq, f.payload) for f in frames] == [(5, captured), (6, b"next")]
+    assert parser.frames_truncated == 0
+
+
+def test_a_header_inside_captured_bytes_waits_for_what_follows():
+    """Until the bytes after the declared end arrive, truncation and
+    coincidence cannot be told apart, so the frame waits rather than being
+    guessed at either way."""
+    injected = encode_frame(FrameType.PACKET, 6, b"INJECTED")
+    captured = b"\x41\x88" + injected + b"\x00\x01"
+    parser = StreamParser()
+
+    assert parser.feed(encode_frame(FrameType.PACKET, 5, captured)) == []
+    frames = parser.feed(encode_frame(FrameType.PACKET, 6, b"next"))
+    assert [f.seq for f in frames] == [5, 6] and frames[0].payload == captured
+
+
+def test_one_large_read_parses_in_linear_time():
+    """Each frame used to copy the whole remaining buffer before decoding, so
+    a backlog read in one go -- the capture reads all that is waiting when a
+    reply is due -- cost time in the square of its size: 1.2 s for 1 MB."""
+    import time
+    chunk = b"".join(encode_frame(FrameType.PACKET, n % 65536, b"p" * 40)
+                     for n in range(21000))                # about 1 MB
+    parser = StreamParser()
+    started = time.perf_counter()
+    frames = parser.feed(chunk)
+    elapsed = time.perf_counter() - started
+    assert len(frames) == 21000
+    assert elapsed < 0.3, f"{elapsed:.2f} s for {len(chunk) // 1024} KB"
+
+
 def test_the_check_never_holds_a_frame_back():
     """Only headers already wholly received are examined, so a payload ending
     in what could be the start of one is still delivered at once rather than
