@@ -40,6 +40,11 @@ class StreamParser:
         #: a header starting inside them. Dropped rather than delivered.
         self.frames_truncated = 0
 
+    @property
+    def buffered(self) -> int:
+        """Bytes held back: a frame still arriving, or one cut short."""
+        return len(self._buf)
+
     def feed(self, data: bytes) -> list[Frame]:
         self._buf.extend(data)
         frames: list[Frame] = []

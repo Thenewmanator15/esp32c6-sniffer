@@ -76,6 +76,18 @@ WIFI_CHANNEL_MAX = 14
 #: saved on latency.
 REPLY_POLL_S = 0.01
 
+#: How long a command sent from inside the capture loop -- a retune, a hop,
+#: an antenna switch, Check keys -- waits for its reply before the capture
+#: carries on without it. Replies take well under a millisecond; a BLE START
+#: that brings the controller up takes the longest.
+MID_CAPTURE_REPLY_S = 3.0
+
+#: Silence after which a partly received frame is given up on. A frame cut
+#: short in transit declares bytes that never come, and everything behind it
+#: -- a reply included -- waits with it. At 1 Mbaud the largest frame takes
+#: 45 ms, so half a second of nothing means nothing more is coming.
+STALL_RESYNC_S = 0.5
+
 #: Boards reached through a bridge that keeps data across a port close. The
 #: XIAO nRF54L15's SAMD11 holds the whole USB packets that were in flight when
 #: the previous session closed, and releases them in front of the next thing
@@ -301,6 +313,10 @@ class CaptureStats:
     #: Times the device clock had to be re-pinned to the host clock, because
     #: the board's counter restarted or a timestamp was corrupt.
     timestamp_reanchors: int = 0
+    #: Commands sent mid-capture that the board never answered, or refused.
+    #: The capture carries on past both; these say it happened.
+    commands_unanswered: int = 0
+    commands_refused: int = 0
 
     def fcs_failure_note(self) -> str | None:
         """What the board said about corrupt frames, or None if it cannot say."""
@@ -326,6 +342,7 @@ class _KeyCheck:
     on_hci: Callable[[bytes], None]
     on_done: Callable[[], None]
     until: float
+    on_failed: Callable[[], None] | None = None
 
 
 class CaptureSession:
@@ -438,6 +455,8 @@ class CaptureSession:
         # whatever was in flight, showing up as sequence gaps the board could
         # not account for.
         self._deferred: list = []
+        #: When bytes last arrived, for giving up on a frame cut short.
+        self._last_rx = time.monotonic()
         self.stats = CaptureStats()
 
     @property
@@ -487,14 +506,20 @@ class CaptureSession:
 
         self._connect()
 
-        info = self._handshake()
-        self.firmware_version = info["value"]
-        if self.firmware_version != EXPECTED_FIRMWARE_VERSIONS[self.board]:
-            raise RuntimeError(
-                version_mismatch_message(self.board, self.firmware_version)
-            )
-
-        self._configure()
+        # Closed on any failure from here: __exit__ does not run when
+        # __enter__ raises, so a version mismatch or an unanswered command
+        # left the port open and the radio configured.
+        try:
+            info = self._handshake()
+            self.firmware_version = info["value"]
+            if self.firmware_version != EXPECTED_FIRMWARE_VERSIONS[self.board]:
+                raise RuntimeError(
+                    version_mismatch_message(self.board, self.firmware_version)
+                )
+            self._configure()
+        except BaseException:
+            self.close()
+            raise
 
     def _handshake(self) -> dict:
         """GET_INFO -- asked a second time on a bridged board if stale data ate
@@ -608,23 +633,28 @@ class CaptureSession:
             # configured, and the controller forgets it when a capture stops,
             # so sending it afterwards filters nothing.
             self._send_ble_lists(self._ble_keys, self._ble_filter)
+            self._start_counting()
             self._command(Command.START)
         else:
+            self._start_counting()
             self._command(Command.SET_CHANNEL, self._channel)
 
-        # Start counting from here, not from whatever was in the buffer when
-        # the port opened.
-        #
-        # Opening the port resets the board, so the first bytes read can be
-        # the tail of the previous session at a high sequence number, followed
-        # by the new session starting again at zero. The tracker cannot tell
-        # that from loss and called it 914 dropped frames in one measurement,
-        # which made stats.lossless report False on a capture that had not
-        # lost anything at all.
-        #
-        # Nothing capturable is discarded: the radio does not start until the
-        # SET_CHANNEL above, so anything deferred before this point is a log,
-        # a stats frame or a command reply, none of which records() yields.
+    def _start_counting(self) -> None:
+        """Start counting from here, not from whatever was in the buffer when
+        the port opened.
+
+        Opening the port resets the board, so the first bytes read can be the
+        tail of the previous session at a high sequence number, followed by
+        the new session starting again at zero. The tracker cannot tell that
+        from loss and called it 914 dropped frames in one measurement, which
+        made stats.lossless report False on a capture that had not lost
+        anything at all.
+
+        Called just BEFORE the command that starts the radio, not after it.
+        Packets heard right after it arrive in the same read as its reply and
+        are deferred with it; clearing afterwards threw them away uncounted --
+        5 of 8 in a test with a fake board.
+        """
         self._tracker = SequenceTracker()
         self._deferred = []
         self.stats.sequence_gaps = 0
@@ -725,17 +755,33 @@ class CaptureSession:
         So the port is left exactly as it was, and the waiting is done here:
         read only what has arrived, and sleep between looks.
         """
+        last_progress = time.monotonic()
         while time.monotonic() < deadline:
             waiting = 0
             try:
                 waiting = self._serial.in_waiting
+            except serial.SerialException:
+                # The port itself has gone -- an unplugged board. Said now,
+                # rather than five seconds later as a board that did not answer.
+                raise
             except (OSError, AttributeError):
                 waiting = 0
             if not waiting:
-                time.sleep(REPLY_POLL_S)
-                continue
+                if (self._parser.buffered
+                        and time.monotonic() - last_progress >= STALL_RESYNC_S):
+                    # A frame cut short in transit declares bytes that will
+                    # never come, and the parser waits for them -- with this
+                    # reply behind it. Nothing more is arriving, so give it up.
+                    frames = self._parser.force_resync()
+                    last_progress = time.monotonic()
+                else:
+                    time.sleep(REPLY_POLL_S)
+                    continue
+            else:
+                last_progress = time.monotonic()
+                frames = self._parser.feed(self._serial.read(waiting))
             reply = None
-            for frame in self._parser.feed(self._serial.read(waiting)):
+            for frame in frames:
                 # Every frame is deferred, replies included, so records()
                 # observes them all in arrival order. Two rules matter here and
                 # both were learned the hard way. Replies consume a sequence
@@ -777,6 +823,11 @@ class CaptureSession:
         rather than a defect, but it means `stats.lossless` will read False
         after any retune, and that is honest rather than broken.
         """
+        if self._radio is Radio.BLE:
+            # Refused here, where the caller hears it. Accepted, it reached
+            # the capture thread and ended the capture.
+            raise ValueError("BLE has no selectable channel: the controller "
+                             "rotates the advertising channels itself")
         low, high = channel_range(self._radio)
         if not low <= channel <= high:
             raise ValueError(f"channel {channel} outside {low}-{high}")
@@ -797,7 +848,8 @@ class CaptureSession:
             self._pending_antenna = antenna
 
     def request_key_check(self, on_hci, on_done,
-                          seconds: float = KEY_CHECK_SECONDS) -> bool:
+                          seconds: float = KEY_CHECK_SECONDS,
+                          on_failed=None) -> bool:
         """Listen with no keys and no filter for `seconds`, then put both back.
 
         From another thread; applied between reads like request_channel().
@@ -809,6 +861,10 @@ class CaptureSession:
         The STOP replies are the boundaries: the board answers only after
         acting, and the stream is ordered, so a packet read before the reply
         was heard before the change.
+
+        If the board does not answer a STOP or START along the way, the keys
+        and filter are put back, scanning is restarted, and on_failed() is
+        called instead of on_done(): a result from half a listen would mislead.
         """
         if self._radio is not Radio.BLE:
             return False
@@ -816,7 +872,7 @@ class CaptureSession:
             if self._check_claimed:
                 return False
             self._check_claimed = True
-            self._pending_check = (on_hci, on_done, seconds)
+            self._pending_check = (on_hci, on_done, seconds, on_failed)
         return True
 
     @property
@@ -830,33 +886,68 @@ class CaptureSession:
             start = self._pending_check
             self._pending_check = None
         if start is not None:
-            on_hci, on_done, seconds = start
-            self._command(Command.STOP)
+            on_hci, on_done, seconds, on_failed = start
+            if self._mid_capture(Command.STOP) is None:
+                self._abandon_check(on_failed)
+                return
             before, self._deferred = self._deferred, []
             yield from self._records_from(before)
             self._check = _KeyCheck(on_hci, on_done,
-                                    time.monotonic() + seconds)
+                                    time.monotonic() + seconds, on_failed)
             self._send_ble_lists([], [])
-            self._command(Command.START)
+            if self._mid_capture(Command.START) is None:
+                self._check = None
+                self._abandon_check(on_failed)
         elif self._check is not None and time.monotonic() >= self._check.until:
-            self._command(Command.STOP)
+            # An unanswered STOP here is carried on past: the lists go back
+            # and START restarts the scan with them either way.
+            self._mid_capture(Command.STOP)
             heard, self._deferred = self._deferred, []
             for _ in self._records_from(heard):
                 pass                    # routed to the check; yields nothing
             check, self._check = self._check, None
             self._send_ble_lists(self._ble_keys, self._ble_filter)
-            self._command(Command.START)
+            restarted = self._mid_capture(Command.START) is not None
             with self._pending_lock:
                 self._check_claimed = False
-            check.on_done()
+            if restarted:
+                check.on_done()
+            elif check.on_failed is not None:
+                check.on_failed()
+
+    def _abandon_check(self, on_failed) -> None:
+        """A check the board did not follow: keys, filter and scan back."""
+        self._send_ble_lists(self._ble_keys, self._ble_filter)
+        self._mid_capture(Command.START)
+        with self._pending_lock:
+            self._check_claimed = False
+        if on_failed is not None:
+            on_failed()
+
+    def _mid_capture(self, command: Command, value: int = 0) -> dict | None:
+        """A command sent from inside the capture loop, or None if the board
+        did not answer it or refused it.
+
+        Either board drops a reply when its outbound ring is full, and a
+        TimeoutError here used to end the whole capture over one retune,
+        hop, antenna switch or Check keys. It is counted instead, and the
+        capture carries on in whatever state it was in.
+        """
+        try:
+            return self._command(command, value, timeout=MID_CAPTURE_REPLY_S)
+        except TimeoutError:
+            self.stats.commands_unanswered += 1
+        except RuntimeError:
+            self.stats.commands_refused += 1
+        return None
 
     def _apply_pending(self) -> None:
         with self._pending_lock:
             antenna = self._pending_antenna
             self._pending_antenna = None
         if antenna is not None:
-            self._command(Command.SET_ANTENNA, antenna)
-            self._antenna = Antenna(antenna)
+            if self._mid_capture(Command.SET_ANTENNA, antenna) is not None:
+                self._antenna = Antenna(antenna)
         self._apply_pending_channel()
 
     def _apply_pending_channel(self) -> int | None:
@@ -865,7 +956,8 @@ class CaptureSession:
             self._pending_channel = None
         if channel is None:
             return None
-        self._command(Command.SET_CHANNEL, channel)
+        if self._mid_capture(Command.SET_CHANNEL, channel) is None:
+            return None
         self._channel = channel
         # Timestamps are anchored to the first frame; retuning does not restart
         # the board's clock, so the anchor stays valid.
@@ -930,6 +1022,15 @@ class CaptureSession:
             chunk = self._serial.read(8192)
             frames = self._deferred + self._parser.feed(chunk)
             self._deferred = []
+            now = time.monotonic()
+            if chunk:
+                self._last_rx = now
+            elif (self._parser.buffered
+                    and now - self._last_rx >= STALL_RESYNC_S):
+                # A frame cut short at the end of a burst: its declared tail
+                # is not coming, and on a quiet link nothing would fill it.
+                frames += self._parser.force_resync()
+                self._last_rx = now
             if not frames:
                 continue
             yield from self._records_from(frames)
