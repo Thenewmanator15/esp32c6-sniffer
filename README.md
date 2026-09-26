@@ -617,6 +617,18 @@ sync after the 10-second timeout, and the C6 **synced again five seconds later**
 possible only because a lost sync now hands back the controller's single slot.
 Before that fix it would have followed nothing more for the rest of the capture.
 
+**A train from a device followed by its key** is synced too. The report gives
+such an advertiser's address type as 0x02 or 0x03 -- an identity the resolving
+list resolved -- and LE Periodic Advertising Create Sync takes only 0x00 or
+0x01, so both boards passed on a type their controller refused. Against a
+throwaway advertiser running a 100 ms train from a resolvable address made
+from the Core spec sample IRK, with that key loaded, 40 s each:
+
+| board | trains seen | before the fix | after |
+|---|---|---|---|
+| nRF54L15 | 268 / 263 | none synced, no reports | synced, 397 reports |
+| ESP32-C6 | 367 / 363 | 367 syncs refused | synced, 387 reports |
+
 (The advertiser was a throwaway firmware driving the controller over raw HCI,
 as the sniffer does, because Zephyr's own `periodic_adv` sample faulted at boot
 on this board. The Bluetooth host was not at fault: NCS v3.4.0's openocd script
