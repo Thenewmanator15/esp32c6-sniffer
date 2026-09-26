@@ -405,7 +405,12 @@ class CaptureSession:
         csi_sink=None,
         board: str = "esp32c6",
         baud: int = 115200,
+        recover: bool = True,
     ) -> None:
+        #: Whether open() may power-cycle a Wi-Fi receiver it finds deaf, or
+        #: likely deaf. Off only for measuring the deafness itself: the
+        #: latch trial did not, and cured every trial it meant to measure.
+        self._recover = recover
         #: Which board's firmware version to expect, and whose toolchain
         #: to name if it disagrees. Defaulted to the board that existed
         #: first, so no existing caller has to say.
@@ -535,7 +540,7 @@ class CaptureSession:
         # implementations of one thing, and the one in the library was the
         # broken one, so every consumer that was not a survey tool got an
         # empty capture with no error.
-        if self._radio is Radio.WIFI:
+        if self._radio is Radio.WIFI and self._recover:
             self.recovered_from_802154 = ensure_wifi_ready(self._port_name)
 
         self._start()
@@ -544,7 +549,7 @@ class CaptureSession:
         # 802.15.4 flag reading clear. Power-cycled once, around the port as
         # above; a receiver still deaf after that is left to the stall
         # counters, which report it.
-        if (self._should_hear_beacons()
+        if (self._recover and self._should_hear_beacons()
                 and not self._hears_within(WIFI_DEAF_S)
                 and self._band_is_silent()):
             self._disconnect()

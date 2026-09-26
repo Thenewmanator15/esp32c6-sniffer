@@ -127,9 +127,14 @@ def power_cycle(port: str) -> None:
 
 
 def count_access_points(port: str) -> int | None:
-    """One scan. None means the board never answered, which is not a zero."""
+    """One scan. None means the board never answered, which is not a zero.
+
+    recover=False, as for count_wifi_frames: the scan otherwise power-cycles
+    a board whose 802.15.4 flag is set -- the dirty arm's -- so every dirty
+    trial was cured before it was measured.
+    """
     try:
-        return len(scan_access_points(port))
+        return len(scan_access_points(port, recover=False))
     except (OSError, RuntimeError, TimeoutError, serial.SerialException):
         return None
 
@@ -143,7 +148,8 @@ def count_wifi_frames(port: str, seconds: float = CAPTURE_S) -> int | None:
     """
     try:
         session = CaptureSession(port, channel=WIFI_CHANNEL,
-                                 antenna=Antenna.INTERNAL, radio=Radio.WIFI)
+                                 antenna=Antenna.INTERNAL, radio=Radio.WIFI,
+                                 recover=False)
         session.open()
     except (OSError, RuntimeError, TimeoutError, serial.SerialException):
         return None
