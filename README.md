@@ -201,8 +201,10 @@ Beyond capturing into Wireshark:
 - **Drop counters published by the board**, so "did I miss anything?" is
   answerable rather than assumed. The nRF54L15 also counts the 802.15.4 frames
   its radio discarded as corrupt, which no capture can contain.
-- **Timestamps good to ~0.5 µs**, measured against the standard's fixed
-  acknowledgement turnaround rather than claimed from a datasheet.
+- **802.15.4 timestamps good to ~0.5 µs**, measured against the standard's
+  fixed acknowledgement turnaround rather than claimed from a datasheet. BLE
+  timestamps are coarser, about ±20 µs, and
+  [measured too](#honest-capability-ceilings).
 - **Self-describing captures**: pcapng carrying the board, radio, channel, the
   drop counters, and optionally the Zigbee key. See
   [below](#what-the-capture-file-carries).
@@ -283,8 +285,8 @@ Beyond capture, it also does things other 802.15.4 sniffers do not:
   that overlaps most 802.15.4 channels and is invisible to a packet capture.
 - **Drop counters** published by the board, so "did I miss anything" is
   answerable. Measured 0 sequence gaps in 1920 frames.
-- **Timestamps good to ~0.5 microseconds**, measured against the standard's
-  fixed acknowledgement turnaround.
+- **802.15.4 timestamps good to ~0.5 microseconds**, measured against the
+  standard's fixed acknowledgement turnaround.
 - **Captures that describe themselves.** pcapng, carrying the board, the
   radio, the channel, the board's own drop counters and -- for Zigbee -- the
   decryption key, all inside the file. See below.
@@ -995,6 +997,25 @@ Constant Tone Extension. The C6 has no `SOC_BLE_CTE_SUPPORTED`, and the
 SoftDevice Controller offers `sdc_support_le_connectionless_cte_transmitter`
 with no receiving counterpart — so the antenna array that would be the next
 question never becomes one.
+
+**BLE timestamps are good to about ±20 µs, not 0.5 µs.** Neither controller
+gives the host a radio timestamp over HCI, so each board stamps a report when
+it arrives from its controller, and the controller's own handling time varies.
+This was measured against a periodic advertising train, whose events are
+exactly one interval apart on the advertiser's clock with no random delay. A
+line fitted through the event times absorbs the two clocks' rate difference
+(about 18 ppm either way), and what remains is the timestamp scatter.
+
+| Sniffer | Train | Events | p1..p99 | Worst |
+|---|---|---|---|---|
+| ESP32-C6 | 100 ms, from the nRF54L15 | 567 | −23..+22 µs | 2 beyond 100 µs, one near 1 ms |
+| nRF54L15 | 80 ms, from the ESP32-C6 | 605 | −19..+42 µs | 59 µs |
+
+The nRF54L15's timestamps also come in 32 µs steps, the resolution of the
+Zephyr system clock it reads. Intervals between BLE packets are good to a few
+tens of microseconds; anything timed more finely than that is the timestamp,
+not the air. A fixed delay from antenna to timestamp would not show in this
+measurement at all, so the absolute time is uncertain by that much more.
 
 The three radios share one RF front end and **cannot** capture simultaneously.
 
