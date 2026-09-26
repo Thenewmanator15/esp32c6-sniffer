@@ -57,6 +57,59 @@ def test_the_release_zip_keeps_install_sh_executable(tmp_path):
     assert b"\r" not in script
 
 
+def _powershells() -> list[str]:
+    if os.name != "nt":
+        return []
+    return [shell for shell in ("powershell", "pwsh") if shutil.which(shell)]
+
+
+@pytest.fixture(scope="module")
+def clone_at_a_non_ascii_path(tmp_path_factory):
+    """A clone somewhere the launcher cannot spell in ASCII -- a user name
+    like José puts one in every release install's path, under %APPDATA%.
+    The last two are outside every OEM code page but one."""
+    repo = tmp_path_factory.mktemp("clone") / "José-Ωμέγα-测试"
+    (repo / "extcap").mkdir(parents=True)
+    for name in ("install.ps1", "esp32c6-sniffer.py"):
+        shutil.copy(REPO / "extcap" / name, repo / "extcap")
+    shutil.copytree(REPO / "host" / "src" / "esp32c6_sniffer",
+                    repo / "host" / "src" / "esp32c6_sniffer",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(REPO / "wireshark-profiles", repo / "wireshark-profiles")
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip",
+                    str(repo / "host" / ".venv")], check=True)
+    return repo
+
+
+@pytest.mark.parametrize("shell", _powershells() or [
+    pytest.param(None, marks=pytest.mark.skip(reason="Windows PowerShell only"))])
+def test_the_windows_launcher_runs_from_a_non_ascii_path(
+        shell, clone_at_a_non_ascii_path, tmp_path):
+    """The .bat was written -Encoding ascii, which turns every character it
+    cannot encode into '?', so the launcher named an interpreter and a
+    script that do not exist and Wireshark listed no interfaces."""
+    repo = clone_at_a_non_ascii_path
+    appdata = tmp_path / "appdata"
+    appdata.mkdir()
+    env = dict(os.environ, APPDATA=str(appdata))
+    result = subprocess.run(
+        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass",
+         "-File", str(repo / "extcap" / "install.ps1")],
+        env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    launcher = appdata / "Wireshark" / "extcap" / "esp32c6-sniffer.bat"
+    # As Wireshark runs it: the .bat, by cmd, with no console of its own.
+    listed = subprocess.run(["cmd", "/c", str(launcher), "--extcap-interfaces"],
+                            capture_output=True, text=True, timeout=60)
+    assert "extcap {version=" in listed.stdout, listed.stdout + listed.stderr
+
+
+def test_the_windows_installer_is_ascii():
+    """Windows PowerShell reads a script with no byte order mark in the ANSI
+    code page, so anything else in it is read as something else."""
+    (REPO / "extcap" / "install.ps1").read_bytes().decode("ascii")
+
+
 def fake_clone(root: pathlib.Path) -> pathlib.Path:
     """What install.sh reads from a clone, with a stand-in interpreter."""
     repo = root / "repo"
