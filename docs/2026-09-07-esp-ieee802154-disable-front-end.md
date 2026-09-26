@@ -128,8 +128,15 @@ require a user to unplug it.
   a DevKitC or another C6 module is untested and would strengthen the report
   considerably.
 * An earlier version of this investigation attributed the fault to *leaving the
-  radio enabled* when the host disconnects. That is the **dirty** arm here, and
-  across 14 trials it never reproduced. That claim has been retracted; see
+  radio enabled* when the host disconnects -- the **dirty** arm here -- and
+  then retracted it, because across 14 trials it never reproduced. Those trials
+  were cured before they were measured: the host's recovery power-gated the
+  board whenever its dirty flag was set, which the dirty arm always sets.
+  Measured without it (2026-09-26), the first dirty trial went deaf, 7 access
+  points to 0, and fourteen power-gates did not restore it; it recovered on
+  its own some twenty minutes later. So both ways of handing the front end back
+  badly -- disabling without the sleep, and not stopping at all -- appear to
+  cause it, n=1 for the second. See
   `2026-09-05-wifi-investigation-postmortem.md`.
 
 ## Reproducer

@@ -856,6 +856,25 @@ class LossWarning:
         return fresh
 
 
+def loss_summary(stats) -> str:
+    """What the log line says about loss, with the raw counters beside it.
+
+    A frame the board refused that held no packet -- a STATS, LOG or LINK
+    frame -- still makes the capture not lossless, and this read "LOSS 0
+    packets". Said as what it is now.
+    """
+    if stats.lossless:
+        return "no loss"
+    counters = (f"(gaps={stats.sequence_gaps} isr={stats.fw_isr_queue_full} "
+                f"link={stats.fw_link_rejected} "
+                f"ring={stats.fw_frames_dropped_ringfull})")
+    lost = stats.packets_dropped
+    if lost:
+        return f"LOSS {lost} packet{'s' if lost != 1 else ''} {counters}"
+    return (f"no packets lost; {stats.fw_frames_dropped_ringfull} of the "
+            f"board's own frames not sent {counters}")
+
+
 def command_note(stats) -> str:
     """Commands sent mid-capture that the board missed or refused.
 
@@ -1470,17 +1489,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             extra += (f", {s.fw_ble_periodic_refused} periodic "
                                       f"syncs refused")
                         extra += command_note(s)
-                        if s.lossless:
-                            log(f"ch {session._channel}: {s.frames} frames, "
-                                f"no loss{extra}")
-                        else:
-                            log(f"ch {session._channel}: {s.frames} frames, "
-                                f"LOSS {s.packets_dropped} packets "
-                                f"(gaps={s.sequence_gaps} "
-                                f"isr={s.fw_isr_queue_full} "
-                                f"link={s.fw_link_rejected} "
-                                f"ring={s.fw_frames_dropped_ringfull})"
-                                f"{extra}")
+                        log(f"ch {session._channel}: {s.frames} frames, "
+                            f"{loss_summary(s)}{extra}")
                         fresh = loss_warning.due(s.packets_dropped, now)
                         if fresh:
                             with control_lock:

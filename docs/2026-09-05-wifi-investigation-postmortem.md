@@ -109,8 +109,9 @@ The workaround is `SN_CMD_RADIO_POWER_CYCLE`, exposed as
 automatic stall recovery because it resets the board, which would end a running
 Wireshark capture without warning; the capture log says what to run instead.
 
-**What sets it — RETRACTED 2026-09-07.** The paragraph below stood for two days
-and does not replicate. It is kept, struck through, because the way it failed is
+**What sets it — RETRACTED 2026-09-07, and the retraction withdrawn
+2026-09-26:** see "The retraction was confounded" below. The paragraph below
+stood for two days and was then taken not to replicate. It is kept, struck through, because the way it failed is
 the same lesson this document is about.
 
 > ~~**What sets it, resolved.** Not time, not heat: leaving the 802.15.4 radio
@@ -169,6 +170,7 @@ trigger needing long uptime, heat, or a particular sequence would be missed.
 
 **Nothing has been reported upstream, and on this evidence nothing should be.**
 A vendor report resting on n=1 that fails at n=24 would be worse than silence.
+(Written before the correction below: the n=24 did not test the dirty arm.)
 
 **The workaround stays.** `esp_ieee802154_sleep()` before `disable()`, the
 `RADIO_DIRTY` flag, `ensure_wifi_ready()` and `SN_CMD_RADIO_POWER_CYCLE` all
@@ -176,6 +178,38 @@ remain, because they are cheap, they are harmless, and something did produce
 those original zeros. What is removed is the claim to know why.
 `SN_154_LEGACY_STOP` builds the firmware without the sleep, so if the effect is
 ever reproduced the single API call can be isolated in an A/B.
+
+**The retraction was confounded — 2026-09-26.** Both of the trial's measures
+reached the board through the host's recovery: `scan_access_points()` and
+`CaptureSession` call `ensure_wifi_ready()`, which power-cycles the board when
+`RADIO_DIRTY` is set, and the dirty arm is the arm that sets it. The flag
+reading back **dirty** in 8 of 8 dirty trials, recorded above as proof the
+treatment happened, is also what made each measurement power-gate the board
+before it looked. "Left owned, and Wi-Fi worked anyway" was the recovery
+working. The recovery was in `scan.py` from 2026-09-06, a day before the trial
+tool, so no dirty trial in that table was ever measured. The clean and idle
+arms, whose flag read clean, were measured as intended. The access-point
+counts were also capped at four by a scan bug since fixed -- the board sent
+the first four records and dropped the rest -- though a deaf receiver still
+reads zero.
+
+The trial now measures with `recover=False`. Run again on 2026-09-26, 23:50:
+
+| arm | access points before | after | after a power-gate |
+|---|---|---|---|
+| dirty | 7 | **0** | 0 |
+
+Every later trial then failed its baseline: fourteen power-gates in seven
+minutes, all deaf. Twenty minutes after the last, with the board reflashed
+and used for BLE and 802.15.4 in between but never unplugged, a scan heard 9.
+
+One trial is not a rate, and this document's lesson applies to it as much as
+to the table it overturns. But the retraction rested on trials that could not
+have shown the effect, so it is withdrawn, and the original account is the
+best one there is: leaving the 802.15.4 radio running when the host goes can
+deafen the Wi-Fi receiver -- and that deafness, unlike the one this document
+opens with, did not clear with a power-gate. More trials need `--stop-on-deaf`
+and patience, since a deaf trial costs the board until it clears.
 
 Two things had to be right for the fix to work, and each was wrong first:
 
@@ -208,12 +242,13 @@ kept anyway, with backoff, because it fixes an ordinary driver-level stall and
 because the attempt is what makes the condition visible in the counters.
 
 The scripted trial that was missing here now exists as
-`tools/latch_trial.py`, and it retracted the trigger rather than confirming it
-(see above). What still has not been done is a trial long enough to reach
+`tools/latch_trial.py`. It first retracted the trigger, on trials its own
+recovery had cured, and measured properly it reproduced it (see above). What still has not been done is a trial long enough to reach
 whatever the real trigger is: these arms are 25 seconds from a power-gated
 start, and the original deafness appeared during long ad-hoc sessions. Uptime,
 temperature and time-to-deafness remain unmeasured. Nothing has been reported
-upstream, and on the current evidence nothing should be.
+upstream yet; on the corrected evidence a report is back on the table, once
+there is more than one trial behind it.
 
 **Practical consequence:** any Wi-Fi test must be repeated before it means
 anything, and no offline test may depend on live Wi-Fi traffic. The

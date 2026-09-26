@@ -47,6 +47,18 @@ static inline void stats_bump(uint32_t *field, uint32_t by)
     portEXIT_CRITICAL(&s_stats_lock);
 }
 
+/* The next sequence number. Under the spinlock, not only the send lock,
+ * because a sender that gave up waiting for the send lock takes one too.
+ * Numbers taken under the send lock still go out in increasing order; one
+ * taken by a sender that gave up is simply never sent. */
+static inline uint16_t take_seq(void)
+{
+    portENTER_CRITICAL(&s_stats_lock);
+    const uint16_t seq = s_seq++;
+    portEXIT_CRITICAL(&s_stats_lock);
+    return seq;
+}
+
 static void tx_task(void *arg)
 {
     (void)arg;
@@ -134,13 +146,17 @@ static bool link_send(sn_frame_type_t type, const uint8_t *payload, size_t len,
     const TickType_t lock_wait =
         (ring_wait == 0) ? pdMS_TO_TICKS(10) : ring_wait + pdMS_TO_TICKS(10);
     if (xSemaphoreTake(s_send_lock, lock_wait) != pdTRUE) {
+        /* A number is used up here too. Every other refusal leaves a gap on
+         * the host, and the host counts this one as a refusal, so without a
+         * gap behind it it cancelled out a frame really lost on the way. */
+        (void)take_seq();
         stats_bump(&s_stats.frames_dropped_ringfull, 1);
         return false;
     }
 
     /* The sequence number is consumed even when the ring write fails, so a
      * drop shows up as a gap on the host rather than vanishing silently. */
-    const uint16_t seq = s_seq++;
+    const uint16_t seq = take_seq();
     const size_t n = sn_frame_encode(s_scratch, sizeof(s_scratch), type, seq,
                                      payload, len);
     bool ok = false;

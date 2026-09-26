@@ -69,6 +69,7 @@ def scan_access_points(
     active: bool = False,
     timeout: float = DEFAULT_TIMEOUT_S,
     settle: float = RADIO_SETTLE_S,
+    recover: bool = True,
 ) -> list[AccessPoint]:
     """Scans for access points, opening and closing the port itself.
 
@@ -80,13 +81,15 @@ def scan_access_points(
     The completion reply arrives *after* the records, which is what makes the
     list complete rather than merely quiet at that moment -- returning on a
     lull would truncate the results on a slow sweep.
+
+    `recover=False` scans the receiver as it is, for measuring its deafness.
     """
-    # Before the port is opened, and not optional. Using the 802.15.4 radio
-    # leaves the Wi-Fi receiver deaf until the RF domain is power-gated, and a
-    # deaf receiver does not fail a scan -- it completes one and reports no
-    # access points at all. Without this the reload button annotated every
-    # channel "quiet" on a band with four networks on it.
-    if ensure_wifi_ready(port):
+    # Before the port is opened. Using the 802.15.4 radio can leave the Wi-Fi
+    # receiver deaf until the RF domain is power-gated, and a deaf receiver
+    # does not fail a scan -- it completes one and reports no access points
+    # at all. Without this the reload button annotated every channel "quiet"
+    # on a band with four networks on it.
+    if recover and ensure_wifi_ready(port):
         time.sleep(settle)
 
     handle = serial.Serial(port, 115200, timeout=0.1)
