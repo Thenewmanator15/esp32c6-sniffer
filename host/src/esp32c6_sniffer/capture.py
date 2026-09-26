@@ -23,6 +23,7 @@ from .control import (
     Antenna,
     Bandwidth,
     Command,
+    ControlError,
     encode_ble_filter,
     encode_ble_keys,
     encode_credentials,
@@ -582,7 +583,10 @@ class CaptureSession:
             while not any(f.ftype is FrameType.PACKET for f in self._deferred):
                 if time.monotonic() >= deadline:
                     return False
-                self._deferred.extend(self._parser.feed(self._serial.read(4096)))
+                chunk = self._serial.read(4096)
+                if chunk:
+                    self._last_rx = time.monotonic()
+                self._deferred.extend(self._parser.feed(chunk))
         except BaseException:
             self.close()
             raise
@@ -873,7 +877,7 @@ class CaptureSession:
                     time.sleep(REPLY_POLL_S)
                     continue
             else:
-                last_progress = time.monotonic()
+                last_progress = self._last_rx = time.monotonic()
                 frames = self._parser.feed(self._serial.read(waiting))
             reply = None
             for frame in frames:
@@ -892,7 +896,13 @@ class CaptureSession:
                 self._deferred.append(frame)
                 if reply is not None or frame.ftype is not FrameType.CONTROL_REPLY:
                     continue
-                decoded = decode_reply(frame.payload)
+                try:
+                    decoded = decode_reply(frame.payload)
+                except ControlError:
+                    # Too short to be a reply. Nothing the board sends; a
+                    # frame put together out of damaged bytes. Not this one.
+                    self.stats.malformed_metadata += 1
+                    continue
                 if decoded["command"] is command:
                     reply = decoded
             if reply is not None:

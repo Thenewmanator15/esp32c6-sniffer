@@ -4,6 +4,7 @@ vanishes, a frame cut short at the end of a burst. Each of these used to lose
 data silently or end the capture."""
 
 import struct
+import time
 
 import pytest
 import serial
@@ -109,3 +110,59 @@ def test_ble_has_no_channel_to_request(monkeypatch):
     session = open_session(monkeypatch, KeyedBoard("nrf54l15"))
     with pytest.raises(ValueError, match="no selectable channel"):
         session.request_channel(15)
+
+
+_154_META = struct.Struct("<BBbBQ")
+
+
+def _154_packet(board, psdu: bytes, timestamp: int) -> None:
+    board.rx += encode_frame(FrameType.PACKET, board.seq,
+                             _154_META.pack(11, 200, -40, 0, timestamp) + psdu)
+    board.seq += 1
+
+
+def test_a_quiet_link_does_not_let_a_transmitter_forge_a_frame(monkeypatch):
+    """A radio frame carrying a sniffer header, on a channel where nothing
+    follows it for a while. Measured through a session: the real packet was
+    lost, the transmitter's packet -- channel 26, a timestamp an hour on --
+    was delivered, and the next frame counted 65536 sequence gaps."""
+    monkeypatch.setattr(capture, "STALL_RESYNC_S", 0.2)
+
+    class QuietBoard(KeyedBoard):
+        def read(self, n=1):
+            if not self.rx:
+                time.sleep(0.01)
+            return super().read(n)
+
+    board = QuietBoard("esp32c6")
+    monkeypatch.setattr(capture.serial, "Serial", lambda *a, **k: board)
+    session = CaptureSession("COM_UNUSED", channel=11, radio=Radio.IEEE802154)
+    session.open()
+    forged = encode_frame(FrameType.PACKET, (board.seq + 3) & 0xFFFF,
+                          _154_META.pack(26, 255, 0, 0, 3_600_000_000)
+                          + b"FORGED")
+    psdu = b"\x41\x88" + forged + b"\x00" * 4
+    _154_packet(board, psdu, 1_000_000)
+    records = session.records()
+    first = next(records)
+    _154_packet(board, b"\x41\x88" + b"B" * 20, 1_100_000)
+    second = next(records)
+    assert first[0].endswith(psdu) and second[0].endswith(b"B" * 20)
+    assert session.stats.sequence_gaps == 0
+
+
+def test_a_malformed_reply_does_not_end_the_command(monkeypatch):
+    """A CONTROL_REPLY too short to decode raised ControlError out of the
+    wait for the real one, and nothing above it caught that."""
+    board = KeyedBoard("esp32c6")
+    session = open_session(monkeypatch, board, name="esp32c6")
+    real_emit = board._emit
+
+    def emit(queues, command):
+        if queues is board.before and command == Command.SET_ANTENNA:
+            board.rx += encode_frame(FrameType.CONTROL_REPLY, board.seq, b"")
+            board.seq += 1
+        real_emit(queues, command)
+
+    monkeypatch.setattr(board, "_emit", emit)
+    assert session._command(Command.SET_ANTENNA, 0, timeout=2.0)["ok"]

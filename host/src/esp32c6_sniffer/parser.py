@@ -67,10 +67,29 @@ class StreamParser:
         On a live stream the stall rarely lasts: the next frame's bytes arrive
         and fill the declared length, and the splice this avoids by waiting
         would happen anyway. _inner_header_at catches it at that point.
+
+        A frame received whole, held only for what follows it (see _try_one),
+        is released as it stands. Resyncing inside it, as this once did,
+        dropped the real frame and delivered whatever header a transmitter
+        had put in its payload.
         """
+        whole = self._whole_frame()
+        if whole is not None:
+            del self._buf[: HEADER_LEN + len(whole.payload)]
+            self.frames_parsed += 1
+            return [whole] + self.feed(b"")
         if self._buf:
             self._discard_one_byte_and_resync()
         return self.feed(b"")
+
+    def _whole_frame(self) -> Frame | None:
+        """The frame at the head of the buffer, if all of it has arrived."""
+        if len(self._buf) < HEADER_LEN:
+            return None
+        try:
+            return decode_frame(bytes(self._buf[:HEADER_LEN + MAX_PAYLOAD]))
+        except FrameError:
+            return None
 
     def _try_one(self) -> Frame | None:
         while True:
@@ -93,12 +112,15 @@ class StreamParser:
                 # followed, because this one lost its tail in transit, or
                 # bytes that merely form one. A PACKET's payload is whatever
                 # went over the air, so the second is anyone's to send. What
-                # starts at the declared end tells them apart: the next frame
-                # in sequence exactly there means nothing was lost.
+                # starts at the declared end tells them apart: the very next
+                # frame, exactly there, means nothing was lost. Any later one
+                # is no evidence -- a frame cut short declares the bytes of
+                # the frames after it, and one of their headers can begin
+                # exactly at its end.
                 end = HEADER_LEN + len(frame.payload)
                 if len(self._buf) < end + HEADER_LEN:
                     return None         # wait for it rather than guess
-                if not self._continues(end, frame.seq):
+                if not self._continues(end, frame.seq, window=1):
                     # Lost its tail. The damaged frame is dropped and parsing
                     # resumes at the header inside it, the frame that
                     # followed -- recovered rather than lost in its place.
@@ -142,8 +164,10 @@ class StreamParser:
             pos = self._buf.find(_MAGIC_BYTES, pos + 1, end + 1)
         return None
 
-    def _continues(self, pos: int, seq: int) -> bool:
-        """A whole header at pos with a sequence number just ahead of seq."""
+    def _continues(self, pos: int, seq: int,
+                   window: int = _TRUNCATION_SEQ_WINDOW) -> bool:
+        """A whole header at pos with a sequence number up to `window` ahead
+        of seq."""
         if len(self._buf) < pos + HEADER_LEN:
             return False
         head = bytes(self._buf[pos:pos + 8])
@@ -152,7 +176,7 @@ class StreamParser:
         crc = struct.unpack_from("<H", self._buf, pos + 8)[0]
         inner_seq, inner_len = struct.unpack_from("<HH", head, 4)
         return (crc16_ccitt_false(head) == crc and inner_len <= MAX_PAYLOAD
-                and 1 <= (inner_seq - seq) % 65536 <= _TRUNCATION_SEQ_WINDOW)
+                and 1 <= (inner_seq - seq) % 65536 <= window)
 
     def _header_is_valid_but_incomplete(self) -> bool:
         head = bytes(self._buf[:8])
