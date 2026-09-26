@@ -126,9 +126,10 @@ python3 -m venv .venv
 ./extcap/install.sh         # Linux / macOS
 ```
 
-It installs per-user — `%APPDATA%\Wireshark\extcap` or
-`~/.config/wireshark/extcap` — so it needs no administrator rights and
-survives a Wireshark upgrade. It also installs a **configuration profile per
+It installs per-user — `%APPDATA%\Wireshark\extcap`, or on Linux and macOS
+`~/.local/lib/wireshark/extcap`, where Wireshark 4.1 and later look, with an
+entry in `~/.config/wireshark/extcap` for 4.0 — so it needs no administrator
+rights and survives a Wireshark upgrade. It also installs a **configuration profile per
 radio**, each with the columns, colouring and filter buttons for that radio,
 and each selecting itself when you capture on it. Confirm it registered:
 

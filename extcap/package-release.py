@@ -27,6 +27,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -110,7 +111,15 @@ def main() -> int:
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(EXTCAP / "esp32c6-sniffer.py", "esp32c6-sniffer.py")
         z.write(EXTCAP / "install.ps1", "install.ps1")
-        z.write(EXTCAP / "install.sh", "install.sh")
+        # Executable, with LF line ends, whatever this runs on. A zip takes a
+        # file's mode from the disk, and a Windows checkout has neither: the
+        # unpacked script was refused by ./install.sh, or read by bash with
+        # a \r on the end of every line.
+        script = zipfile.ZipInfo("install.sh", date_time=time.localtime()[:6])
+        script.external_attr = 0o100755 << 16
+        script.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(script, (EXTCAP / "install.sh").read_bytes()
+                   .replace(b"\r\n", b"\n"))
         z.write(wheel, wheel.name)
         for profile_dir in sorted(PROFILES.iterdir()):
             if not profile_dir.is_dir():
