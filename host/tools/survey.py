@@ -33,7 +33,7 @@ from dataclasses import dataclass, replace
 from esp32c6_sniffer import mac154
 from esp32c6_sniffer.batch import BatchError, decode_packet_batch
 from esp32c6_sniffer.boards import BoardLink
-from esp32c6_sniffer.control import Command, encode_command
+from esp32c6_sniffer.control import Command, Radio, encode_command
 from esp32c6_sniffer.framing import FrameType
 from esp32c6_sniffer.tap import CHANNEL_MAX, CHANNEL_MIN
 
@@ -196,6 +196,10 @@ def main() -> None:
     symbols = int(20_000 / 16)  # 20 ms per energy sample
 
     link = BoardLink(args.port).open()
+    # 802.15.4 before anything else. The nRF54L15 does not reboot when its
+    # port opens, and after a BLE capture it refused every channel and energy
+    # command -- which this tool took for quiet channels.
+    link.command(Command.SET_RADIO, int(Radio.IEEE802154))
     ser, parser = link.ser, link.parser
     energy: dict[int, list[int]] = {c: [] for c in channels}
     traffic: dict[int, dict] = {}
@@ -210,9 +214,8 @@ def main() -> None:
             for channel in channels:
                 reply = link.command(Command.ENERGY_DETECT,
                                      channel | (symbols << 8))
-                if reply["ok"]:
-                    raw = reply["value"] & 0xFF
-                    energy[channel].append(raw - 256 if raw > 127 else raw)
+                raw = reply["value"] & 0xFF
+                energy[channel].append(raw - 256 if raw > 127 else raw)
 
         print(f"phase 2: traffic, {args.dwell:.0f} s per channel")
         for channel in channels:

@@ -185,6 +185,12 @@ Wi-Fi. Channels 11 to 14 exist in **both** radios and mean different
 frequencies, so a bare number would be ambiguous and a mis-click would
 silently retune to the wrong band.
 
+There is one toolbar for the whole plugin: Wireshark builds it once from the
+plugin's interface list, not once per interface. So the dropdown lists both
+radios' channels whatever you are capturing, and with two boards attached it
+serves both. Picking the other radio's channel, or any channel during a BLE
+capture, changes nothing, and the Log says why.
+
 `tshark` has no toolbar, which is why the channel is also an ordinary option.
 
 ## Reading the capture

@@ -137,6 +137,15 @@ def test_a_new_session_puts_every_ble_setting_back():
     assert re.search(r"sn_radio_ble_set_periodic\(\s*false\s*\)", case)
 
 
+def test_a_new_session_selects_802154_again():
+    """As the ESP32-C6 does by rebooting. After a BLE capture the nRF54L15
+    kept BLE selected, and refused every channel and energy command from a
+    tool that did not select a radio: survey.py reported channel 15, with a
+    Thread network on it, as quiet (measured 2026-09-27)."""
+    case = get_info_case()
+    assert re.search(r"selected_radio\s*=\s*RADIO_154\s*;", case)
+
+
 def test_stopping_ble_resets_the_controller():
     """Periodic and BIG syncs do not depend on scanning, so switching the
     scan off left them running past the capture."""

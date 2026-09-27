@@ -106,3 +106,25 @@ def test_a_board_that_never_answers_times_out():
     with pytest.raises(TimeoutError):
         boards.BoardLink("COM3", comports=[C6], serial_factory=Opened(Silent(6)),
                          timeout=0.2).open()
+
+
+def test_a_refused_command_raises_rather_than_passing_for_an_answer():
+    """survey.py read a refused SET_CHANNEL as done, and reported the
+    channel quiet. A refusal names the command and the board."""
+    class Refusing(BridgedPort):
+        def write(self, data):
+            import struct
+            from esp32c6_sniffer.framing import FrameType, encode_frame
+            from esp32c6_sniffer.parser import StreamParser
+            for frame in StreamParser().feed(bytes(data)):
+                command, value = struct.unpack_from("<BI", frame.payload)
+                if command == int(Command.SET_CHANNEL):
+                    self.rx += encode_frame(FrameType.CONTROL_REPLY, 1,
+                                            struct.pack("<BBI", command, 2, value))
+                    return len(data)
+            return super().write(data)
+
+    link = boards.BoardLink("COM4", comports=[NRF],
+                            serial_factory=Opened(Refusing(version=7))).open()
+    with pytest.raises(RuntimeError, match="refused SET_CHANNEL"):
+        link.command(Command.SET_CHANNEL, 15)

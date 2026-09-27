@@ -126,12 +126,6 @@ def test_toolbar_channel_values_are_radio_prefixed():
     assert "{value=w11}" in out
 
 
-def test_toolbar_scopes_channels_to_a_named_interface():
-    out = _run("--extcap-interfaces", "--extcap-interface", WIFI_INTERFACE)
-    assert "{value=w6}" in out
-    assert "{value=z25}" not in out
-
-
 def test_reports_the_tap_linktype():
     out = _run("--extcap-dlts", "--extcap-interface", INTERFACE)
     assert "number=283" in out
@@ -388,23 +382,6 @@ def test_ble_channel_selection_is_rejected():
     )
     # It must not silently accept a channel it cannot honour.
     assert r.returncode != 0
-
-
-def test_ble_toolbar_has_no_empty_channel_control():
-    """BLE has no channel: the controller rotates the three advertising
-    channels itself. Declaring the control anyway gave a BLE capture an empty
-    Channel dropdown in the toolbar, contradicting the refusal the config path
-    already makes."""
-    out = _run("--extcap-interfaces", "--extcap-interface", BLE_INTERFACE)
-    assert "display=Channel}" not in out
-    assert "value {control=0}" not in out
-
-
-def test_the_other_radios_still_offer_channels():
-    for interface, count in ((INTERFACE, 16), (WIFI_INTERFACE, 14)):
-        out = _run("--extcap-interfaces", "--extcap-interface", interface)
-        assert "display=Channel}" in out, interface
-        assert out.count("value {control=0}") == count, interface
 
 
 def test_a_capture_filter_is_refused_rather_than_ignored():

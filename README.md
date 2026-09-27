@@ -953,7 +953,9 @@ exactly the same — frames that stay stubbornly encrypted.
 **1. Your Thread credentials**, because Thread encrypts at the MAC layer.
 
 The easiest route is the **Thread credentials** option in the interface dialog:
-point it at a file and start the capture. Or from a terminal:
+point it at a file and start the capture. Wireshark reads its key table when it
+starts, so the first time a key goes in, restart Wireshark and reopen the
+capture; the log says when that is needed. Or from a terminal:
 
 ```powershell
 cd host
