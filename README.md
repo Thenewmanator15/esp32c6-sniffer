@@ -198,7 +198,8 @@ to do when a capture comes back empty, is in
 
 Beyond capturing into Wireshark:
 
-- **Mid-capture channel changes** from the toolbar, with no restart.
+- **Mid-capture channel changes** from the toolbar, with no restart and
+  nothing lost: 0 sequence gaps across 150 changes on each board.
 - **A spectrum survey** using the radio's energy detector, which sees the Wi-Fi
   that overlaps most 802.15.4 channels and is invisible to a packet capture.
 - **Drop counters published by the board**, so "did I miss anything?" is
@@ -304,11 +305,18 @@ because the way the mistakes were made is more useful than the fix.
 | 2. IEEE 802.15.4 into Wireshark | Done, all exit criteria met |
 | 3. Wi-Fi | Done, in Wireshark; receiver is intermittently deaf, see above |
 | 4. BLE advertisements | Done, in Wireshark as HCI |
+| 5. nRF54L15 as a second board | Done: 802.15.4 and BLE; it has no Wi-Fi radio |
+| 6. Decrypting your own networks | Done: Zigbee, Thread (sleepy devices too), Bluetooth Mesh |
+| 7. BLE beyond legacy advertising | Done: extended and periodic advertising, the Coded PHY, LE Audio broadcasts, and devices that rotate their address |
+| 8. Wireshark dissector patches | Prepared, not yet submitted upstream; see [the ceilings](#honest-capability-ceilings) |
 
 Beyond capture, it also does things other 802.15.4 sniffers do not:
 
 - **Mid-capture channel changes** from a Wireshark toolbar, with no restart.
   Nordic's equivalent has sat unmerged since 2019 and no shipping tool has it.
+  A change loses nothing the board captured: changing every 2 s between a
+  busy channel and a quiet one for 5 minutes gave 0 sequence gaps in 150
+  changes, on each board.
 - **A spectrum survey** using the radio's energy detector, which sees the Wi-Fi
   that overlaps most 802.15.4 channels and is invisible to a packet capture.
 - **Drop counters** published by the board, so "did I miss anything" is
@@ -949,11 +957,8 @@ Thread 1.2, multicast and domain-address registrations. CoAP claims only its
 standard port 5683, so without the entry these messages show as plain UDP and
 you can't see which URI each one carries.
 
-What stays unreadable is Matter's payload. Matter encrypts each session with
-its own keys, agreed between the controller and the device. The Thread key
-removes only the outer layer, so you see which device talks to which, when,
-and the session and counter fields, but not the commands. Apple, Google and
-Amazon controllers do not export those session keys.
+Matter's own payload stays encrypted either way; see
+[the ceiling](#the-ceiling).
 
 The dissector arrived in **Wireshark 4.2**. On 4.0 or 4.1 the profile still
 installs and every other button works; the `Decode As` entry simply refers to a
@@ -963,6 +968,17 @@ Measured on a live Thread network: the key took 6LoWPAN, IPv6 and UDP from 12
 frames to 21; the `Decode As` entry then turned eight of those from `UDP 5540`
 into Matter messages with their session identifiers, counters and
 acknowledgements.
+
+**Every Thread version reads the same way.** Thread 1.1 through 1.4 share one
+MAC and MLE security scheme, so the one key covers them all. Checked on a
+network of Thread 1.3 and 1.4 devices, where MLE and IPv6 decrypted as they
+do on 1.1. A device announces its Thread version whenever it attaches: power
+it off and on during a capture, and the filter `mle.tlv.version` finds it in
+the device's Parent Request and Child ID Request (2 is 1.1, 3 is 1.2, 4 is
+1.3, 5 is 1.4). The features Thread 1.2 added to the radio itself, CSL for
+sleepy devices and the enhanced acknowledgements that come with 802.15.4-2015
+frames, dissect in Wireshark. None has turned up on the air here, though, so
+decrypting them is untested.
 
 #### What you can read without any key at all
 
