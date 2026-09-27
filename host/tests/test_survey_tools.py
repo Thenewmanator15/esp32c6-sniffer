@@ -179,3 +179,30 @@ def test_a_frame_that_is_not_a_packet_is_heard_on_no_channel():
     assert survey.heard_on(frame(FrameType.PACKET_BATCH, b"\x19"), 15) == []
     short = struct.pack("<BBbBQ", 15, 200, -60, 0, 123456)
     assert survey.heard_on(frame(FrameType.PACKET, short), 15) == []
+
+
+def test_recover_hands_the_radio_back_before_power_gating(monkeypatch):
+    """The deafness 802.15.4 left running causes was cured by a clean
+    802.15.4 start and stop 8 times in 8, and by the power-gate --recover
+    used to do 0 times in 16. The power-gate stays for anything else."""
+    import wifi_survey
+
+    steps = []
+    scans = iter([[], ["ap"]])
+    monkeypatch.setattr(wifi_survey, "hand_back", lambda port: steps.append("hand back"))
+    monkeypatch.setattr(wifi_survey, "power_cycle", lambda port: steps.append("power cycle"))
+    monkeypatch.setattr(wifi_survey, "_rescan", lambda port: next(scans))
+    found, how = wifi_survey.recover_and_rescan("COM_UNUSED")
+    assert steps == ["hand back", "power cycle"] and found == ["ap"]
+    assert how == "power-cycling the radio domain"
+
+
+def test_recover_stops_at_the_hand_back_when_that_cures_it(monkeypatch):
+    import wifi_survey
+
+    steps = []
+    monkeypatch.setattr(wifi_survey, "hand_back", lambda port: steps.append("hand back"))
+    monkeypatch.setattr(wifi_survey, "power_cycle", lambda port: steps.append("power cycle"))
+    monkeypatch.setattr(wifi_survey, "_rescan", lambda port: ["ap"])
+    found, how = wifi_survey.recover_and_rescan("COM_UNUSED")
+    assert steps == ["hand back"] and how == "handing the radio back"

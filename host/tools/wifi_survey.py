@@ -20,9 +20,12 @@ A note specific to this board: its Wi-Fi receiver latches deaf, for anything
 from minutes to hours (see docs/2026-09-05-wifi-investigation-postmortem.md).
 An empty result is therefore not evidence of an empty band.
 
---recover fixes it. It power-gates the radio domain with a deep-sleep reset,
-which is the only thing found to clear the latch: no driver rebuild, reflash or
-erase-flash ever has. Measured going in: 0 access points before, 12 after.
+--recover fixes it. It starts the 802.15.4 radio and stops it cleanly, which
+hands the shared front end back: the deafness 802.15.4 left running causes was
+cured by that 8 times in 8, and by the deep-sleep power-gate this used to do 0
+times in 16 (2026-09-27). If that does not find anything it power-gates as
+well, which did cure a deafness with some other cause: 0 access points before,
+12 after.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ from esp32c6_sniffer.control import Command, Radio, decode_reply, encode_command
 from esp32c6_sniffer.framing import FrameType
 from esp32c6_sniffer.parser import StreamParser
 from esp32c6_sniffer.scan import IncompleteScan, scan_result
-from esp32c6_sniffer.recovery import ensure_wifi_ready
+from esp32c6_sniffer.recovery import _open, ensure_wifi_ready, hand_back, power_cycle
 
 # One Wi-Fi channel is about 22 MHz wide against 802.15.4's 2 MHz.
 WIFI_TO_154 = {1: "11-14", 6: "16-19", 11: "21-24"}
@@ -97,34 +100,23 @@ def scan_once(ser: serial.Serial, parser: StreamParser,
     raise TimeoutError("no scan reply within the timeout")
 
 
-def recover_and_rescan(port: str) -> list:
-    """Power-gates the radio domain, waits for the board, and scans again.
+def recover_and_rescan(port: str) -> tuple[list, str]:
+    """Hands the front end back and scans again; power-gates and scans once
+    more if that finds nothing. Returns what was found and which did it.
 
-    A deep-sleep reset is the only thing found to clear this board's latched
-    deafness. It drops the USB link and the device re-enumerates, so the port
-    is reopened rather than reused.
+    Both reset the board, so the port is reopened rather than reused.
     """
-    ser = serial.Serial(port, 115200, timeout=0.05)
-    ser.write(encode_command(Command.RADIO_POWER_CYCLE, 0, radio=Radio.WIFI))
-    ser.flush()
-    time.sleep(2.0)
-    ser.close()
+    hand_back(port)
+    found = _rescan(port)
+    if found:
+        return found, "handing the radio back"
+    power_cycle(port)
+    return _rescan(port), "power-cycling the radio domain"
 
-    deadline = time.monotonic() + 30.0
-    last = None
-    ser = None
-    while time.monotonic() < deadline:
-        try:
-            ser = serial.Serial(port, 115200, timeout=0.05)
-            break
-        except (OSError, serial.SerialException) as exc:
-            last = exc
-            time.sleep(0.5)
-    if ser is None:
-        raise RuntimeError(f"board did not come back on {port}: {last}")
 
+def _rescan(port: str) -> list:
+    ser = _open(port)
     try:
-        ser.reset_input_buffer()
         time.sleep(2.0)
         return scan_once(ser, StreamParser())
     finally:
@@ -143,9 +135,10 @@ def main() -> int:
                          "makes the sniffer visible on the air. Off by "
                          "default: this instrument listens")
     ap.add_argument("--recover", action="store_true",
-                    help="if nothing is found, power-cycle the radio domain "
-                         "and scan once more. Resets the board, so do not use "
-                         "it while a capture is running")
+                    help="if nothing is found, hand the radio back (start "
+                         "and stop 802.15.4) and scan again, then power-cycle "
+                         "the radio domain if need be. Resets the board, so do "
+                         "not use it while a capture is running")
     args = ap.parse_args()
 
     # Refused before anything is sent. The first thing this does is
@@ -157,11 +150,11 @@ def main() -> int:
               f"this survey needs the ESP32-C6.", file=sys.stderr)
         return 2
 
-    # Automatic rather than optional: if 802.15.4 has run since boot the
-    # Wi-Fi receiver is deaf, and every scan would come back empty for a reason
+    # Automatic rather than optional: if 802.15.4 was left running the Wi-Fi
+    # receiver is deaf, and every scan would come back empty for a reason
     # that has nothing to do with the air.
     if ensure_wifi_ready(args.port):
-        print("802.15.4 had been used; power-cycled the radio domain first.")
+        print("802.15.4 had been left running; handed the radio back first.")
 
     ser = serial.Serial(args.port, 115200, timeout=0.05)
     try:
@@ -189,19 +182,19 @@ def main() -> int:
 
     if not best and args.recover:
         print()
-        print("Nothing found. Power-cycling the radio domain and retrying.")
-        recovered = recover_and_rescan(args.port)
+        print("Nothing found. Handing the radio back and retrying.")
+        recovered, how = recover_and_rescan(args.port)
         best = {record.bssid: record for record in recovered}
         if best:
-            print("The power cycle cleared it: the receiver was latched deaf.")
+            print(f"Cleared by {how}: the receiver was latched deaf.")
 
     if not best:
         print("\nNo access points found.")
         print("On this board that is not proof of an empty band: the Wi-Fi "
               "receiver latches deaf for minutes to hours.")
         if not args.recover:
-            print("Try --recover, which power-cycles the radio domain and is "
-                  "the only thing known to clear it.")
+            print("Try --recover, which hands the radio back and, if that "
+                  "does not do it, power-cycles the radio domain.")
         print("tools/spectrum.py uses the 802.15.4 radio and keeps working "
               "when Wi-Fi does not, so it is a useful second opinion.")
         return 0

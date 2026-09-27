@@ -21,16 +21,27 @@ hours, so running five of one arm and then five of another would confound the
 treatment with whatever the receiver happened to be doing that quarter-hour.
 
 *Every trial starts from a proven-working receiver.* Before each treatment the
-radio domain is power-gated and a scan must return at least one access point.
+front end is handed back -- 802.15.4 started and stopped cleanly -- the radio
+domain is power-gated, and a scan must return at least one access point.
 A zero from an instrument nobody has proved is switched on measures the
 instrument, not the world -- which is the mistake that produced three wrong
 conclusions in the original investigation. A trial that cannot get a working
 baseline is recorded as INVALID and excluded, rather than counted as a pass.
 
 *Recovery is measured on the same trial.* When a treatment yields zero, the
-domain is power-gated and scanned again. That turns each deaf reading into a
-matched pair, so "the power-gate clears it" rests on the same events as "the
-treatment caused it" rather than on two separate samples.
+domain is power-gated and scanned again, then, if still deaf, the front end is
+handed back and scanned again. That turns each deaf reading into a matched
+set, so "this clears it" rests on the same events as "the treatment caused it"
+rather than on separate samples.
+
+WHAT IT FOUND, 2026-09-27
+-------------------------
+Dirty: deaf 8 times in 8. The power-gate cured it 0 times in 16, and an hour's
+wait did not either; the hand-back cured it every time, with no time spent
+receiving. So the firmware now hands back at boot when the flag is set, and
+opening the port boots it -- which cures a dirty trial before it is measured.
+Standard firmware therefore scores every dirty trial INVALID; measuring the
+latch itself needs a build with -DSN_154_NO_BOOT_HANDBACK=1.
 
 *The outcome is a count, scored as a proportion.* Access points found, not
 frames. It is bounded, it does not depend on traffic happening to be sent, and
@@ -63,7 +74,7 @@ from esp32c6_sniffer.control import (  # noqa: E402
 )
 from esp32c6_sniffer.framing import FrameType  # noqa: E402
 from esp32c6_sniffer.parser import StreamParser  # noqa: E402
-from esp32c6_sniffer.recovery import _open  # noqa: E402
+from esp32c6_sniffer.recovery import _open, hand_back  # noqa: E402
 from esp32c6_sniffer.capture import CaptureSession  # noqa: E402
 from esp32c6_sniffer.control import Antenna  # noqa: E402
 from esp32c6_sniffer.scan import scan_access_points  # noqa: E402
@@ -259,11 +270,14 @@ def await_recovery(port: str, measure, limit_s: float, poll_s: float,
 def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     row = {"cycle": cycle, "arm": arm, "baseline": None, "applied": None,
            "dirty_flag": None, "heard": None, "after": None,
-           "recovered": None, "valid": False, "deaf": None,
-           "self_recovered_s": None}
+           "recovered": None, "handed_back": None, "valid": False,
+           "deaf": None, "self_recovered_s": None}
 
     # 1. Prove the instrument reads non-zero before trusting any zero from it.
+    # The hand-back first: a latch the last dirty trial left survives a
+    # power-gate, and failed every later baseline until it was found.
     try:
+        hand_back(port, settle=OPEN_SETTLE_S)
         power_cycle(port)
         baseline = measure(port)
         if not baseline:
@@ -291,6 +305,15 @@ def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
         if verbose:
             print(f"  cycle {cycle} {arm:<5}  INVALID: treatment not acked")
         return row
+    # Reading the flag opened the port, which boots the board, and standard
+    # firmware hands the front end back at boot when the flag is set: a
+    # dirty arm reading clean was cured before it could be measured.
+    if arm == "dirty" and row["dirty_flag"] is False:
+        if verbose:
+            print(f"  cycle {cycle} {arm:<5}  INVALID: the board handed the "
+                  "front end back at boot; measuring the latch needs a "
+                  "-DSN_154_NO_BOOT_HANDBACK=1 build")
+        return row
 
     # 3. Outcome.
     after = measure(port)
@@ -303,15 +326,21 @@ def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     row["valid"] = True
     row["deaf"] = after == 0
 
-    # 4. Matched recovery, measured on this same trial.
+    # 4. Matched recovery, measured on this same trial: the power-gate, then
+    # the hand-back -- a clean 802.15.4 start and stop -- if that did not.
     if after == 0:
         power_cycle(port)
         row["recovered"] = measure(port)
+        if not row["recovered"]:
+            hand_back(port, settle=OPEN_SETTLE_S)
+            row["handed_back"] = measure(port)
 
     if verbose:
         note = ""
         if row["deaf"]:
             note = f"  -> DEAF, {row['recovered']} after power-gate"
+            if row["handed_back"] is not None:
+                note += f", {row['handed_back']} after hand-back"
         flag = {True: "dirty", False: "clean", None: "?"}[row["dirty_flag"]]
         print(f"  cycle {cycle} {arm:<5}  baseline {baseline:>2} "
               f"-> after {after:>2}  heard={row['heard']:<4} "
@@ -420,7 +449,8 @@ def main() -> int:
         for arm in order:
             row = trial(args.port, arm, cycle, verbose, measure)
             rows.append(row)
-            stuck = row["valid"] and row["deaf"] and not row["recovered"]
+            stuck = (row["valid"] and row["deaf"] and not row["recovered"]
+                     and not row["handed_back"])
             if stuck and args.await_recovery > 0:
                 if verbose:
                     print(f"    waiting up to {args.await_recovery:g} min for it "
@@ -447,8 +477,14 @@ def main() -> int:
             break
 
     summarise(rows)
+    deaf = [r for r in rows if r["valid"] and r["deaf"] and not r["recovered"]]
+    if deaf:
+        cured = sum(1 for r in deaf if r["handed_back"])
+        print(f"  hand-back recovered {cured} of the {len(deaf)} the "
+              f"power-gate did not")
     waits = [r["self_recovered_s"] for r in rows
-             if r["valid"] and r["deaf"] and not r["recovered"]]
+             if r["valid"] and r["deaf"] and not r["recovered"]
+             and not r["handed_back"]]
     if waits:
         shown = ", ".join("never" if w is None else f"{w / 60:.1f} min"
                           for w in waits)

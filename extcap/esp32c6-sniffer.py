@@ -1255,14 +1255,15 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
         # Both radios share one 2.4 GHz front end, and leaving the 802.15.4
         # radio ENABLED when a host disconnects leaves the Wi-Fi receiver deaf
-        # until the RF domain is power-gated. The board records that in RTC
-        # memory; this reads the flag and power-cycles before capturing.
+        # until 802.15.4 is started and stopped cleanly. The board records that
+        # in RTC memory and does it at boot; the session reads the flag too,
+        # for older firmware, and hands the radio back before capturing.
         #
         # It has to be here, not only in the survey tools. Without it the
         # ordinary path -- capture Zigbee in Wireshark, then switch to Wi-Fi --
         # produced a silently EMPTY capture, with no error anywhere, which is
         # the worst possible way for this to fail.
-        # The session power-cycles the radio itself when 802.15.4 has left the
+        # The session recovers the radio itself when 802.15.4 has left the
         # shared front end deaf; this only reports it. Held rather than logged
         # at once, because the toolbar accepts nothing until Wireshark says it
         # has initialised, which is after the session opens.
@@ -1328,13 +1329,16 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
             if session.recovered_from_802154:
                 deferred_log.append(
-                    "802.15.4 had been used; power-cycled the radio first")
-            if session.power_cycled_for_deafness:
+                    "802.15.4 had been left running, which deafens Wi-Fi; "
+                    "started and stopped it cleanly to hand the radio back")
+            if session.handed_back_for_deafness:
                 deferred_log.append(
                     "Wi-Fi heard nothing on this channel, and a scan found no "
                     "network anywhere: the receiver latch this board is prone "
-                    "to, or no Wi-Fi within range. Power-cycled the radio and "
-                    "started again")
+                    "to, or no Wi-Fi within range. Handed the radio back"
+                    + (", then power-cycled it, and started again"
+                       if session.power_cycled_for_deafness
+                       else " and started again"))
             for message in deferred_log:
                 log(message)
 

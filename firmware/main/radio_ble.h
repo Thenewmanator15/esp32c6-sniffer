@@ -81,8 +81,8 @@ esp_err_t sn_radio_ble_start(uint16_t interval_ms, uint16_t window_ms);
  *
  * Not merely disabling the scan: the controller is disabled and deinitialised
  * so the shared 2.4 GHz front end goes back. Leaving the 802.15.4 radio
- * enabled leaves the Wi-Fi receiver deaf until the RF domain is power-gated,
- * and there is no reason to assume this radio is kinder. */
+ * enabled leaves the Wi-Fi receiver deaf until it is started and stopped
+ * cleanly, and there is no reason to assume this radio is kinder. */
 void sn_radio_ble_stop(void);
 
 bool sn_radio_ble_running(void);

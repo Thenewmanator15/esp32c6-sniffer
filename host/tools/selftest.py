@@ -491,13 +491,13 @@ def main() -> int:
     check_retune(args.port, args.zigbee_channel, args.retune_to)
 
     print("\nWi-Fi")
-    # The 802.15.4 checks above have just poisoned the shared front end,
-    # which is exactly the situation a user hits, so recovering is
-    # automatic rather than a flag.
-    cycled = ensure_wifi_ready(args.port)
+    # The 802.15.4 checks above stop cleanly, which hands the shared front
+    # end back. One cut short leaves it owned -- exactly the situation a user
+    # hits -- so recovering is automatic rather than a flag.
+    handed_back = ensure_wifi_ready(args.port)
     record("recover front end after 802.15.4",
-           PASS if cycled else SKIP,
-           "power-cycled" if cycled else "nothing to recover")
+           PASS if handed_back else SKIP,
+           "handed back" if handed_back else "nothing to recover")
     board = Board(args.port).open()
     try:
         check_wifi_scan(board)

@@ -72,3 +72,46 @@ def test_the_host_expects_the_version_the_firmware_reports(board, source):
                       source.read_text(encoding="utf-8"))
     assert match, f"{source} no longer defines SN_FIRMWARE_VERSION"
     assert EXPECTED_FIRMWARE_VERSIONS[board] == int(match.group(1))
+
+
+C6_MAIN = ROOT / "firmware" / "main"
+
+
+def _c6(name: str) -> str:
+    text = (C6_MAIN / name).read_text(encoding="utf-8")
+    return re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+
+
+def _body(text: str, signature: str) -> str:
+    start = text.index("{", text.index(signature))
+    depth = 0
+    for i in range(start, len(text)):
+        depth += {"{": 1, "}": -1}.get(text[i], 0)
+        if depth == 0:
+            return text[start:i + 1]
+    raise AssertionError(signature)
+
+
+def test_the_c6_hands_its_front_end_back_at_boot():
+    """802.15.4 left running deafens Wi-Fi until 802.15.4 is started and
+    stopped cleanly (8 in 8; the power-gate 0 in 16). The C6 restarts when
+    its port opens, so doing it at boot cures it for every tool that
+    connects -- unless built without, for measuring the latch itself."""
+    main = _c6("main.c")
+    assert "sn_radio154_hand_back()" in main
+    assert "SN_154_NO_BOOT_HANDBACK" in (C6_MAIN / "main.c").read_text(encoding="utf-8")
+    body = _body(_c6("radio154.c"), "void sn_radio154_hand_back(void)")
+    assert "sn_radio154_start(" in body and "sn_radio154_stop()" in body
+
+
+def test_a_clean_802154_stop_clears_the_flag_and_nothing_else_does():
+    """A clean stop is the cure, so it clears the flag -- only with the
+    sleep, since the stop without it is what latches. The power cycle's
+    timer wake does not: the power-gate does not cure this deafness, and
+    clearing the flag there hid it."""
+    stop = _body(_c6("radio154.c"), "void sn_radio154_stop(void)")
+    sleep_at = stop.index("esp_ieee802154_sleep()")
+    clear_at = stop.index("set_front_end_dirty(false)")
+    endif_at = stop.index("#endif", sleep_at)
+    assert sleep_at < clear_at < endif_at
+    assert "sn_radio154_clear_dirty()" not in _c6("main.c")

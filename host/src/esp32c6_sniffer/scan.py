@@ -84,8 +84,8 @@ def scan_access_points(
 
     `recover=False` scans the receiver as it is, for measuring its deafness.
     """
-    # Before the port is opened. Using the 802.15.4 radio can leave the Wi-Fi
-    # receiver deaf until the RF domain is power-gated, and a deaf receiver
+    # Before the port is opened. 802.15.4 left running leaves the Wi-Fi
+    # receiver deaf until it is started and stopped cleanly, and a deaf receiver
     # does not fail a scan -- it completes one and reports no access points
     # at all. Without this the reload button annotated every channel "quiet"
     # on a band with four networks on it.

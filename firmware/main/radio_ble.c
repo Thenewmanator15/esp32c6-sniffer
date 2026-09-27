@@ -671,8 +671,8 @@ void sn_radio_ble_stop(void)
 
     /* Hand the front end back properly. Disabling the scan alone leaves the
      * controller owning the radio, and the 802.15.4 radio has already shown
-     * what that costs: the Wi-Fi receiver stays deaf until the RF domain is
-     * power-gated. */
+     * what that costs: the Wi-Fi receiver stays deaf until that radio is
+     * started and stopped cleanly -- a power-gate does not cure it. */
     sn_trace(SN_TRACE_BLE_STOP_IN, 2, 0);     /* 2 = controller disable */
     esp_bt_controller_disable();
     sn_trace(SN_TRACE_BLE_STOP_OUT, 2, 0);

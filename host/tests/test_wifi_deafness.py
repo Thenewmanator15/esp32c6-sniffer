@@ -9,8 +9,9 @@ the check the session already made did not fire.
 
 So when the receiver should be hearing beacons -- management frames pass the
 filter, and access points beacon about ten times a second -- and hears
-nothing at all for a few seconds after the capture starts, the session
-power-cycles the board once and starts again.
+nothing at all for a few seconds after the capture starts, the session hands
+the front end back -- a clean 802.15.4 start and stop -- and starts again,
+and power-cycles only if it still hears nothing.
 """
 
 import time
@@ -46,32 +47,47 @@ class WifiBoard(KeyedBoard):
 
 
 def open_wifi(monkeypatch, *boards, frame_filter=None):
+    """The session, and the cures it tried, in order."""
     ports = iter(boards)
-    cycles = []
+    cures = []
     monkeypatch.setattr(capture, "WIFI_DEAF_S", 0.3)
     monkeypatch.setattr(capture, "ensure_wifi_ready", lambda port: False)
-    monkeypatch.setattr(capture, "power_cycle", cycles.append)
+    monkeypatch.setattr(capture, "hand_back", lambda port: cures.append("hand back"))
+    monkeypatch.setattr(capture, "power_cycle",
+                        lambda port: cures.append("power cycle"))
     monkeypatch.setattr(capture.serial, "Serial", lambda *a, **k: next(ports))
     session = CaptureSession("COM_UNUSED", channel=6, radio=Radio.WIFI,
                              frame_filter=frame_filter)
     session.open()
-    return session, cycles
+    return session, cures
 
 
-def test_a_deaf_receiver_is_power_cycled_and_the_capture_hears(monkeypatch):
+def test_a_deaf_receiver_is_handed_back_and_the_capture_hears(monkeypatch):
+    """A clean 802.15.4 start and stop cured the deafness 802.15.4 left
+    running causes, 8 times in 8; the power-gate this tried first, 0 in 16."""
     deaf, hearing = WifiBoard(), WifiBoard(heard=3)
-    session, cycles = open_wifi(monkeypatch, deaf, hearing)
-    assert cycles == ["COM_UNUSED"]
-    assert deaf.closed and session.power_cycled_for_deafness
+    session, cures = open_wifi(monkeypatch, deaf, hearing)
+    assert cures == ["hand back"]
+    assert deaf.closed and session.handed_back_for_deafness
+    assert not session.power_cycled_for_deafness
     records = session.records()
     assert len([next(records) for _ in range(3)]) == 3
+
+
+def test_a_receiver_the_hand_back_does_not_cure_is_power_cycled(monkeypatch):
+    """The power-gate stays for a deafness with some other cause: it cured
+    one found on 2026-09-25 with the 802.15.4 flag clear."""
+    session, cures = open_wifi(monkeypatch, WifiBoard(), WifiBoard(),
+                               WifiBoard(heard=2))
+    assert cures == ["hand back", "power cycle"]
+    assert session.handed_back_for_deafness and session.power_cycled_for_deafness
 
 
 def test_a_receiver_that_hears_is_left_alone_and_loses_nothing(monkeypatch):
     """The frames the check heard are the capture's first frames."""
     board = WifiBoard(heard=2)
-    session, cycles = open_wifi(monkeypatch, board)
-    assert cycles == [] and not session.power_cycled_for_deafness
+    session, cures = open_wifi(monkeypatch, board)
+    assert cures == [] and not session.power_cycled_for_deafness
     records = session.records()
     assert len([next(records) for _ in range(2)]) == 2
 
@@ -81,9 +97,9 @@ def test_no_check_when_the_filter_keeps_beacons_out(monkeypatch):
     real, and power-cycling it would cost seconds every time."""
     monkeypatch.setattr(capture, "WIFI_DEAF_S", 5.0)
     started = time.monotonic()
-    session, cycles = open_wifi(monkeypatch, WifiBoard(),
+    session, cures = open_wifi(monkeypatch, WifiBoard(),
                                 frame_filter=FrameFilter.DATA)
-    assert cycles == []
+    assert cures == []
     assert time.monotonic() - started < 1.0
 
 
@@ -95,14 +111,14 @@ def test_a_quiet_channel_in_a_busy_band_is_not_power_cycled(monkeypatch):
     capture is started again after it."""
     board = WifiBoard()
     board.values[Command.WIFI_SCAN] = 8
-    session, cycles = open_wifi(monkeypatch, board)
-    assert cycles == [] and not session.power_cycled_for_deafness
+    session, cures = open_wifi(monkeypatch, board)
+    assert cures == [] and not session.power_cycled_for_deafness
     after = board.sequence()[board.sequence().index("SET_CHANNEL"):]
     assert after[1:] == ["STOP", "WIFI_SCAN", "SET_RADIO", "SET_ANTENNA",
                          "SET_CHANNEL"]
 
 
-def test_a_receiver_still_deaf_after_the_cycle_is_cycled_only_once(monkeypatch):
+def test_a_receiver_still_deaf_after_both_is_tried_once_each(monkeypatch):
     """The capture goes ahead, and the stall counters say it is deaf."""
-    session, cycles = open_wifi(monkeypatch, WifiBoard(), WifiBoard())
-    assert cycles == ["COM_UNUSED"]
+    session, cures = open_wifi(monkeypatch, WifiBoard(), WifiBoard(), WifiBoard())
+    assert cures == ["hand back", "power cycle"]

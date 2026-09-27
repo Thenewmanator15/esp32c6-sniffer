@@ -4,8 +4,8 @@ Both of its measures opened the board through code that power-cycles it when
 the 802.15.4 flag is set -- scan_access_points() and CaptureSession call
 ensure_wifi_ready() -- and the dirty arm is exactly the one that sets it.
 Every dirty trial was cured before it was measured, so the replication's
-"zero reproductions" never tested that arm. With the flag now kept until a
-power cycle, and a silent capture power-cycling too, every arm would be.
+"zero reproductions" never tested that arm. With a silent capture recovering
+too, every arm would be.
 """
 
 import pathlib
@@ -158,3 +158,48 @@ def test_a_board_that_does_not_answer_is_not_a_recovery():
                                       limit_s=600, poll_s=60,
                                       clock=clock.time, sleep=clock.sleep)
     assert took == 180
+
+
+def test_a_deaf_trial_records_the_power_gate_and_then_the_hand_back(monkeypatch):
+    """Both cures, measured on the same trial and in that order: the
+    power-gate that did not cure this deafness in 16 tries, then the clean
+    802.15.4 start and stop that cured it in 8 of 8. A baseline hands back
+    first too, so a latch left by the previous trial cannot fail it."""
+    steps = []
+    readings = iter([6, 0, 0, 8])     # baseline, after, after gate, after hand-back
+    monkeypatch.setattr(latch_trial, "power_cycle", lambda port: steps.append("gate"))
+    monkeypatch.setattr(latch_trial, "hand_back",
+                        lambda port, settle=0: steps.append("hand back"))
+    monkeypatch.setattr(latch_trial, "apply_arm", lambda port, arm: (True, 40))
+    monkeypatch.setattr(latch_trial, "read_dirty_flag", lambda port: True)
+    row = latch_trial.trial("COM_UNUSED", "dirty", 1, False,
+                            lambda port: next(readings))
+    assert steps == ["hand back", "gate", "gate", "hand back"]
+    assert row["deaf"] and row["recovered"] == 0 and row["handed_back"] == 8
+
+
+def test_a_dirty_trial_the_board_cured_at_boot_is_not_counted(monkeypatch):
+    """The firmware now hands the front end back at boot when the flag is
+    set, and opening the port boots it -- so on a standard build the dirty
+    arm is cured before it is measured, and its flag reads clear. Scored,
+    that would be a string of "dirty, not deaf" passes that say nothing
+    about the latch; it needs a -DSN_154_NO_BOOT_HANDBACK=1 build."""
+    readings = iter([6, 8])
+    monkeypatch.setattr(latch_trial, "power_cycle", lambda port: None)
+    monkeypatch.setattr(latch_trial, "hand_back", lambda port, settle=0: None)
+    monkeypatch.setattr(latch_trial, "apply_arm", lambda port, arm: (True, 40))
+    monkeypatch.setattr(latch_trial, "read_dirty_flag", lambda port: False)
+    row = latch_trial.trial("COM_UNUSED", "dirty", 1, False,
+                            lambda port: next(readings))
+    assert not row["valid"] and row["deaf"] is None
+
+
+def test_a_clean_trial_is_expected_to_read_clean(monkeypatch):
+    readings = iter([6, 8])
+    monkeypatch.setattr(latch_trial, "power_cycle", lambda port: None)
+    monkeypatch.setattr(latch_trial, "hand_back", lambda port, settle=0: None)
+    monkeypatch.setattr(latch_trial, "apply_arm", lambda port, arm: (True, 40))
+    monkeypatch.setattr(latch_trial, "read_dirty_flag", lambda port: False)
+    row = latch_trial.trial("COM_UNUSED", "clean", 1, False,
+                            lambda port: next(readings))
+    assert row["valid"] and row["deaf"] is False
