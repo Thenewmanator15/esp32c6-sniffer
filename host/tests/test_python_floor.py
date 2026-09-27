@@ -60,3 +60,15 @@ def test_the_installers_refuse_an_older_python():
         assert (int(m.group(1)), int(m.group(2))) == _floor(), (
             f"{name} checks for {m.group(1)}.{m.group(2)}, "
             f"but the declared floor is {_floor()}")
+
+
+def test_the_aes_speed_up_is_an_optional_extra_the_dev_install_takes():
+    """cryptography makes device-key checks about fifty times faster, and is
+    optional: the host falls back to its own AES without it."""
+    import tomllib
+    project = tomllib.loads((REPO / "host" / "pyproject.toml").read_text(
+        encoding="utf-8"))["project"]
+    assert not any(d.startswith("cryptography") for d in project["dependencies"])
+    fast = project["optional-dependencies"]["fast"]
+    assert any(d.startswith("cryptography") for d in fast)
+    assert any("[fast]" in d for d in project["optional-dependencies"]["dev"])

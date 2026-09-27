@@ -431,3 +431,30 @@ def test_eight_keys_check_a_new_address_quickly():
 
     per_address = min(timeit.repeat(run, number=1, repeat=3)) / len(packets)
     assert per_address < 0.4e-3, f"{per_address * 1e3:.2f} ms per new address"
+
+
+def test_the_python_aes_agrees_with_the_backend_in_use():
+    """cryptography when it is installed, this module's own AES when not:
+    the two must give the same answer for every key and block."""
+    import random
+    from esp32c6_sniffer import ble_keys
+    rng = random.Random(11)
+    for _ in range(300):
+        key, block = rng.randbytes(16), rng.randbytes(16)
+        assert ble_keys._aes128_python(key, block) == aes128_encrypt(key, block)
+
+
+def test_without_cryptography_the_python_aes_is_used(monkeypatch):
+    """The speed-up is optional: a plugin whose environment lacks it still
+    resolves keys."""
+    from esp32c6_sniffer import ble_keys
+    monkeypatch.setattr(ble_keys, "_Cipher", None)
+    assert ble_keys.aes_backend() == "python"
+    assert aes128_encrypt(IRK, bytes(16)) == ble_keys._aes128_python(IRK, bytes(16))
+    assert ah(IRK, 0x708194) == 0x0DFBAA
+
+
+def test_with_cryptography_it_is_used():
+    pytest.importorskip("cryptography")
+    from esp32c6_sniffer import ble_keys
+    assert ble_keys.aes_backend() == "cryptography"

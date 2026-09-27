@@ -23,10 +23,16 @@ classifiers = [
 dependencies = ["pyserial>=3.5"]
 
 [project.optional-dependencies]
+# AES from OpenSSL for device-key checks, about fifty times the speed of the
+# package's own: 0.21 us a block against 10.4. Optional -- without it the
+# package falls back to its own AES -- and the installers add it. Wheels
+# exist for every build this supports, free-threaded 3.14t included.
+fast = ["cryptography>=44"]
 # build is what extcap/package-release.py shells out to for the wheel that
 # ships in a release. Declared rather than assumed, so the release path
-# works from a fresh clone and in CI without a separate install step.
-dev = ["pytest>=8.0", "build>=1.0"]
+# works from a fresh clone and in CI without a separate install step. The
+# fast extra too, so CI tests the path users get.
+dev = ["pytest>=8.0", "build>=1.0", "esp32c6-sniffer[fast]"]
 
 [build-system]
 requires = ["setuptools>=68"]
