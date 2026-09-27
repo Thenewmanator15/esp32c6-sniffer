@@ -256,33 +256,33 @@ retracted:
 | access points, n=5 each | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 |
 | Wi-Fi frames, n=3 each | 596, 645, 587 | 634, 671, 605 | 567, 440, 529 |
 
-**The retraction is withdrawn**, though not for the reason first given. Both
-of the replication's measures reached the board through the host's recovery,
-which power-cycled the board whenever the 802.15.4 flag was set, and the dirty
-arm is the one that sets it. That was taken to mean every dirty trial was cured
-before it was measured. But the power-gate turns out not to cure this at all
-(below), so why those eight dirty trials read healthy is unknown. What
-withdraws the retraction is the trials since, measured with nothing in the
-way. (The access-point counts were also capped at four by a scan bug since
-fixed; a deaf receiver still reads zero.)
+**That replication could not have found it, and the retraction is withdrawn.**
+Both of its measures reached the board through the host's recovery, which
+power-cycled the board whenever the 802.15.4 flag was set — and the dirty arm
+is the arm that sets it — so every dirty trial was cured before it was
+measured. Checked on 2026-09-27 by running the 2026-09-07 firmware and trial
+tool again: its dirty trials read healthy through that path, 5 of 5, while the
+same firmware measured with no recovery went deaf 4 times in 4, each cured by
+one power-gate. (The access-point counts were also capped at four by a scan
+bug since fixed; a deaf receiver still reads zero.)
 
-Measured with the recovery switched off, on 2026-09-26, the first dirty trial
-went from 7 access points to **0**, and stayed at 0 through fourteen power-gates
-over the next seven minutes.
-
-**2026-09-27, with the recovery off and the cures measured one at a time:**
+**Measured with the recovery switched off**, 2026-09-26 and 27:
 
 | | result |
 |---|---|
-| 802.15.4 left running when the host goes | Wi-Fi deaf **8 times in 8** |
-| the deep-sleep power-gate the host used as its cure | cured it **0 times in 16** |
-| waiting, scanning once a minute | not cured in an hour |
-| starting 802.15.4 and stopping it cleanly | cured it **8 times in 8**, at once, with no time spent receiving |
+| 802.15.4 left running when the host goes | Wi-Fi deaf **every time**: 18 trials, on today's firmware and the 2026-09-07 one |
+| the deep-sleep power-gate the host used as its cure | cured **9 episodes in 9** on the afternoon of 2026-09-27, but left **two** others deaf through 16 attempts between them |
+| waiting, scanning once a minute | one of those two was still deaf after an hour |
+| starting 802.15.4 and stopping it cleanly | cured **every episode it was tried on**, that one included, at once and with no time spent receiving |
 
-It had seemed to clear by itself twenty minutes after that. But 802.15.4
-sanity captures had run in the gap, each ending in a clean stop, and that
-was this cure, unnoticed. The claim is the original one: walking away with
-802.15.4 running deafens Wi-Fi. The power-gate is not its cure.
+The other of the two, on 2026-09-26, seemed to clear by itself twenty minutes
+later — but 802.15.4 sanity captures had run in the gap, each ending in a
+clean stop, which was this cure, unnoticed. Why the power-gate failed on those
+two and not the rest is not known: both were the first trial of a
+`tools/latch_trial.py` run, and repeating that trial's sequence did not
+reproduce it. The claim is the original one: walking away with 802.15.4
+running deafens Wi-Fi. The power-gate usually undoes it; the clean start and
+stop always has.
 
 So the board cures it itself. It records 802.15.4 running in RTC memory, where
 it survives the reset that opening the serial port causes, and clears it on a

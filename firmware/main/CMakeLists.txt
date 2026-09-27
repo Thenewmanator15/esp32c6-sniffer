@@ -24,6 +24,14 @@ if(DEFINED SN_154_LEGACY_STOP)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
                                SN_154_LEGACY_STOP=${SN_154_LEGACY_STOP})
 endif()
+
+# SN_154_NO_BOOT_HANDBACK=1 builds without the boot-time hand-back that main.c
+# runs when 802.15.4 was left running, so the latch can be measured rather
+# than cured before anyone looks. Never ship it; the default is 0.
+if(DEFINED SN_154_NO_BOOT_HANDBACK)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE
+                               SN_154_NO_BOOT_HANDBACK=${SN_154_NO_BOOT_HANDBACK})
+endif()
 if(DEFINED SN_BENCH_PAYLOAD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
                                SN_BENCH_PAYLOAD=${SN_BENCH_PAYLOAD})

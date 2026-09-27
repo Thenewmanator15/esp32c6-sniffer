@@ -162,9 +162,10 @@ def test_a_board_that_does_not_answer_is_not_a_recovery():
 
 def test_a_deaf_trial_records_the_power_gate_and_then_the_hand_back(monkeypatch):
     """Both cures, measured on the same trial and in that order: the
-    power-gate that did not cure this deafness in 16 tries, then the clean
-    802.15.4 start and stop that cured it in 8 of 8. A baseline hands back
-    first too, so a latch left by the previous trial cannot fail it."""
+    power-gate, which usually cures this deafness but left two episodes deaf
+    through 16 tries, then the clean 802.15.4 start and stop, which has cured
+    every episode. A baseline hands back first too, so a latch left by the
+    previous trial cannot fail it."""
     steps = []
     readings = iter([6, 0, 0, 8])     # baseline, after, after gate, after hand-back
     monkeypatch.setattr(latch_trial, "power_cycle", lambda port: steps.append("gate"))

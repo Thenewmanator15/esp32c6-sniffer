@@ -60,8 +60,9 @@ static RTC_NOINIT_ATTR uint32_t s_dirty_magic;
 static RTC_NOINIT_ATTR uint32_t s_dirty_flag;
 
 /* Set when the radio starts; cleared only by a clean stop, which is what
- * hands the front end back (2026-09-27: 8 in 8). The deep-sleep power-gate
- * does not (0 in 16), so waking from it clears nothing. */
+ * hands the front end back (2026-09-27: every episode it was tried on). The
+ * deep-sleep power-gate usually does too, but left two episodes deaf through
+ * 16 attempts, so waking from it clears nothing. */
 static bool front_end_dirty(void)
 {
     return s_dirty_magic == SN_DIRTY_MAGIC && s_dirty_flag != 0u;
@@ -254,7 +255,8 @@ void sn_radio154_stop(void)
      * the host goes and the Wi-Fi receiver is deaf afterwards -- 8 times in 8,
      * 2026-09-27 -- and esp_ieee802154_disable() alone does not give it back.
      * Starting this radio and stopping it here, with the sleep, does, every
-     * time (8 in 8); the deep-sleep power-gate does not (0 in 16).
+     * time it has been tried; the deep-sleep power-gate usually does, but not
+     * always.
      *
      * SN_154_LEGACY_STOP builds the version without the sleep, so the claim
      * can be A/B tested against this same binary rather than asserted. It

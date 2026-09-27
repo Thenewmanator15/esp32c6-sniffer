@@ -21,11 +21,11 @@ from minutes to hours (see docs/2026-09-05-wifi-investigation-postmortem.md).
 An empty result is therefore not evidence of an empty band.
 
 --recover fixes it. It starts the 802.15.4 radio and stops it cleanly, which
-hands the shared front end back: the deafness 802.15.4 left running causes was
-cured by that 8 times in 8, and by the deep-sleep power-gate this used to do 0
-times in 16 (2026-09-27). If that does not find anything it power-gates as
-well, which did cure a deafness with some other cause: 0 access points before,
-12 after.
+hands the shared front end back: it has cured every episode of the deafness
+802.15.4 left running causes it was tried on, where the deep-sleep power-gate
+this used to do left two of them deaf (2026-09-26 and 27). If that does not
+find anything it power-gates as well, which usually cures that deafness too,
+and did cure one with some other cause: 0 access points before, 12 after.
 """
 
 from __future__ import annotations

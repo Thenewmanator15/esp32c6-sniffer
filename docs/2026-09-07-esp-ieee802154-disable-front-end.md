@@ -1,8 +1,10 @@
-# 802.15.4 not stopped cleanly leaves the ESP32-C6 Wi-Fi receiver deaf, past a reset and deep sleep
+# 802.15.4 not stopped cleanly leaves the ESP32-C6 Wi-Fi receiver deaf, past a reset
 
 **Status:** revised 2026-09-27, not yet filed. The first draft said the state
-could not be cleared in software; it can, and that changes the report. Review
-again before it goes to Espressif under a real name.
+could not be cleared in software. It can, and that changes the report. A
+same-day revision then said the deep-sleep power-gate never clears it. It
+usually does, and the correction is below. Review again before this goes to
+Espressif under a real name.
 
 ## Summary
 
@@ -11,21 +13,25 @@ On ESP32-C6 with ESP-IDF v6.1, the Wi-Fi receiver stops receiving after the
 `esp_wifi_scan_start()` completes successfully and reports **zero** access
 points. There are two ways to get there:
 
-1. **Not stopping 802.15.4 at all.** The chip resets while 802.15.4 is receiving;
-   here the reset comes from the host reopening the USB serial port. Wi-Fi was
-   deaf afterwards **8 times in 8** (2026-09-27).
+1. **Not stopping 802.15.4 at all.** The chip resets while 802.15.4 is
+   receiving. Here the reset comes from the host reopening the USB serial port.
+   Wi-Fi was deaf afterwards **every time: 18 trials** over 2026-09-26 and 27.
 2. **Stopping it with `esp_ieee802154_disable()` alone**, without
-   `esp_ieee802154_sleep()` first. Wi-Fi was deaf **2 times in 2**, against 0 in
-   10 with the sleep (2026-09-07).
+   `esp_ieee802154_sleep()` first. Wi-Fi was deaf **6 times in 6**, against 0
+   in 10 with the sleep.
 
-The state survives a CPU reset. It also survives deep sleep with an RTC timer
-wake, which power-gates the RF and modem domains: **0 cures in 16**. It
-survives a reflash, and it was still there after an hour's wait.
+The state survives a CPU reset, a reflash, and in one case an hour's wait. The
+deep-sleep power-gate of the RF and modem domains usually clears it, but not
+always. Two episodes of case 1 stayed deaf through 16 power-gates between
+them, and on 2026-09-07 case 2 needed the board unplugged.
 
 It **is** cleared in software, at once, by enabling 802.15.4 and stopping it
-with `esp_ieee802154_sleep()` then `esp_ieee802154_disable()`: **8 times in 8**,
-with no time spent receiving. So something in the 802.15.4 stop path hands the
-shared front end back, and it lives somewhere a power-gate does not reset.
+with `esp_ieee802154_sleep()` then `esp_ieee802154_disable()`. That has worked
+on every episode of both cases it was tried on, including one the power-gate
+had not cleared, with no time spent receiving. Enabling it and stopping it
+*without* the sleep does not clear it. So the sleep call is the fix and its
+absence is the fault: something in the 802.15.4 sleep path hands the shared
+front end back.
 
 ## Environment
 
@@ -67,9 +73,9 @@ void sn_radio154_stop(void)
 }
 ```
 
-Each trial first proves the receiver works: 802.15.4 is started and stopped
-cleanly, the RF domain is power-gated, and a Wi-Fi scan must return a non-zero
-count. Only then is the treatment applied, followed by another scan.
+Each trial first proves the receiver works with a Wi-Fi scan that must return
+a non-zero count. Only then is the treatment applied, followed by another scan
+with nothing in between that could cure it.
 
 The three arms differ only in how 802.15.4 is left:
 
@@ -81,25 +87,26 @@ The three arms differ only in how 802.15.4 is left:
 
 ## Results
 
-### Case 1: not stopped (2026-09-27, measured with no recovery in the path)
+### Case 1: not stopped
 
 | | result |
 |---|---|
-| dirty arm | Wi-Fi deaf **8 times in 8**: a working baseline before, 0 access points after |
-| deep-sleep power-gate, 1 s timer wake | cured it **0 times in 16** |
-| waiting, one scan a minute | still deaf after 60 minutes |
-| enable 802.15.4, then `sleep()` and `disable()` | cured it **8 times in 8**, at once |
+| dirty arm | Wi-Fi deaf **18 times in 18**, on the 2026-09-07 firmware and the 2026-09-27 one |
+| deep-sleep power-gate, 1 s timer wake | cured **9 episodes in 9**, one power-gate each, on 2026-09-27 afternoon; **2 episodes** stayed deaf through 16 attempts between them (2026-09-26, 2026-09-27 morning) |
+| waiting, one scan a minute | one of those two was still deaf after 60 minutes |
+| enable 802.15.4, then `sleep()` and `disable()` | cured **every episode it was tried on**, 11 of them, including that one |
 | the same, with 0, 1 or 5 s receiving in between | cured at every dwell, including 0 s |
 
-The trial on 2026-09-26 found the same thing: 7 access points to 0, and the
-receiver stayed deaf through fourteen power-gates.
+### Case 2: disable without sleep
 
-### Case 2: disable without sleep (2026-09-07)
-
-| build | arm | trials | deaf |
-|---|---|---|---|
-| A, `sleep()` then `disable()` | clean | 10 | 0 |
-| B, `disable()` alone | clean | 2 | **2** |
+| | result |
+|---|---|
+| clean arm, build A (`sleep()` then `disable()`) | deaf **0 times in 10** (2026-09-07) |
+| clean arm, build B (`disable()` alone) | deaf **6 times in 6** (2 on 2026-09-07, 4 on 2026-09-27) |
+| reset, or reflash to build A | not cured, 2 of 2 |
+| enable and `disable()` again, still without `sleep()` | not cured, 1 of 1 |
+| enable, then `sleep()` and `disable()` (build A) | **cured, 2 of 2** |
+| deep-sleep power-gate | cured 2 of 2 on 2026-09-27; did not on 2026-09-07, when the board had to be unplugged |
 
 ## Controls
 
@@ -119,45 +126,42 @@ receiver stayed deaf through fourteen power-gates.
 ## Severity
 
 The fault gives no sign. Every call succeeds and the receiver simply hears
-nothing. The obvious recoveries do **not** restore it:
+nothing. Any product that can be reset while 802.15.4 is running reaches
+case 1: a watchdog, a crash or a brown-out would each do it. None of the
+obvious recoveries is reliable:
 
-* deep sleep with an RTC timer wake, which power-gates the RF and modem
-  domains (0 in 16);
-* `esp_wifi_deinit()` and a full driver rebuild;
-* re-flashing the application and hard-resetting via RTS;
-* `erase-flash`;
-* an hour's wait.
+* a CPU reset or a reflash: not once;
+* `esp_wifi_deinit()` and a full driver rebuild: not once;
+* `erase-flash`: not once;
+* waiting: not within an hour;
+* deep sleep with an RTC timer wake: usually, but not always.
 
-The software cure works, but nothing in the API or its documentation would
-lead anyone to it. Any product that can be reset while 802.15.4 is running
-reaches case 1: a watchdog, a crash or a brown-out would each do it. Such a
-product loses Wi-Fi until its firmware happens to start and stop 802.15.4
-cleanly.
-
-Our firmware now does exactly that at boot whenever its flag says 802.15.4 was
-left running. Measured: three dirty trials, each back to 8 access points and
-699 to 817 Wi-Fi frames in 8 s at the next boot, with no other recovery. That
-works around the problem; it is not a fix.
+The software cure has never failed, but nothing in the API or its
+documentation would lead anyone to it. Our firmware now applies it at boot
+whenever its flag says 802.15.4 was left running. Measured: three dirty
+trials, each back to 8 access points and 699 to 817 Wi-Fi frames in 8 s at
+the next boot, with no other recovery. That works around the problem; it is
+not a fix.
 
 ## What is not claimed
 
 * **The mechanism is unknown.** This says which calls cause and cure the state,
-  not what the state is. That it survives a power-gate of the RF and modem
-  domains suggests it is held elsewhere, perhaps in coexistence or PHY state
-  that the 802.15.4 sleep path resets.
-* **n is small for case 2**: two trials, from before the software cure was
-  known, when each deaf trial needed a manual power cycle to undo. Whether the
-  same cure clears case 2 has not been tested.
+  not what the state is. The pattern is that the 802.15.4 sleep path clears it
+  and the power-gate only sometimes does. That suggests coexistence or PHY
+  state held outside the gated domains, or restored into them.
+* **Why the power-gate sometimes fails is unknown.** Its two failures on case 1
+  were each the first trial of a scripted run. Repeating that run's sequence
+  did not reproduce them.
 * **Only one board has been tested**, a XIAO ESP32-C6. Whether it reproduces on
   a DevKitC or another C6 module is untested, and a second board would
   strengthen the report considerably.
-* **Case 1 has not always reproduced.** On 2026-09-07, 14 dirty trials (10 in
-  build A and 4 in B) read healthy. Those scans went through the host's
-  recovery at the time, which was the deep-sleep power-gate. They were later
-  written off as cured before they were measured. That no longer holds, since
-  the power-gate cures case 1 0 times in 16. Why those trials did not latch is
-  unknown. Something may have differed between the two days that was not
-  recorded.
+* **An earlier replication found no effect for case 1**: 2026-09-07, 14 dirty
+  trials, all healthy. Its measurement went through a recovery that
+  power-gated the board whenever the flag was set, which the dirty arm always
+  sets. Rerunning that firmware and tool on 2026-09-27 showed the same null
+  result, 5 of 5. The same firmware measured with no recovery went deaf 4
+  times in 4, and one power-gate cured each. So those trials were cured before
+  they were measured.
 
 ## Reproducer
 
@@ -172,5 +176,5 @@ python tools/latch_trial.py --port COM3 --arms dirty,dirty,clean --stop-on-deaf
 ```
 
 On a standard build, the trial reports each dirty trial as INVALID for this
-reason. Build B, for case 2, is `idf.py -DSN_MODE=2 -DSN_154_LEGACY_STOP=1
-build`. Neither build is for shipping.
+reason. Build B, for case 2, adds `-DSN_154_LEGACY_STOP=1`. Neither build is
+for shipping.

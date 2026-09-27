@@ -7,9 +7,9 @@ data, RSSI −50 to −96 dBm, correct rates and modulation, 6 malformed frames 
 the receiver latches deaf. That day a power-gate of the RF domain cleared it —
 0 access points before a deep-sleep reset, 12 after; see "Root cause" below.
 That latch is why single readings kept contradicting each other all day.
-(Corrected 2026-09-27: the deafness that leaving 802.15.4 running causes is
-*not* cleared by a power-gate, 0 times in 16, and a clean 802.15.4 start and
-stop clears it every time. See the correction of that date.)
+(Corrected 2026-09-27: the deafness that leaving 802.15.4 running causes
+usually clears with a power-gate too, but twice did not; a clean 802.15.4
+start and stop has cleared it every time. See the correction of that date.)
 
 This is kept because the investigation produced several confident wrong
 conclusions in a row, and the pattern that produced them is worth not
@@ -105,9 +105,9 @@ never in the driver, and never in our code. It sat in analog state that only a
 power-gate clears.
 
 (2026-09-27: true of that day's deafness, whose cause was never pinned down.
-The deafness 802.15.4 left running causes is different: a power-gate does not
-clear it, and a clean 802.15.4 start and stop does. See the correction of that
-date below.)
+The deafness 802.15.4 left running causes usually clears with a power-gate
+too, but twice did not; a clean 802.15.4 start and stop has cleared it every
+time. See the correction of that date below.)
 
 It also explains why the "recoveries" counter climbed while frames stayed at
 zero: rebuilding the driver cannot clear a latch below it.
@@ -219,35 +219,49 @@ deafen the Wi-Fi receiver -- and that deafness, unlike the one this document
 opens with, did not clear with a power-gate. More trials need `--stop-on-deaf`
 and patience, since a deaf trial costs the board until it clears.
 
-**Corrected again — 2026-09-27: the power-gate is not the cure, and a clean
-stop is.** More trials, with the trial's own recovery off and each cure
+**Corrected again — 2026-09-27: a clean stop always cures it; the power-gate
+usually does.** More trials, with the trial's own recovery off and each cure
 measured separately:
 
 | | result |
 |---|---|
-| 802.15.4 left running when the host goes | Wi-Fi deaf **8 times in 8** |
-| the deep-sleep power-gate | cured it **0 times in 16** |
-| waiting, one scan a minute | still deaf after an hour |
-| starting 802.15.4 and stopping it cleanly | cured it **8 times in 8**, at once |
+| 802.15.4 left running when the host goes | Wi-Fi deaf **every time**: 18 trials over the two days |
+| the deep-sleep power-gate | cured **9 episodes in 9** on the afternoon of 2026-09-27; left **two** deaf through 16 attempts between them (2026-09-26 and the morning of 2026-09-27) |
+| waiting, one scan a minute | one of those two was still deaf after an hour |
+| starting 802.15.4 and stopping it cleanly | cured **every episode it was tried on**, that one included, at once |
 
 The last row held at every dwell tried, 0, 1 and 5 seconds, so receiving is
 not what cures it. The 802.15.4 stop path does, which puts the radio to sleep
-and then disables it. Three things written above need correcting in its light:
+and then disables it. The same holds for the deafness a stop *without* the
+sleep causes (build B of the draft report): deaf 4 times in 4, not cured by a
+reset or a reflash, nor by another stop without the sleep, and cured by a
+clean start and stop 2 times in 2 -- and by a power-gate 2 times in 2.
+
+Why the power-gate failed on those two episodes is not known. Both were the
+first trial of a `latch_trial.py` run; repeating that trial's own sequence --
+power-gate, baseline scan, dirty, scan, power-gate -- did not reproduce it
+(3 trials, all cured).
+
+Two things written above need correcting in this light:
 
 - **"Twenty minutes later it heard 9"** was not the receiver recovering on its
   own. 802.15.4 sanity captures ran in that gap, and each one ended with a
   clean stop. The hour's wait, with nothing else run, did not cure it.
-- **"The retraction was confounded"** blamed the replication's null result on
-  the recovery power-gating each dirty trial before it was measured. The
-  power-gate cures this 0 times in 16, and the recovery at the time was that
-  power-gate and nothing more. So that explanation fails too, and why those
-  eight dirty trials read healthy is unknown. Only the result above survives:
-  the dirty arm, measured with nothing in the way, went deaf 9 times in 9 over
-  two days.
 - **"Only a power-gate clears"** it, and the automatic power cycle, were right
   for the deafness this document opens with. That one had an unknown cause,
   and on 2026-09-25 it reappeared with the flag reading clear; the power-gate
-  cured it again. They were wrong for 802.15.4 left running.
+  cured it again. For 802.15.4 left running they were usually right and
+  sometimes not.
+
+And one thing written here stands: **"The retraction was confounded."** An
+earlier version of this correction, written the same morning, counted the 16
+failed power-gates as 16 trials, concluded that the power-gate never cures
+this deafness, and so declared that explanation wrong as well. The 16 were two
+episodes. Running the 2026-09-07 firmware and trial tool again settled it: the
+old tool's dirty trials read healthy, 5 of 5, through the power-gate its
+measurement went through, while the same firmware measured with no recovery
+went deaf 4 times in 4, and one power-gate cured each. The replication's dirty
+trials were cured before they were measured, as said above.
 
 So the recovery changed:
 

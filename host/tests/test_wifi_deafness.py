@@ -63,8 +63,9 @@ def open_wifi(monkeypatch, *boards, frame_filter=None):
 
 
 def test_a_deaf_receiver_is_handed_back_and_the_capture_hears(monkeypatch):
-    """A clean 802.15.4 start and stop cured the deafness 802.15.4 left
-    running causes, 8 times in 8; the power-gate this tried first, 0 in 16."""
+    """A clean 802.15.4 start and stop has cured every episode of the
+    deafness 802.15.4 left running causes; the power-gate this tried first
+    left two deaf through 16 attempts."""
     deaf, hearing = WifiBoard(), WifiBoard(heard=3)
     session, cures = open_wifi(monkeypatch, deaf, hearing)
     assert cures == ["hand back"]

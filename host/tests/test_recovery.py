@@ -1,10 +1,10 @@
 """Handing the front end back after 802.15.4 was left running.
 
 Measured on the ESP32-C6, 2026-09-27: with 802.15.4 left running when the
-host went, the Wi-Fi receiver went deaf 8 times in 8. The power-gate the
-recovery used cured it 0 times in 16, and an hour of waiting did not either.
-Starting 802.15.4 and stopping it cleanly cured it every time, 8 in 8 --
-with no time spent receiving at all.
+host went, the Wi-Fi receiver went deaf every time. The power-gate the
+recovery used usually cured it, but left two episodes deaf through 16
+attempts, one of them for an hour. Starting 802.15.4 and stopping it cleanly
+has cured every episode it was tried on -- with no time spent receiving.
 """
 
 from esp32c6_sniffer import recovery
