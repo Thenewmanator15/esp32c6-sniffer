@@ -34,15 +34,6 @@ handed back and scanned again. That turns each deaf reading into a matched
 set, so "this clears it" rests on the same events as "the treatment caused it"
 rather than on separate samples.
 
-WHAT IT FOUND, 2026-09-27
--------------------------
-Dirty: deaf 8 times in 8. The power-gate cured it 0 times in 16, and an hour's
-wait did not either; the hand-back cured it every time, with no time spent
-receiving. So the firmware now hands back at boot when the flag is set, and
-opening the port boots it -- which cures a dirty trial before it is measured.
-Standard firmware therefore scores every dirty trial INVALID; measuring the
-latch itself needs a build with -DSN_154_NO_BOOT_HANDBACK=1.
-
 *The outcome is a count, scored as a proportion.* Access points found, not
 frames. It is bounded, it does not depend on traffic happening to be sent, and
 zero versus non-zero is unambiguous. The raw counts are written out too, so the
@@ -53,6 +44,18 @@ WHAT WOULD FALSIFY THE CLAIM
 Deafness appearing in the clean or idle arms at a similar rate. The claim is
 specifically that *leaving the radio enabled* does it -- not that using
 802.15.4 at all does, and not that the receiver simply fails on its own.
+
+WHAT IT FOUND, 2026-09-27
+-------------------------
+Dirty: deaf every time, measured with nothing in the way -- on today's
+firmware and on the 2026-09-07 one alike. The power-gate usually cures it (9
+episodes in 9 that afternoon) but left two episodes deaf through 16 attempts
+between them, for a reason not found; one of those stayed deaf through an
+hour's wait. The hand-back has cured every episode it was tried on, with no
+time spent receiving. So the firmware now hands back at boot when the flag is
+set, and opening the port boots it -- which cures a dirty trial before it is
+measured. Standard firmware therefore scores every dirty trial INVALID;
+measuring the latch itself needs a build with -DSN_154_NO_BOOT_HANDBACK=1.
 """
 
 from __future__ import annotations

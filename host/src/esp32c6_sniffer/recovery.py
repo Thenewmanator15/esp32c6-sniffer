@@ -7,10 +7,11 @@ firmware records that in RTC memory, where it survives the reset opening the
 port causes, and answers RADIO_DIRTY.
 
 What cures it is starting the 802.15.4 radio and stopping it cleanly -- put to
-sleep, then disabled -- which hands the front end back: 8 times in 8, at once,
-with no time spent receiving. The deep-sleep power-gate this module used to do
-cured it 0 times in 16, and an hour of waiting did not either. The power-gate
-stays for a deafness with some other cause.
+sleep, then disabled -- which hands the front end back: every episode it has
+been tried on, at once, with no time spent receiving. The deep-sleep power-gate
+this module used to do usually cures it too, but left two episodes deaf
+through 16 attempts between them, one of them for an hour. So the hand-back
+goes first, and the power-gate stays as the fallback.
 
 Without this a Wi-Fi capture started after an 802.15.4 one returns nothing,
 silently and indistinguishably from an empty channel.
@@ -112,10 +113,10 @@ def _hand_back_on(ser: serial.Serial, parser: StreamParser) -> None:
 def power_cycle(port: str) -> None:
     """Power-gates the radio domain and waits for the board to come back.
 
-    The fallback, for a receiver the hand-back did not cure. It does not cure
-    the deafness 802.15.4 left running causes -- 0 times in 16 -- but it was
-    found curing one that had some other cause. Opens and closes the port
-    itself, like ensure_wifi_ready.
+    The fallback, for a receiver the hand-back did not cure. It usually cures
+    the deafness 802.15.4 left running causes, but not always, and it cured
+    one that had some other cause. Opens and closes the port itself, like
+    ensure_wifi_ready.
     """
     ser = _open(port)
     try:

@@ -260,11 +260,12 @@ esp_err_t sn_radio80211_set_csi(bool enable);
  * So it is not using the radio, it is walking away with it still on. A capture
  * session sends STOP on close, so ordinary use is fine; a crashed or killed
  * host is what poisons it. Not a driver rebuild, a reflash, a full
- * erase-flash, an hour's wait or the deep-sleep power-gate recovers it (the
- * last 0 in 16, 2026-09-27). Starting 802.15.4 and stopping it cleanly does,
- * 8 in 8, with no time spent receiving. The board records the condition in
- * RTC_NOINIT memory and does exactly that at boot when it sees it; the host
- * does it too before a Wi-Fi capture, for older firmware.
+ * erase-flash or an hour's wait recovers it. The deep-sleep power-gate
+ * usually does, but left two episodes deaf through 16 attempts (2026-09-26
+ * and 27). Starting 802.15.4 and stopping it cleanly has cured every episode
+ * it was tried on, with no time spent receiving. The board records the
+ * condition in RTC_NOINIT memory and does exactly that at boot when it sees
+ * it; the host does it too before a Wi-Fi capture, for older firmware.
  *
  * Two defects here WERE ours and are fixed:
  *

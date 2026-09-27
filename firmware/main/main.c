@@ -307,11 +307,13 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
          * does not clear it but a physical unplug does, the fault lives outside
          * the gated domains.
          *
-         * Measured 2026-09-27: it does NOT cure the deafness 802.15.4 left
-         * running causes (0 in 16); starting and stopping 802.15.4 cleanly
-         * does, which the board now does itself at boot. It did cure the
-         * 2026-09-25 deafness, with the flag clear and the cause unknown, so
-         * the host keeps it as the fallback after a hand-back.
+         * Measured 2026-09-27: it usually cures the deafness 802.15.4 left
+         * running causes -- 9 episodes in 9 -- but two others stayed deaf
+         * through 16 of these between them, for a reason not found. Starting
+         * and stopping 802.15.4 cleanly has cured every episode it was tried
+         * on, so the board now does that itself at boot and the host keeps
+         * this as the fallback. It also cured the 2026-09-25 deafness, whose
+         * cause is unknown.
          *
          * Deliberately a command rather than part of the automatic stall
          * recovery, because it drops the USB link and would end a running
@@ -516,10 +518,11 @@ void app_main(void)
     /* 802.15.4 left running when a host went leaves Wi-Fi deaf until it is
      * started and stopped cleanly, and this board boots whenever a host
      * opens the port -- so doing it here cures it for every tool that
-     * connects, before any command arrives. 8 in 8, where the power cycle
-     * this used to leave to the host cured it 0 in 16; so the power cycle's
-     * own timer wake no longer clears the flag either -- that hid a latch
-     * it had not cured.
+     * connects, before any command arrives. It has cured every episode it
+     * was tried on, where the power cycle this used to leave to the host
+     * left two episodes deaf through 16 attempts; so the power cycle's own
+     * timer wake no longer clears the flag either -- that hid a latch it had
+     * not cured. (Waking from it is a boot, so this runs after it anyway.)
      *
      * SN_154_NO_BOOT_HANDBACK builds without it, for measuring the latch
      * itself: tools/latch_trial.py's dirty arm is otherwise cured before

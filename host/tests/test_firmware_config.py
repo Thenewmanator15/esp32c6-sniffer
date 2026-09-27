@@ -94,7 +94,8 @@ def _body(text: str, signature: str) -> str:
 
 def test_the_c6_hands_its_front_end_back_at_boot():
     """802.15.4 left running deafens Wi-Fi until 802.15.4 is started and
-    stopped cleanly (8 in 8; the power-gate 0 in 16). The C6 restarts when
+    stopped cleanly (every episode it was tried on; the power-gate left two
+    deaf through 16 attempts). The C6 restarts when
     its port opens, so doing it at boot cures it for every tool that
     connects -- unless built without, for measuring the latch itself."""
     main = _c6("main.c")
@@ -107,11 +108,35 @@ def test_the_c6_hands_its_front_end_back_at_boot():
 def test_a_clean_802154_stop_clears_the_flag_and_nothing_else_does():
     """A clean stop is the cure, so it clears the flag -- only with the
     sleep, since the stop without it is what latches. The power cycle's
-    timer wake does not: the power-gate does not cure this deafness, and
-    clearing the flag there hid it."""
+    timer wake does not: the power-gate does not always cure this deafness,
+    and clearing the flag there hid the times it had not."""
     stop = _body(_c6("radio154.c"), "void sn_radio154_stop(void)")
     sleep_at = stop.index("esp_ieee802154_sleep()")
     clear_at = stop.index("set_front_end_dirty(false)")
     endif_at = stop.index("#endif", sleep_at)
     assert sleep_at < clear_at < endif_at
     assert "sn_radio154_clear_dirty()" not in _c6("main.c")
+
+
+def test_every_build_knob_the_c6_firmware_tests_for_is_forwarded_by_cmake():
+    """`idf.py -DX=1` sets a CMake variable, not a C macro; only
+    main/CMakeLists.txt turns one into the other. SN_154_NO_BOOT_HANDBACK
+    was documented, tested for in main.c, and never forwarded -- so the
+    build meant to measure the latch still cured it at boot."""
+    cmake = (C6_MAIN / "CMakeLists.txt").read_text(encoding="utf-8")
+    knobs = set()
+    for path in sorted(C6_MAIN.glob("*.[ch]")):
+        text = re.sub(r"\\\r?\n", " ", _c6(path.name))    # continuations
+        for line in text.splitlines():
+            if not re.match(r"\s*#\s*(if|ifdef|ifndef|elif)\b", line):
+                continue
+            knobs.update(re.findall(r"defined\s*\(\s*(SN_[A-Z0-9_]+)\s*\)", line))
+            bare = re.match(r"\s*#\s*ifn?def\s+(SN_[A-Z0-9_]+)", line)
+            if bare:
+                knobs.add(bare.group(1))
+    knobs = {k for k in knobs if not k.endswith("_H")}     # include guards
+    assert {"SN_154_LEGACY_STOP", "SN_154_NO_BOOT_HANDBACK"} <= knobs
+    unforwarded = sorted(
+        k for k in knobs
+        if f"if(DEFINED {k})" not in cmake or f"{k}=${{{k}}}" not in cmake)
+    assert unforwarded == []

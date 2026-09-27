@@ -182,9 +182,9 @@ def test_a_frame_that_is_not_a_packet_is_heard_on_no_channel():
 
 
 def test_recover_hands_the_radio_back_before_power_gating(monkeypatch):
-    """The deafness 802.15.4 left running causes was cured by a clean
-    802.15.4 start and stop 8 times in 8, and by the power-gate --recover
-    used to do 0 times in 16. The power-gate stays for anything else."""
+    """A clean 802.15.4 start and stop has cured every episode of the
+    deafness 802.15.4 left running causes; the power-gate --recover used to
+    do left two deaf. The power-gate stays as the fallback."""
     import wifi_survey
 
     steps = []
