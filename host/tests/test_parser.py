@@ -179,7 +179,9 @@ def test_one_large_read_parses_in_linear_time():
     frames = parser.feed(chunk)
     elapsed = time.perf_counter() - started
     assert len(frames) == 21000
-    assert elapsed < 0.3, f"{elapsed:.2f} s for {len(chunk) // 1024} KB"
+    # About 0.07 s here; 0.5 leaves room for a busy machine and still
+    # fails the quadratic parser by more than half.
+    assert elapsed < 0.5, f"{elapsed:.2f} s for {len(chunk) // 1024} KB"
 
 
 def test_the_check_never_holds_a_frame_back():
