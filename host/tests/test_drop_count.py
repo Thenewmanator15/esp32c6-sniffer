@@ -86,6 +86,7 @@ def test_the_file_records_each_lost_packet_once(monkeypatch):
             self.recovered_from_802154 = False
             self.power_cycled_for_deafness = False
             self.handed_back_for_deafness = False
+            self.periodic_needs_extended = False
             self._stop = threading.Event()
 
         def __enter__(self):

@@ -131,6 +131,7 @@ DEFAULT_PORT = "COM3" if os.name == "nt" else "/dev/ttyACM0"
 
 # The board table lives in the host package, where the tools can reach it
 # too. See esp32c6_sniffer/boards.py.
+from esp32c6_sniffer import __version__  # noqa: E402
 from esp32c6_sniffer.boards import (  # noqa: E402
     BOARDS, ESP32C6_USB_PID, ESP32C6_USB_VID,
 )
@@ -295,6 +296,20 @@ def hop_sets(name: str) -> dict:
     return HOP_SETS.get(radio_kind(name), {0: None})
 
 
+def hop_start(channel: int, hop_channels) -> tuple[int, int]:
+    """The channel a capture opens on, and its place in the hop set.
+
+    Inside the set when hopping: a board given 19-26 used to open on the
+    dialog's Channel, 11 by default, and spend its first dwell on the other
+    board's half. A dialog channel already in the set is kept, and the hop
+    carries on from it."""
+    if not hop_channels:
+        return channel, 0
+    if channel in hop_channels:
+        return channel, hop_channels.index(channel)
+    return hop_channels[0], 0
+
+
 def is_ble(name: str) -> bool:
     return radio_kind(name) == "ble"
 
@@ -453,7 +468,9 @@ def print_interfaces(selected: str | None = None) -> None:
     # The control bitfield must appear BOTH here and on the interface line.
     # Declaring controls only in --extcap-config does not make Wireshark
     # create the pipes, and the failure is silent.
-    print(f"extcap {{version=0.3.0}}{{display=ESP32-C6 Sniffer}}"
+    # The package's own version: this said 0.3.0 while the package and the
+    # release tag said 0.1.0.
+    print(f"extcap {{version={__version__}}}{{display=ESP32-C6 Sniffer}}"
           f"{{control={CONTROL_BITS}}}")
     for value, display in board_interfaces():
         print(f"interface {{value={value}}}{{display={display}}}"
@@ -588,17 +605,21 @@ def print_config(interface: str, reload_option: str | None = None,
         scanned = {}
         if reload_option == "channel" and is_wifi(interface):
             scanned = scanned_channel_labels(interface, port or default_port())
+        # {default=true} on the value, not only {default=} on the arg: the
+        # Qt dialog preselects only the value marked so, and otherwise the
+        # first. The Wi-Fi dialog said 6 and opened on 1.
         for channel in range(spec["min"], spec["max"] + 1):
+            mark = "{default=true}" if channel == spec["default"] else ""
             print(f"value {{arg=1}}{{value={channel}}}"
                   f"{{display={channel_label(interface, channel)}"
-                  f"{scanned.get(channel, '')}}}")
+                  f"{scanned.get(channel, '')}}}{mark}")
     # Only where there is a switch to throw. A selector on a board with one
     # hardwired antenna would look like a setting, be set, and change nothing.
     if board["antenna"]:
         print(f"arg {{number=2}}{{call=--antenna}}{{display=Antenna}}"
               f"{{type=selector}}{{default=0}}"
               f"{{tooltip={board['antenna_note']}}}")
-        print("value {arg=2}{value=0}{display=Onboard ceramic}")
+        print("value {arg=2}{value=0}{display=Onboard ceramic}{default=true}")
         print("value {arg=2}{value=1}{display=External U.FL}")
 
     # Every board's 802.15.4 interface. This once tested the name against the
@@ -606,8 +627,11 @@ def print_config(interface: str, reload_option: str | None = None,
     # Thread credentials, no channel hop -- though the capture handles all
     # three the same way on either board.
     if radio_kind(interface) == "802154":
+        # {mustexist=true}: without it Wireshark opens a Save dialog, which
+        # offers to overwrite the key file being chosen and never checks the
+        # file is there. The CSI sidecar is written, so it keeps the Save.
         print("arg {number=3}{call=--keys}{display=Zigbee key file}"
-              "{type=fileselect}{fileext=Key files (*.txt)}"
+              "{type=fileselect}{mustexist=true}{fileext=Key files (*.txt)}"
               "{tooltip=Records Zigbee network keys IN the capture, in a "
               "Decryption Secrets Block. Wireshark shows the block but does "
               "NOT decrypt from it: no dissector consumes the Zigbee secret "
@@ -616,7 +640,8 @@ def print_config(interface: str, reload_option: str | None = None,
               "that changes. One key per line, 32 hex digits, optionally "
               "prefixed nwk or aps. For a network you own}")
         print("arg {number=4}{call=--thread}{display=Thread credentials}"
-              "{type=fileselect}{fileext=Credential files (*.txt)}"
+              "{type=fileselect}{mustexist=true}"
+              "{fileext=Credential files (*.txt)}"
               "{tooltip=A file holding your border router's operational "
               "dataset, or a bare 32-hex network key. Thread encrypts at the "
               "MAC layer, and its key cannot ride inside a capture -- "
@@ -637,7 +662,8 @@ def print_config(interface: str, reload_option: str | None = None,
               "per-frame field in this link type, so a hopped capture stays "
               "self-describing. You will miss whatever lands while the radio "
               "is elsewhere}")
-        print("value {arg=5}{value=0}{display=Off, stay on one channel}")
+        print("value {arg=5}{value=0}{display=Off, stay on one channel}"
+              "{default=true}")
         print("value {arg=5}{value=1}"
               "{display=11, 15, 20, 25 (Zigbee preferred)}")
         print("value {arg=5}{value=2}{display=All channels, 11-26}")
@@ -679,7 +705,8 @@ def print_config(interface: str, reload_option: str | None = None,
                   "empty to hear everything}")
             holds = board_for_interface(interface)["ble_keys"]
             print("arg {number=8}{call=--ble-keys}{display=Device keys}"
-                  "{type=fileselect}{fileext=Key files (*.txt)}"
+                  "{type=fileselect}{mustexist=true}"
+                  "{fileext=Key files (*.txt)}"
                   "{tooltip=Identity resolving keys, so a device that changes "
                   "its address is recognised under every address it uses and "
                   "shown under its fixed identity address. One per line: the "
@@ -697,13 +724,17 @@ def print_config(interface: str, reload_option: str | None = None,
                   "{tooltip=Syncs to periodic advertising trains as they are "
                   "seen, which is how LE Audio and Auracast broadcasts become "
                   "visible. Off by default because syncing spends receive "
-                  "windows that would otherwise go to advertisements}")
+                  "windows that would otherwise go to advertisements. Needs "
+                  "an Extended Advertising PHYs setting: legacy scanning "
+                  "sees no trains to follow, so with Legacy only it is "
+                  "turned off and the log says so}")
         print("arg {number=5}{call=--ble-phys}{display=Advertising PHYs}"
               "{type=selector}{default=1}"
               "{tooltip=Extended scanning reports both legacy and BLE 5 "
               "extended advertisements. Legacy-only cannot see the latter at "
               "all, and is here so the difference can be measured}")
-        print("value {arg=5}{value=1}{display=Extended, 1M (recommended)}")
+        print("value {arg=5}{value=1}{display=Extended, 1M (recommended)}"
+              "{default=true}")
         print("value {arg=5}{value=5}{display=Extended, 1M and Coded (long "
               "range, at the cost of 1M coverage)}")
         print("value {arg=5}{value=0}{display=Legacy only, no BLE 5 "
@@ -725,7 +756,8 @@ def print_config(interface: str, reload_option: str | None = None,
           "{type=selector}{default=5}"
           "{group=Throughput}{tooltip=Control frames are the most numerous and the least "
           "informative, so dropping them buys link budget cheaply}")
-    print("value {arg=4}{value=5}{display=Management and data (recommended)}")
+    print("value {arg=4}{value=5}{display=Management and data (recommended)}"
+          "{default=true}")
     print("value {arg=4}{value=15}{display=Everything, including control}")
     print("value {arg=4}{value=1}{display=Management only (beacons, probes)}")
     print("arg {number=5}{call=--hop}{display=Channel hop}"
@@ -733,7 +765,8 @@ def print_config(interface: str, reload_option: str | None = None,
           "{group=Sweeping}{tooltip=Sweeps channels during the capture. Each frame carries its "
           "own channel, so a hopped capture stays self-describing. "
           "You will miss whatever lands while the radio is elsewhere}")
-    print("value {arg=5}{value=0}{display=Off, stay on one channel}")
+    print("value {arg=5}{value=0}{display=Off, stay on one channel}"
+          "{default=true}")
     print("value {arg=5}{value=1}{display=1, 6, 11 (non-overlapping)}")
     print("value {arg=5}{value=2}{display=All channels, 1-13}")
     print("arg {number=6}{call=--hop-dwell}{display=Hop dwell (ms)}"
@@ -745,7 +778,7 @@ def print_config(interface: str, reload_option: str | None = None,
           "{type=selector}{default=0}"
           "{tooltip=Watching a 40 MHz network on its primary channel alone "
           "sees half of it, so this must match the network}")
-    print("value {arg=7}{value=0}{display=20 MHz}")
+    print("value {arg=7}{value=0}{display=20 MHz}{default=true}")
     print("value {arg=7}{value=1}{display=40 MHz, secondary above}")
     print("value {arg=7}{value=2}{display=40 MHz, secondary below}")
     print("arg {number=8}{call=--drop-acks}{display=Drop acknowledgements}"
@@ -1301,6 +1334,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         # that is unreadable from the point they collide.
         write_lock = threading.Lock()
 
+        channel, hop_index = hop_start(channel, hop_channels)
         with CaptureSession(port, channel=channel,
                             antenna=Antenna(antenna),
                             radio=radio,
@@ -1339,6 +1373,11 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     + (", then power-cycled it, and started again"
                        if session.power_cycled_for_deafness
                        else " and started again"))
+            if session.periodic_needs_extended:
+                deferred_log.append(
+                    "Follow periodic advertising is off for this capture: it "
+                    "needs extended scanning, and Advertising PHYs is set to "
+                    "Legacy only")
             for message in deferred_log:
                 log(message)
 
@@ -1347,7 +1386,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 # serial port and applies it between reads, so hopping from a
                 # second thread cannot interleave bytes mid-frame.
                 def hopper() -> None:
-                    index = 0
+                    index = hop_index
                     while state["running"]:
                         time.sleep(hop_dwell_ms / 1000.0)
                         if not state["running"]:
@@ -1600,20 +1639,33 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ble-keys", dest="ble_keys_file", default=None)
     parser.add_argument("--ble-periodic", dest="ble_periodic",
                         action="store_true")
+    parser.add_argument("--extcap-capture-filter", dest="capture_filter",
+                        default=None)
     args, unknown = parser.parse_known_args(argv)
 
     # Wireshark shows a capture-filter box for extcap interfaces and passes
-    # whatever is typed there. parse_known_args swallowed it, so a filter was
+    # whatever is typed there. It used to be swallowed, so a filter was
     # accepted and then silently ignored -- the capture ran unfiltered and
     # looked fine, which is the worst way to handle an instruction.
-    if "--extcap-capture-filter" in unknown:
-        sys.stderr.write(
-            "a capture filter cannot be applied here: filtering happens on "
-            "the board, before the USB link, and it does not speak BPF. Use "
-            "the interface options instead -- Frame types and Channel for "
-            "Wi-Fi, Channel for 802.15.4 -- or filter after capture with a "
-            "display filter." + os.linesep)
+    #
+    # Two callers. Without --capture, Wireshark is validating the box as it
+    # is typed in: it reads stdout, where nothing means valid and one line
+    # means invalid, shown to the user. Written to stderr with exit 1, as it
+    # was, Wireshark marks the filter "unknown" and the reason appears only
+    # after Start. With --capture, the capture is refused.
+    if args.capture_filter is not None and args.capture_filter.strip():
+        reason = ("a capture filter cannot be applied here: filtering happens "
+                  "on the board, before the USB link, and it does not speak "
+                  "BPF. Use the interface options instead -- Frame types and "
+                  "Channel for Wi-Fi, Channel for 802.15.4, Only these devices "
+                  "for BLE -- or filter after capture with a display filter.")
+        if not args.capture:
+            print(reason)
+            return 0
+        sys.stderr.write(reason + os.linesep)
         return 1
+    if args.capture_filter is not None and not args.capture:
+        return 0                # an empty box: nothing to object to
     if args.port is None:
         args.port = default_port()
 
