@@ -50,6 +50,7 @@ import argparse
 import csv
 import itertools
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -154,15 +155,18 @@ def count_wifi_frames(port: str, seconds: float = CAPTURE_S) -> int | None:
     except (OSError, RuntimeError, TimeoutError, serial.SerialException):
         return None
     frames = 0
+    # Stopped by a timer, not by a deadline checked between frames: a deaf
+    # receiver yields none, and the check never ran -- the trial waited for
+    # ever on exactly the state it exists to measure.
+    timer = threading.Timer(seconds, session.request_stop)
+    timer.start()
     try:
-        deadline = time.monotonic() + seconds
         for _record, _ts, _len in session.records():
             frames += 1
-            if time.monotonic() > deadline:
-                break
     except (OSError, RuntimeError, serial.SerialException):
         return None
     finally:
+        timer.cancel()
         try:
             session.close()
         except (OSError, serial.SerialException):
@@ -232,10 +236,31 @@ def read_dirty_flag(port: str) -> bool | None:
         ser.close()
 
 
+def await_recovery(port: str, measure, limit_s: float, poll_s: float,
+                   clock=time.monotonic, sleep=time.sleep) -> float | None:
+    """Seconds until the receiver hears again on its own, or None.
+
+    For a deaf trial the power-gate did not cure. The first properly
+    measured dirty trial was one: fourteen power-gates in seven minutes all
+    failed, every later trial read INVALID, and the receiver came back by
+    itself some twenty minutes later. So rather than end the run, this waits
+    -- measuring every poll_s, never power-gating -- and says how long it
+    took, which is itself worth knowing. None from the measure is a board
+    that did not answer, and does not count as heard.
+    """
+    start = clock()
+    while clock() - start < limit_s:
+        sleep(poll_s)
+        if measure(port):
+            return clock() - start
+    return None
+
+
 def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     row = {"cycle": cycle, "arm": arm, "baseline": None, "applied": None,
            "dirty_flag": None, "heard": None, "after": None,
-           "recovered": None, "valid": False, "deaf": None}
+           "recovered": None, "valid": False, "deaf": None,
+           "self_recovered_s": None}
 
     # 1. Prove the instrument reads non-zero before trusting any zero from it.
     try:
@@ -354,10 +379,16 @@ def main() -> int:
                          "rotation. Use it to put controls before the arm under "
                          "test, e.g. dirty,dirty,clean")
     ap.add_argument("--stop-on-deaf", action="store_true",
-                    help="halt as soon as a deaf trial cannot be recovered. "
-                         "On this board the state is sticky and only physically "
-                         "removing power clears it, so every later trial would "
-                         "read INVALID and tell you nothing")
+                    help="halt as soon as a deaf trial cannot be recovered by "
+                         "a power-gate, rather than carry on into trials that "
+                         "would all read INVALID")
+    ap.add_argument("--await-recovery", type=float, default=0.0,
+                    metavar="MINUTES",
+                    help="after a deaf trial the power-gate did not cure, wait "
+                         "up to this long for the receiver to hear again on its "
+                         "own, time it, and carry on; halt if it does not")
+    ap.add_argument("--poll-s", type=float, default=60.0,
+                    help="how often to measure while waiting (default 60)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -389,18 +420,39 @@ def main() -> int:
         for arm in order:
             row = trial(args.port, arm, cycle, verbose, measure)
             rows.append(row)
-            if (args.stop_on_deaf and row["valid"] and row["deaf"]
-                    and not row["recovered"]):
+            stuck = row["valid"] and row["deaf"] and not row["recovered"]
+            if stuck and args.await_recovery > 0:
+                if verbose:
+                    print(f"    waiting up to {args.await_recovery:g} min for it "
+                          f"to hear again on its own...")
+                took = await_recovery(args.port, measure,
+                                      args.await_recovery * 60, args.poll_s)
+                row["self_recovered_s"] = took
+                if took is not None:
+                    if verbose:
+                        print(f"    heard again after {took / 60:.1f} min")
+                    continue
+                print()
+                print(f"  stopping: still deaf after {args.await_recovery:g} min.")
+                halted = True
+                break
+            if args.stop_on_deaf and stuck:
                 print()
                 print("  stopping: deaf and the power-gate did not recover it.")
-                print("  Physically unplug the board and plug it back in; that")
-                print("  is the only thing found to clear this state.")
+                print("  Unplugging the board clears it; so, given time, does")
+                print("  waiting -- see --await-recovery.")
                 halted = True
                 break
         if halted:
             break
 
     summarise(rows)
+    waits = [r["self_recovered_s"] for r in rows
+             if r["valid"] and r["deaf"] and not r["recovered"]]
+    if waits:
+        shown = ", ".join("never" if w is None else f"{w / 60:.1f} min"
+                          for w in waits)
+        print(f"  heard again on its own, power-gates having failed: {shown}")
 
     if args.csv:
         with open(args.csv, "w", newline="", encoding="utf-8") as fh:

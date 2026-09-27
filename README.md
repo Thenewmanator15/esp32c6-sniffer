@@ -51,7 +51,9 @@ prebuilt ESP32-C6 firmware, the Wireshark plugin and the host package.
    way.
 3. Unpack `esp32c6-sniffer-plugin-*.zip` and run `install.ps1` (Windows) or
    `install.sh` (Linux/macOS). It builds a Python environment beside the plugin
-   from the bundled wheel, so your system Python is left alone.
+   from the bundled wheel, so your system Python is left alone. It also adds
+   `cryptography`, which does the AES behind device keys about fifty times
+   faster; where that will not install, the plugin uses its own AES instead.
 4. Restart Wireshark.
 
 The ESP32-C6 firmware and the plugin in one release are built from the same
@@ -115,6 +117,9 @@ cd host                                              # Linux / macOS
 python3 -m venv .venv
 .venv/bin/python -m pip install -e ".[dev]"
 ```
+
+`dev` includes the optional `fast` extra, `cryptography`. Without it the host
+does the AES for device keys itself, at about 10 µs a block rather than 0.2.
 
 **3. Wireshark plugin**
 

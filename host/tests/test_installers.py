@@ -248,3 +248,16 @@ def test_install_sh_follows_wireshark_config_dir(tmp_path):
                             WIRESHARK_CONFIG_DIR=str(chosen))
     assert result.returncode == 0, result.stderr
     assert (chosen / "profiles" / "ESP32-C6 BLE").is_dir()
+
+
+@pytest.mark.parametrize("name", ["install.ps1", "install.sh"])
+def test_a_release_install_asks_for_the_aes_speed_up_and_manages_without(name):
+    """The fast extra brings cryptography, about fifty times the speed for
+    device-key checks. A platform where it will not install must still get
+    a working plugin, on the host's own AES."""
+    text = (REPO / "extcap" / name).read_text(encoding="utf-8")
+    assert "[fast]" in text
+    installs = [line for line in text.splitlines()
+                if "pip install" in line and "--upgrade pip" not in line]
+    assert any("[fast]" in line for line in installs)
+    assert any("[fast]" not in line and "wheel" in line.lower() for line in installs)

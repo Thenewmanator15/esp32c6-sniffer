@@ -121,7 +121,13 @@ elif [[ -n "$wheel" ]]; then
     "$bootstrap" -m venv "$target_venv"
     interpreter="$target_venv/bin/python"
     "$interpreter" -m pip install --quiet --upgrade pip
-    "$interpreter" -m pip install --quiet "$wheel"
+    # With the fast extra -- cryptography, about fifty times the speed for
+    # device-key checks -- and without it if that will not install: the
+    # plugin falls back to its own AES.
+    if ! "$interpreter" -m pip install --quiet "$wheel[fast]"; then
+        echo "the fast extra would not install; carrying on without it"
+        "$interpreter" -m pip install --quiet "$wheel"
+    fi
     echo "installed $(basename "$wheel")"
     from_wheel=1
 else
