@@ -103,16 +103,18 @@ BOARDS = {
         # The same arrangement as the C6's, found while spiking this board:
         # rfsw_pwr on gpio2.3 powers the switch and rfsw_ctl on gpio2.5
         # selects the antenna, both regulator-boot-on in its devicetree.
-        # Which position selects which antenna is not documented anywhere.
-        # See https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md.
+        # Low is the ceramic antenna and high the IPEX connector, as Seeed's
+        # getting-started guide sets them; firmware 7 drives it. See
+        # https://github.com/Thenewmanator15/nrf54l15-sniffer/blob/main/docs/2026-09-14-nrf54l15-spike.md.
         "antenna": True,
         # Deliberately not the C6's +13 dB figure: that was measured on the
         # C6 and is a property of its switch and antennas, not of this one.
-        # Which position selects which antenna is not known here either.
-        "antenna_note": ("External needs an IPEX antenna fitted. Which "
-                         "position selects which antenna is not yet "
-                         "established on this board, and the gain "
-                         "difference has not been measured"),
+        # Measured here with an antenna fitted, 8 advertisers alternating:
+        # the external position read a median 14.5 dB weaker, -8 to -17.
+        "antenna_note": ("External needs an IPEX antenna fitted. Measured "
+                         "on one board with one fitted, it read about "
+                         "14.5 dB weaker than the onboard antenna -- check "
+                         "the antenna is seated and made for 2.4 GHz"),
     },
 }
 

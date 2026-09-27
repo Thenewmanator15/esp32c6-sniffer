@@ -120,7 +120,9 @@ MAX_CLOCK_SKEW_S = 60.0
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
     "esp32c6": 7,
-    "nrf54l15": 6,
+    # 7: frames without the two FCS bytes 6 left on each, which kept every
+    # secured frame from decrypting; and Legacy PHY and the antenna work.
+    "nrf54l15": 7,
 }
 
 #: How to reflash each board, quoted back to the operator on a mismatch.
