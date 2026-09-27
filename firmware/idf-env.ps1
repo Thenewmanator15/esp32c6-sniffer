@@ -47,7 +47,10 @@ $candidates = @(
 ) | Where-Object { $_ }
 
 $found = $candidates |
-    Where-Object { Test-Path (Join-Path $_ 'export.ps1') } |
+    # Path.Combine, not Join-Path: Join-Path throws for a drive that does not
+    # exist, so one candidate on a missing drive -- an IDF_PATH left on a
+    # removed drive, or the C: default on Linux -- ended the search.
+    Where-Object { Test-Path -LiteralPath ([System.IO.Path]::Combine($_, 'export.ps1')) } |
     Select-Object -First 1
 
 if (-not $found) {
