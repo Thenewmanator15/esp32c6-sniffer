@@ -66,3 +66,52 @@ def test_the_trial_measures_without_recovering(monkeypatch):
     latch_trial.count_access_points("COM_UNUSED")
     latch_trial.count_wifi_frames("COM_UNUSED", seconds=0.0)
     assert seen == [("scan", False), ("session", False)]
+
+
+class SilentSession:
+    """A receiver that hears nothing, as a deaf one does: records() yields
+    nothing until it is asked to stop, as a port read that times out does."""
+
+    def __init__(self, port, **kw):
+        import threading
+        import types
+        self._stop = threading.Event()
+        self._serial = types.SimpleNamespace(read=lambda n=1: b"")
+        self.stats = object()
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    def request_stop(self):
+        self._stop.set()
+
+    def records(self):
+        import time
+        while not self._stop.is_set():
+            time.sleep(0.01)
+        return
+        yield
+
+
+def finishes(fn, limit: float) -> list:
+    """fn's result, or [] if it was still running after `limit` seconds --
+    so a hang fails the test instead of stalling the suite."""
+    import threading
+    result = []
+    thread = threading.Thread(target=lambda: result.append(fn()), daemon=True)
+    thread.start()
+    thread.join(limit)
+    return result
+
+
+def test_a_deaf_receiver_measures_as_no_frames_rather_than_forever(monkeypatch):
+    """The deadline was checked only when a frame arrived, so a receiver
+    that heard nothing -- the very state the trial exists to measure, now
+    that it measures without the recovery -- kept the trial waiting for
+    ever."""
+    monkeypatch.setattr(latch_trial, "CaptureSession", SilentSession)
+    assert finishes(lambda: latch_trial.count_wifi_frames("COM_UNUSED",
+                                                          seconds=0.3), 5.0) == [0]

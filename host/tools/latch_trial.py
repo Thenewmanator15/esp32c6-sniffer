@@ -50,6 +50,7 @@ import argparse
 import csv
 import itertools
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -154,15 +155,18 @@ def count_wifi_frames(port: str, seconds: float = CAPTURE_S) -> int | None:
     except (OSError, RuntimeError, TimeoutError, serial.SerialException):
         return None
     frames = 0
+    # Stopped by a timer, not by a deadline checked between frames: a deaf
+    # receiver yields none, and the check never ran -- the trial waited for
+    # ever on exactly the state it exists to measure.
+    timer = threading.Timer(seconds, session.request_stop)
+    timer.start()
     try:
-        deadline = time.monotonic() + seconds
         for _record, _ts, _len in session.records():
             frames += 1
-            if time.monotonic() > deadline:
-                break
     except (OSError, RuntimeError, serial.SerialException):
         return None
     finally:
+        timer.cancel()
         try:
             session.close()
         except (OSError, serial.SerialException):

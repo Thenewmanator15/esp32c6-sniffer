@@ -23,7 +23,7 @@ import argparse
 import pathlib
 import struct
 import sys
-import time
+import threading
 from dataclasses import dataclass, field
 
 from esp32c6_sniffer import boards
@@ -142,6 +142,9 @@ def capture(port: str, board: dict, radio: Radio, channel: int, seconds: float,
     session = CaptureSession(port, channel=channel, radio=radio,
                              board=board["id"], baud=board["baud"], **kwargs)
     session.open()
+    # Stopped by a timer: a deadline checked between records never ran on a
+    # quiet link, and the probe never finished.
+    timer = threading.Timer(seconds, session.request_stop)
     try:
         # The session owns the port. Wrapping its read is the one way to see
         # the bytes before the parser does, which is the whole point here.
@@ -153,12 +156,12 @@ def capture(port: str, board: dict, radio: Radio, channel: int, seconds: float,
             return data
 
         session._serial.read = tee
-        deadline = time.monotonic() + seconds
+        timer.start()
         for _record in session.records():
-            if time.monotonic() > deadline:
-                break
+            pass
         stats = session.stats
     finally:
+        timer.cancel()
         session.close()
     return bytes(raw), stats
 

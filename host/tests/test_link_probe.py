@@ -67,3 +67,17 @@ def test_frames_longer_than_the_bridge_holds_are_counted():
 def test_without_two_stats_frames_loss_is_unknown_not_zero():
     report = link_probe.analyse(packet(1) + packet(2))
     assert report.lost_bytes is None
+
+
+def test_a_silent_link_ends_the_probe_on_time(monkeypatch):
+    """The deadline was checked only when a record arrived, so on a quiet
+    channel the probe never finished."""
+    from esp32c6_sniffer.boards import board_by_id
+    from esp32c6_sniffer.control import Radio
+    from test_latch_trial import SilentSession, finishes
+
+    monkeypatch.setattr(link_probe, "CaptureSession", SilentSession)
+    done = finishes(lambda: link_probe.capture(
+        "COM_UNUSED", board_by_id("esp32c6"), Radio.IEEE802154, 11, 0.3,
+        60, 60, False), 5.0)
+    assert len(done) == 1 and done[0][0] == b""
