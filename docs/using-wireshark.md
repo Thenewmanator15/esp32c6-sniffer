@@ -64,7 +64,7 @@ Click the **gear icon** beside an interface before starting, or use
 | Option | What it does |
 |---|---|
 | **Serial port** | Filled in for you. The board is found by its USB id (`303A:1001`), so this is right even if it is not COM3. Change it only if you have more than one board. |
-| **Antenna** | Onboard ceramic, or external U.FL if you have fitted one. Measured **+13 to +14 dB** on this board, across two runs. |
+| **Antenna** | Onboard ceramic, or external U.FL (IPEX on the nRF54L15) if you have fitted one. Measured on the ESP32-C6: **+13 to +14 dB**, across two runs. On an nRF54L15 with one fitted, the external read about 14.5 dB *weaker*: check it is seated and made for 2.4 GHz. The nRF54L15 needs firmware 7 for this. |
 
 ### IEEE 802.15.4
 

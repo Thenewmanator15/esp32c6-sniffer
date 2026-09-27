@@ -869,6 +869,21 @@ no such line, rather than a zero it did not measure. From nRF firmware 6 the
 count, like every counter the board reports, starts from zero with each
 capture.
 
+**nRF54L15 captures made before firmware 7 do not decrypt.** Its 802.15.4
+driver left two bytes on the end of every frame, and Wireshark read them as
+part of the frame's MIC, so every secured frame failed its check: 0 MLE
+commands decoded from a Thread network whose ESP32-C6 capture decrypted as it
+stood. Firmware 7 strips them. An older capture can be recovered by cutting
+them off:
+
+```
+editcap -L -C -2 in.pcapng out.pcapng
+```
+
+Measured on the same network, 60 s each: 0 MLE commands and every
+acknowledgement 33 bytes on firmware 6; 17 MLE commands and every
+acknowledgement 31 bytes on firmware 7.
+
 **Payloads are encrypted.** Zigbee and Thread both encrypt above the MAC layer,
 so you see frame structure, addresses and routing but not contents. Wireshark
 reports this honestly as "Encrypted Payload" and "No encryption key set".
@@ -1045,7 +1060,7 @@ Two further limits worth stating plainly:
 | 802.15.4 | Strong. Full promiscuous capture with RSSI, LQI and channel. Frames that fail their checksum never arrive; the nRF54L15 counts them. |
 | Wi-Fi | Good. Full payloads except MIMO frames. 2.4 GHz only. Encrypted payloads stay encrypted. |
 | BLE, ESP32-C6 | Weak. Advertisements, long-range (Coded) ones included, and an LE Audio broadcast it can name but never hear. |
-| BLE, nRF54L15 | Weak, and a little more: advertisements, and it joins a broadcast it follows. Forwarding that broadcast's audio is fixed in firmware but not yet seen on air. |
+| BLE, nRF54L15 | Weak, and a little more: advertisements, and it joins a broadcast it follows. From firmware 7 it sets up the path the broadcast's audio needs to reach a capture, which no earlier firmware did, and takes a stereo broadcast; still not seen on air, as nothing in range broadcasts one. |
 
 Neither board follows a connection: this is a scanner, not a link-layer
 sniffer. Two further BLE ceilings are silicon rather than configuration, and
@@ -1079,8 +1094,11 @@ line fitted through the event times absorbs the two clocks' rate difference
 | ESP32-C6 | 100 ms, from the nRF54L15 | 567 | −23..+22 µs | 2 beyond 100 µs, one near 1 ms |
 | nRF54L15 | 80 ms, from the ESP32-C6 | 605 | −19..+42 µs | 59 µs |
 
-The nRF54L15's timestamps also come in 32 µs steps, the resolution of the
-Zephyr system clock it reads. Intervals between BLE packets are good to a few
+Before firmware 7 the nRF54L15's timestamps came in 32 µs steps, the
+resolution of the Zephyr system clock it read, and the table above was
+measured then. From firmware 7 they come from the 1 MHz cycle counter of the
+same timer: 10 of 291 gaps between records fell on a 32 µs step, as chance
+predicts. Intervals between BLE packets are good to a few
 tens of microseconds; anything timed more finely than that is the timestamp,
 not the air. A fixed delay from antenna to timestamp would not show in this
 measurement at all, so the absolute time is uncertain by that much more.
