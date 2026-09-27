@@ -75,6 +75,38 @@ def test_frames_that_name_no_stack_leave_the_network_unknown():
     assert [(r.pan, r.network) for r in rows] == [(0x9999, "unknown")]
 
 
+def test_a_pan_heard_on_a_second_channel_is_flagged_as_a_stray():
+    """A network lives on one channel. Live on the nRF54L15, a Thread network
+    on channel 15 also turned up on 16, 10 dB weaker: a strong transmitter
+    decoded on the next channel, which 802.15.4's 0 dB adjacent-channel
+    rejection allows. Its busiest channel is its home; the rest are strays."""
+    rows = survey.networks({
+        15: [(-72, THREAD_DATA), (-73, THREAD_POLL), (-72, THREAD_POLL)],
+        16: [(-82, THREAD_DATA)],
+    })
+    assert [(r.channel, r.stray_from) for r in rows] == [(15, None), (16, 15)]
+
+
+def test_a_tie_between_channels_flags_neither():
+    rows = survey.networks({15: [(-72, THREAD_DATA)], 16: [(-82, THREAD_DATA)]})
+    assert [r.stray_from for r in rows] == [None, None]
+
+
+def test_different_pans_on_neighbouring_channels_are_both_networks():
+    rows = survey.networks({15: [(-72, THREAD_DATA), (-72, THREAD_POLL)], 16: [(-80, ZIGBEE_DATA)]})
+    assert [r.stray_from for r in rows] == [None, None]
+
+
+def test_a_channel_holding_only_strays_is_not_a_network():
+    rows = survey.networks({
+        15: [(-72, THREAD_DATA), (-73, THREAD_POLL), (-72, THREAD_POLL)],
+        16: [(-82, THREAD_DATA)],
+        21: [(-56, THREAD_POLL), (-90, ZIGBEE_DATA)],
+    })
+    # 21 carries a stray from 15 and a Zigbee PAN of its own, so it stays.
+    assert survey.stray_channels(rows) == {16: [15]}
+
+
 def test_unreadable_frames_are_skipped_not_fatal():
     assert survey.networks({26: [(-50, b"\x41"), (-50, b"")]}) == []
 

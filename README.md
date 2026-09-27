@@ -469,6 +469,15 @@ reported as unknown rather than guessed. Checked against Wireshark on 2,804
 recorded frames, Thread and Zigbee: frame type, PAN, address, security and
 stack agreed on every one.
 
+A network lives on one channel, but it can be heard on others. 802.15.4
+requires only 0 dB of adjacent-channel rejection, so a strong transmitter is
+decoded on the next channel too, and Thread routers send Announce messages
+on other channels. So a PAN heard on several channels is placed where it was
+heard most, and its other sightings are marked `stray: mostly on ch 15`. A
+channel holding nothing but strays reads `strays from ch 15` rather than
+`NETWORK`. Live on the nRF54L15, a channel-15 Thread network turned up on
+channel 16, 10 dB weaker.
+
 `tools/spectrum.py` runs the energy half alone and faster.
 `tools/antenna_compare.py` measures the two antennas against the same traffic.
 

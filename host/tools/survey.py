@@ -28,7 +28,7 @@ import statistics
 import struct
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from esp32c6_sniffer import mac154
 from esp32c6_sniffer.batch import BatchError, decode_packet_batch
@@ -110,6 +110,42 @@ class NetworkRow:
     #: Sources seen polling their parent with a Data Request.
     sleepy: int
     rssi: int
+    #: The channel this PAN was mostly heard on, when that is not this one.
+    #: A network lives on one channel, but a strong transmitter is decoded on
+    #: the next channel too -- 802.15.4 requires only 0 dB of adjacent-channel
+    #: rejection -- and Thread sends Announce messages on other channels.
+    #: Live on the nRF54L15, a channel-15 Thread network turned up on 16,
+    #: 10 dB weaker. None for the PAN's busiest channel, and for a PAN whose
+    #: busiest channel is a tie, where there is nothing to go on.
+    stray_from: int | None = None
+
+
+def _mark_strays(rows: list[NetworkRow]) -> list[NetworkRow]:
+    by_pan: dict[int, list[NetworkRow]] = defaultdict(list)
+    for row in rows:
+        by_pan[row.pan].append(row)
+    home: dict[int, int] = {}
+    for pan, seen in by_pan.items():
+        counts = sorted((r.frames for r in seen), reverse=True)
+        if len(seen) > 1 and counts[0] > counts[1]:
+            home[pan] = max(seen, key=lambda r: r.frames).channel
+    return [replace(r, stray_from=home[r.pan])
+            if r.pan in home and home[r.pan] != r.channel else r
+            for r in rows]
+
+
+def stray_channels(rows: list[NetworkRow]) -> dict[int, list[int]]:
+    """Channels whose every PAN is a stray, mapped to where those PANs live.
+
+    Such a channel holds no network of its own, however many frames it
+    showed. A channel with any PAN that is at home there is left out.
+    """
+    by_channel: dict[int, list[NetworkRow]] = defaultdict(list)
+    for row in rows:
+        by_channel[row.channel].append(row)
+    return {channel: sorted({r.stray_from for r in seen})
+            for channel, seen in by_channel.items()
+            if all(r.stray_from is not None for r in seen)}
 
 
 def networks(per_channel: dict[int, list[tuple[int, bytes]]]) -> list[NetworkRow]:
@@ -117,7 +153,10 @@ def networks(per_channel: dict[int, list[tuple[int, bytes]]]) -> list[NetworkRow
 
     Frames that carry no PAN ID -- acknowledgements, chiefly -- belong to no
     row. A PAN is Thread or Zigbee by the most common verdict among its frames,
-    and "unknown" when none of them names a stack.
+    and "unknown" when none of them names a stack. A PAN heard on more than
+    one channel is at home where it was heard most, and a stray elsewhere;
+    two unrelated networks sharing a PAN ID across channels would be read
+    the same way, which a random 16-bit PAN makes rare.
     """
     rows = []
     for channel in sorted(per_channel):
@@ -137,7 +176,7 @@ def networks(per_channel: dict[int, list[tuple[int, bytes]]]) -> list[NetworkRow
                 network=verdicts.most_common(1)[0][0] if verdicts else "unknown",
                 frames=len(heard), addresses=len(sources), sleepy=len(polling),
                 rssi=round(statistics.median(rssi for rssi, _h in heard))))
-    return rows
+    return _mark_strays(rows)
 
 
 def main() -> None:
@@ -195,6 +234,9 @@ def main() -> None:
         ser.flush()
         link.close()
 
+    rows = networks({c: traffic[c]["packets"] for c in channels})
+    strays = stray_channels(rows)
+
     print()
     print(f"{'ch':>3} {'MHz':>5} {'noise':>6} {'frames':>7} {'/s':>6} "
           f"{'signal':>7}  notes")
@@ -206,7 +248,10 @@ def main() -> None:
         rate = t["frames"] / args.dwell
         sig = f"{statistics.median(t['rssis']):.0f}" if t["rssis"] else "-"
         notes = []
-        if t["frames"]:
+        if channel in strays:
+            homes = ", ".join(f"ch {c}" for c in strays[channel])
+            notes.append(f"strays from {homes}")
+        elif t["frames"]:
             notes.append("NETWORK")
             busy.append((t["frames"], channel))
         if channel in WIFI_OVERLAP:
@@ -221,18 +266,20 @@ def main() -> None:
         busy.sort(reverse=True)
         found = ", ".join(f"ch {c} ({n} frames)" for n, c in busy)
         print(f"networks found on: {found}")
-        rows = networks({c: traffic[c]["packets"] for c in channels})
         if rows:
             print()
             print("networks, read from their frame headers without any key:")
             print(f"{'ch':>3} {'PAN':>6} {'stack':>7} {'frames':>7} {'addrs':>6} "
-                  f"{'sleepy':>7} {'signal':>7}")
+                  f"{'sleepy':>7} {'signal':>7}  notes")
             for r in rows:
+                note = f"stray: mostly on ch {r.stray_from}" if r.stray_from else ""
                 print(f"{r.channel:>3} 0x{r.pan:04x} {r.network:>7} {r.frames:>7} "
-                      f"{r.addresses:>6} {r.sleepy:>7} {r.rssi:>7}")
+                      f"{r.addresses:>6} {r.sleepy:>7} {r.rssi:>7}  {note}".rstrip())
             print("addrs counts source addresses, not devices: a device heard under")
             print("both its short and its 64-bit address counts twice. sleepy counts")
-            print("sources polling their parent with Data Requests.")
+            print("sources polling their parent with Data Requests. A stray is a")
+            print("network heard off its own channel: a strong transmitter decoded")
+            print("next door, or a Thread Announce. It is counted where it lives.")
     else:
         print("no 802.15.4 traffic seen on any channel during the dwell.")
         print("That may be genuine, or the networks may simply have been idle:")
