@@ -1,15 +1,16 @@
 """Making the Wi-Fi receiver usable again after the 802.15.4 radio has run.
 
-Both radios share one 2.4 GHz front end, and enabling the 802.15.4 one leaves
-the Wi-Fi receiver deaf until the RF domain is power-gated. Measured on this
-board: 633 Wi-Fi frames captured immediately after a power cycle, 0 after a
-30-second 802.15.4 capture, while idling the same 30 seconds cost nothing at
-all. `esp_ieee802154_disable()` is the documented teardown and does not hand
-the front end back; putting the radio to sleep first makes no difference.
+Both radios share one 2.4 GHz front end. Leave the 802.15.4 radio running when
+the host goes -- a capture killed rather than stopped -- and the Wi-Fi receiver
+is deaf afterwards: 8 times in 8 on this board, measured 2026-09-27. The
+firmware records that in RTC memory, where it survives the reset opening the
+port causes, and answers RADIO_DIRTY.
 
-Nothing short of power-gating recovers it -- not a Wi-Fi driver rebuild, not a
-reflash, not a full erase-flash -- so the firmware records whether 802.15.4 has
-run since boot and the host power-cycles before a Wi-Fi capture when it has.
+What cures it is starting the 802.15.4 radio and stopping it cleanly -- put to
+sleep, then disabled -- which hands the front end back: 8 times in 8, at once,
+with no time spent receiving. The deep-sleep power-gate this module used to do
+cured it 0 times in 16, and an hour of waiting did not either. The power-gate
+stays for a deafness with some other cause.
 
 Without this a Wi-Fi capture started after an 802.15.4 one returns nothing,
 silently and indistinguishably from an empty channel.
@@ -49,8 +50,8 @@ def _open(port: str, timeout: float = 30.0) -> serial.Serial:
 
 
 def _ask(ser: serial.Serial, parser: StreamParser, command: Command,
-         value: int = 0, wait: float = 3.0):
-    ser.write(encode_command(command, value, radio=Radio.WIFI))
+         value: int = 0, wait: float = 3.0, radio: Radio = Radio.WIFI):
+    ser.write(encode_command(command, value, radio=radio))
     ser.flush()
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
@@ -63,14 +64,14 @@ def _ask(ser: serial.Serial, parser: StreamParser, command: Command,
 
 
 def ensure_wifi_ready(port: str, settle: float = 2.0) -> bool:
-    """Power-cycles the board if 802.15.4 has poisoned the front end.
+    """Hands the front end back if 802.15.4 was left running.
 
-    Returns True if a power cycle was performed. Opens and closes the port
-    itself, so call it before opening a capture session rather than during one.
+    Returns True if it did. Opens and closes the port itself, so call it
+    before opening a capture session rather than during one.
 
-    A board too old to answer RADIO_DIRTY is left alone: an unnecessary reset
-    is worse than a missing optimisation, and the firmware version check will
-    report the mismatch anyway.
+    A board too old to answer RADIO_DIRTY is left alone: an unnecessary
+    hand-back costs nothing much, but the firmware version check will report
+    the mismatch anyway.
     """
     ser = _open(port)
     try:
@@ -79,19 +80,42 @@ def ensure_wifi_ready(port: str, settle: float = 2.0) -> bool:
         reply = _ask(ser, parser, Command.RADIO_DIRTY)
         if reply is None or not reply["ok"] or not reply["value"]:
             return False
-        _power_cycle_on(ser, parser)
+        _hand_back_on(ser, parser)
     finally:
         ser.close()
-    _await_return(port)
     return True
+
+
+def hand_back(port: str, settle: float = 2.0) -> None:
+    """Starts the 802.15.4 radio and stops it cleanly, whatever the flag says.
+
+    For a receiver found deaf with the flag clear, and for --recover. Opens and
+    closes the port itself, like ensure_wifi_ready.
+    """
+    ser = _open(port)
+    try:
+        time.sleep(settle)
+        _hand_back_on(ser, StreamParser())
+    finally:
+        ser.close()
+
+
+def _hand_back_on(ser: serial.Serial, parser: StreamParser) -> None:
+    # SET_CHANNEL is what starts the radio on the C6. The channel is any
+    # valid one; nothing is captured.
+    ieee = Radio.IEEE802154
+    _ask(ser, parser, Command.SET_RADIO, int(ieee), radio=ieee)
+    _ask(ser, parser, Command.SET_CHANNEL, 11, radio=ieee)
+    _ask(ser, parser, Command.STOP, radio=ieee)
 
 
 def power_cycle(port: str) -> None:
     """Power-gates the radio domain and waits for the board to come back.
 
-    For a receiver found deaf with no 802.15.4 run to blame: it latches for
-    other reasons too, and this is the one cure for all of them. Opens and
-    closes the port itself, like ensure_wifi_ready.
+    The fallback, for a receiver the hand-back did not cure. It does not cure
+    the deafness 802.15.4 left running causes -- 0 times in 16 -- but it was
+    found curing one that had some other cause. Opens and closes the port
+    itself, like ensure_wifi_ready.
     """
     ser = _open(port)
     try:

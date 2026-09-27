@@ -63,7 +63,7 @@ from esp32c6_sniffer.control import (  # noqa: E402
 )
 from esp32c6_sniffer.framing import FrameType  # noqa: E402
 from esp32c6_sniffer.parser import StreamParser  # noqa: E402
-from esp32c6_sniffer.recovery import _open  # noqa: E402
+from esp32c6_sniffer.recovery import _open, hand_back  # noqa: E402
 from esp32c6_sniffer.capture import CaptureSession  # noqa: E402
 from esp32c6_sniffer.control import Antenna  # noqa: E402
 from esp32c6_sniffer.scan import scan_access_points  # noqa: E402
@@ -259,11 +259,14 @@ def await_recovery(port: str, measure, limit_s: float, poll_s: float,
 def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     row = {"cycle": cycle, "arm": arm, "baseline": None, "applied": None,
            "dirty_flag": None, "heard": None, "after": None,
-           "recovered": None, "valid": False, "deaf": None,
-           "self_recovered_s": None}
+           "recovered": None, "handed_back": None, "valid": False,
+           "deaf": None, "self_recovered_s": None}
 
     # 1. Prove the instrument reads non-zero before trusting any zero from it.
+    # The hand-back first: a latch the last dirty trial left survives a
+    # power-gate, and failed every later baseline until it was found.
     try:
+        hand_back(port, settle=OPEN_SETTLE_S)
         power_cycle(port)
         baseline = measure(port)
         if not baseline:
@@ -303,15 +306,21 @@ def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     row["valid"] = True
     row["deaf"] = after == 0
 
-    # 4. Matched recovery, measured on this same trial.
+    # 4. Matched recovery, measured on this same trial: the power-gate, then
+    # the hand-back -- a clean 802.15.4 start and stop -- if that did not.
     if after == 0:
         power_cycle(port)
         row["recovered"] = measure(port)
+        if not row["recovered"]:
+            hand_back(port, settle=OPEN_SETTLE_S)
+            row["handed_back"] = measure(port)
 
     if verbose:
         note = ""
         if row["deaf"]:
             note = f"  -> DEAF, {row['recovered']} after power-gate"
+            if row["handed_back"] is not None:
+                note += f", {row['handed_back']} after hand-back"
         flag = {True: "dirty", False: "clean", None: "?"}[row["dirty_flag"]]
         print(f"  cycle {cycle} {arm:<5}  baseline {baseline:>2} "
               f"-> after {after:>2}  heard={row['heard']:<4} "
@@ -420,7 +429,8 @@ def main() -> int:
         for arm in order:
             row = trial(args.port, arm, cycle, verbose, measure)
             rows.append(row)
-            stuck = row["valid"] and row["deaf"] and not row["recovered"]
+            stuck = (row["valid"] and row["deaf"] and not row["recovered"]
+                     and not row["handed_back"])
             if stuck and args.await_recovery > 0:
                 if verbose:
                     print(f"    waiting up to {args.await_recovery:g} min for it "
@@ -447,8 +457,14 @@ def main() -> int:
             break
 
     summarise(rows)
+    deaf = [r for r in rows if r["valid"] and r["deaf"] and not r["recovered"]]
+    if deaf:
+        cured = sum(1 for r in deaf if r["handed_back"])
+        print(f"  hand-back recovered {cured} of the {len(deaf)} the "
+              f"power-gate did not")
     waits = [r["self_recovered_s"] for r in rows
-             if r["valid"] and r["deaf"] and not r["recovered"]]
+             if r["valid"] and r["deaf"] and not r["recovered"]
+             and not r["handed_back"]]
     if waits:
         shown = ", ".join("never" if w is None else f"{w / 60:.1f} min"
                           for w in waits)

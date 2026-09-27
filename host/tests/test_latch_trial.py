@@ -158,3 +158,21 @@ def test_a_board_that_does_not_answer_is_not_a_recovery():
                                       limit_s=600, poll_s=60,
                                       clock=clock.time, sleep=clock.sleep)
     assert took == 180
+
+
+def test_a_deaf_trial_records_the_power_gate_and_then_the_hand_back(monkeypatch):
+    """Both cures, measured on the same trial and in that order: the
+    power-gate that did not cure this deafness in 16 tries, then the clean
+    802.15.4 start and stop that cured it in 8 of 8. A baseline hands back
+    first too, so a latch left by the previous trial cannot fail it."""
+    steps = []
+    readings = iter([6, 0, 0, 8])     # baseline, after, after gate, after hand-back
+    monkeypatch.setattr(latch_trial, "power_cycle", lambda port: steps.append("gate"))
+    monkeypatch.setattr(latch_trial, "hand_back",
+                        lambda port, settle=0: steps.append("hand back"))
+    monkeypatch.setattr(latch_trial, "apply_arm", lambda port, arm: (True, 40))
+    monkeypatch.setattr(latch_trial, "read_dirty_flag", lambda port: True)
+    row = latch_trial.trial("COM_UNUSED", "dirty", 1, False,
+                            lambda port: next(readings))
+    assert steps == ["hand back", "gate", "gate", "hand back"]
+    assert row["deaf"] and row["recovered"] == 0 and row["handed_back"] == 8

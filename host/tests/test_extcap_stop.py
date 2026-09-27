@@ -77,6 +77,7 @@ def fake_session(packets_per_second: float | None):
             self._stop = threading.Event()
             self.recovered_from_802154 = False
             self.power_cycled_for_deafness = False
+            self.handed_back_for_deafness = False
 
         def __enter__(self):
             return self

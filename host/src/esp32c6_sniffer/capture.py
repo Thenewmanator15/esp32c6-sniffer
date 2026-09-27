@@ -42,7 +42,7 @@ from .ble import (LINKTYPE_BLUETOOTH_HCI_H4_WITH_PHDR, build_ble_record,
                   build_payload as build_ble_payload, hci_of_record)
 from .ble_keys import KEY_CHECK_SECONDS
 from .csi import parse_csi_record
-from .recovery import ensure_wifi_ready, power_cycle
+from .recovery import ensure_wifi_ready, hand_back, power_cycle
 from .radiotap import (
     LINKTYPE_IEEE802_11_RADIOTAP,
     MCS_BW_20,
@@ -437,11 +437,14 @@ class CaptureSession:
         self._parser = StreamParser()
         self._tracker = SequenceTracker()
         self.firmware_version: int | None = None
-        #: Set when the session had to power-cycle the board because the
-        #: 802.15.4 radio had been used since boot.
+        #: Set when the session handed the front end back because the
+        #: 802.15.4 radio had been left running.
         self.recovered_from_802154 = False
-        #: Set when the session power-cycled the board because the Wi-Fi
-        #: receiver heard nothing at all once the capture started.
+        #: Set when the Wi-Fi receiver heard nothing at all once the capture
+        #: started, and the session handed the front end back ...
+        self.handed_back_for_deafness = False
+        #: ... and then power-cycled the board too, because that had not
+        #: cured it.
         self.power_cycled_for_deafness = False
         self._t0_device: int | None = None
         self._last_stamp: float | None = None
@@ -529,9 +532,10 @@ class CaptureSession:
         self.close()
 
     def open(self) -> None:
-        # Using the 802.15.4 radio leaves the Wi-Fi receiver deaf until the RF
-        # domain is power-gated. Measured: 633 Wi-Fi frames before an 802.15.4
-        # capture and 0 after, while idling the same 30 seconds cost nothing.
+        # The 802.15.4 radio left running when a host went leaves the Wi-Fi
+        # receiver deaf -- 8 times in 8 -- until 802.15.4 is started and
+        # stopped cleanly, which ensure_wifi_ready does when the board says
+        # so. See recovery.py.
         #
         # This has to happen BEFORE the port is opened. The same recovery was
         # once done inline further down, after connecting, and it did not
@@ -546,18 +550,27 @@ class CaptureSession:
             self.recovered_from_802154 = ensure_wifi_ready(self._port_name)
 
         self._start()
-        # The receiver latches deaf for other reasons too, and deaf is an
-        # empty capture with no error. Found that way on 2026-09-25 with the
-        # 802.15.4 flag reading clear. Power-cycled once, around the port as
-        # above; a receiver still deaf after that is left to the stall
+        # Deaf is an empty capture with no error, and the flag does not catch
+        # every case: on 2026-09-25 the receiver was deaf with it clear. So a
+        # receiver that hears nothing, in a band a scan finds silent too, gets
+        # the front end handed back, which cures the deafness 802.15.4 left
+        # running causes; then, if it still hears nothing, the power-gate,
+        # which cured that 2026-09-25 case. Each around the port, as above,
+        # and each once; a receiver deaf after both is left to the stall
         # counters, which report it.
         if (self._recover and self._should_hear_beacons()
                 and not self._hears_within(WIFI_DEAF_S)
                 and self._band_is_silent()):
             self._disconnect()
-            power_cycle(self._port_name)
-            self.power_cycled_for_deafness = True
+            hand_back(self._port_name)
+            self.handed_back_for_deafness = True
             self._start()
+            if (not self._hears_within(WIFI_DEAF_S)
+                    and self._band_is_silent()):
+                self._disconnect()
+                power_cycle(self._port_name)
+                self.power_cycled_for_deafness = True
+                self._start()
 
     def _start(self) -> None:
         """Connects, checks the firmware, and starts the capture."""
