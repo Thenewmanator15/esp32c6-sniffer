@@ -43,9 +43,12 @@ def test_crc_is_fast_enough_for_the_hot_path():
     """Half the per-frame parse cost was this function in pure Python: 4.8 us
     of 6.5 us, measured. The stdlib's C version gives the same answers."""
     import timeit
-    per_call = timeit.timeit(lambda: crc16_ccitt_false(b"\xc6\x5a\x01\x00\x07\x00\x10\x00"),
-                             number=2000) / 2000
-    assert per_call < 1e-6, f"{per_call * 1e6:.2f} us per 8-byte header"
+    # The best of several runs, so a busy machine does not fail it: one run
+    # read 1.05 us. About 0.07 us here; pure Python is 4.6, twice the limit.
+    per_call = min(timeit.repeat(
+        lambda: crc16_ccitt_false(b"\xc6\x5a\x01\x00\x07\x00\x10\x00"),
+        number=2000, repeat=5)) / 2000
+    assert per_call < 2e-6, f"{per_call * 1e6:.2f} us per 8-byte header"
 
 
 def test_encoded_header_is_ten_bytes():
