@@ -28,3 +28,16 @@
 # This needs the Thread network key installed as well, otherwise the frames
 # never decrypt far enough to become UDP. See host/tools/thread_key.py.
 decode_as_entry: udp.port,5540,(none),Matter
+#
+# 61631 is Thread's own management port: the Thread Management Framework,
+# CoAP carrying address queries (/a/aq), address notifications, and, from
+# Thread 1.2, multicast and domain-address registrations (/n/mr, /n/dr). CoAP
+# is registered on 5683 only, so without this line those messages show as
+# plain UDP and their URIs never appear. Measured on a live Thread 1.3/1.4
+# network: 82 frames in 30 minutes, all /a/aq once decoded.
+#
+# Here the name is "CoAP", the dissector's short name. Measured against
+# Wireshark 4.6.8 with a synthetic CoAP frame on 61631: "CoAP" decodes it,
+# while "coap" and "Constrained Application Protocol" leave it as data, with
+# no error.
+decode_as_entry: udp.port,61631,(none),CoAP

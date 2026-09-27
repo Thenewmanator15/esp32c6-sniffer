@@ -158,7 +158,17 @@ def test_matter_decode_as_entry_is_exact():
     """
     path = PROFILE_ROOT / "ESP32-C6 802.15.4" / "decode_as_entries"
     lines = content_lines(path)
-    assert lines == ["decode_as_entry: udp.port,5540,(none),Matter"], lines
+    assert lines[0] == "decode_as_entry: udp.port,5540,(none),Matter", lines
+
+
+def test_thread_management_decode_as_entry_is_exact():
+    """Thread's management messages are CoAP on UDP 61631, a port CoAP does
+    not claim. Only the short name "CoAP" works: "coap" and "Constrained
+    Application Protocol" leave the frames as data without a word."""
+    path = PROFILE_ROOT / "ESP32-C6 802.15.4" / "decode_as_entries"
+    lines = content_lines(path)
+    assert lines == ["decode_as_entry: udp.port,5540,(none),Matter",
+                     "decode_as_entry: udp.port,61631,(none),CoAP"], lines
 
 
 def test_matter_button_exists_wherever_matter_can_appear():
