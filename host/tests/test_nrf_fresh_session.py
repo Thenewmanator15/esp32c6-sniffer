@@ -142,3 +142,31 @@ def test_stopping_ble_resets_the_controller():
     scan off left them running past the capture."""
     text = source("radio_ble.c")
     assert "BT_HCI_OP_RESET" in body(text, "int sn_radio_ble_stop(void)")
+
+
+def test_a_new_session_does_not_wait_on_a_bluetooth_that_never_started():
+    """GET_INFO resets the controller. If Bluetooth failed at boot -- the
+    firmware carries on with 802.15.4 only -- nothing delivers the answer,
+    and every session open waited two seconds for it, twice on a bridged
+    board."""
+    control = source("control.c")
+    assert "sn_radio_ble_ready()" in body(control, "static int stop_radio(uint8_t radio)")
+    ble = source("radio_ble.c")
+    assert "ready" in body(ble, "int sn_radio_ble_start(")
+
+
+def test_a_new_scan_forgets_the_last_broadcasts_streams():
+    """A data-path setup still queued from the last capture would otherwise
+    be sent for its streams into this one."""
+    text = source("radio_ble.c")
+    assert re.search(r"bis_count\s*=\s*0u?\s*;", body(text, "static void scan_started(void)"))
+
+
+def test_a_broadcast_joined_counts_as_joined_however_the_command_went():
+    """A BIG Create Sync that timed out but was accepted left big_synced
+    false, and every 5 s another was sent and refused for as long as the
+    broadcast lasted. The establish event is the proof."""
+    text = source("radio_ble.c")
+    case = text[text.index("case BT_HCI_EVT_LE_BIG_SYNC_ESTABLISHED:"):]
+    case = case[:case.index("break;")]
+    assert re.search(r"big_synced\s*=\s*true\s*;", case)
