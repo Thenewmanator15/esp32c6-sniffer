@@ -109,5 +109,9 @@ def test_idf_env_leaves_the_callers_error_preference_alone(tmp_path):
     out = subprocess.run([pwsh, "-NoProfile", "-Command", command],
                          capture_output=True, text=True, timeout=60)
     lines = out.stdout.strip().splitlines()
-    assert any(l.startswith("caught: ESP-IDF tools not found") for l in lines),         out.stdout + out.stderr
+    # Either of its own refusals: "ESP-IDF not found" where none is installed
+    # (the CI runners), "ESP-IDF tools not found" where one is. Not a parse
+    # error, which says nothing of the kind.
+    assert any(l.startswith("caught: ESP-IDF") and "not found" in l
+               for l in lines), out.stdout + out.stderr
     assert lines[-1] == "Continue", out.stdout + out.stderr
