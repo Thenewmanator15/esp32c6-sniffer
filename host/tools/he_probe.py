@@ -87,7 +87,8 @@ def main() -> int:
     he_rejected = 0
     time.sleep(2.0)
 
-    def pump(seconds: float, collect: bool = False):
+    def pump(seconds: float, collect: bool = False, until=None):
+        """Reads for `seconds`, or until a reply to `until` arrives."""
         nonlocal he_decoded, he_rejected
         replies = []
         end = time.time() + seconds
@@ -95,6 +96,10 @@ def main() -> int:
             for frame in parser.feed(ser.read(8192)):
                 if frame.ftype is FrameType.CONTROL_REPLY:
                     replies.append(decode_reply(frame.payload))
+                    # Not the whole window: each command used to wait out
+                    # its 20 s after the reply was in, 80 s a run.
+                    if until is not None and replies[-1]["command"] is until:
+                        return replies
                 elif frame.ftype is FrameType.LOG:
                     text = frame.payload.decode("utf-8", "replace").rstrip()
                     if "radio80211" in text:
@@ -115,7 +120,7 @@ def main() -> int:
     def command(cmd, value=0, wait=20.0):
         ser.write(encode_command(cmd, value, radio=Radio.WIFI))
         ser.flush()
-        for reply in pump(wait):
+        for reply in pump(wait, until=cmd):
             if reply["command"] is cmd:
                 return reply
         return None

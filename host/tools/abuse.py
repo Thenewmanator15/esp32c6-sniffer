@@ -235,7 +235,7 @@ if stats[0] is not None:
     link_sent, ringfull, _short, stalls, _bytes = stats[0][:5]
     wifi = stats[0][8:20]
     isr_full, rejected = wifi[5], wifi[6]
-    csi_dropped = wifi[9]
+    csi_dropped = wifi[11]          # wifi[9] is fw_recoveries
     # Dropping under maximum load is a capacity fact, not a defect, but it has
     # to be visible rather than silent -- an invisible drop is the failure.
     record("drops are reported, not hidden", True,

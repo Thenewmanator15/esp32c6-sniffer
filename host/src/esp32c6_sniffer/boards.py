@@ -212,7 +212,11 @@ class BoardLink:
     def command(self, command: Command, value: int = 0, radio=None,
                 timeout: float | None = None) -> dict:
         """Sends one command and returns its reply. Frames arriving meanwhile
-        are dropped: a tool that wants them reads through ser and parser."""
+        are dropped: a tool that wants them reads through ser and parser.
+
+        A refusal raises RuntimeError. survey.py once read a refused
+        SET_CHANNEL as done -- the nRF54L15 had been left on BLE -- and
+        reported a channel with a network on it as quiet."""
         kwargs = {} if radio is None else {"radio": radio}
         self.ser.write(encode_command(command, value, **kwargs))
         self.ser.flush()
@@ -222,6 +226,11 @@ class BoardLink:
                 if frame.ftype is FrameType.CONTROL_REPLY:
                     reply = decode_reply(frame.payload)
                     if reply["command"] is command:
+                        if not reply["ok"]:
+                            raise RuntimeError(
+                                f"the {self.board['display']} on {self.port} "
+                                f"refused {command.name} {value} "
+                                f"(status {reply['status']})")
                         return reply
         raise TimeoutError(f"no reply to {command.name} from the "
                            f"{self.board['display']} on {self.port}")

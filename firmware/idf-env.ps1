@@ -15,7 +15,13 @@ param(
     [string]$IdfToolsPath = $env:IDF_TOOLS_PATH
 )
 
+# 'Stop' for this script, and the caller's own setting back afterwards,
+# however it ends. Dot-sourced, as it must be, it left 'Stop' in the user's
+# shell, where every later error ended whatever they ran next. The body is not
+# indented inside the try: its here-strings must close at column 0.
+$idfEnvCallerPreference = $ErrorActionPreference
 $ErrorActionPreference = 'Stop'
+try {
 
 # A machine whose toolchain is somewhere unusual says so here rather than in
 # this file. Not tracked, so it never becomes somebody else's broken path:
@@ -162,3 +168,8 @@ Write-Host "ESP-IDF ready." -ForegroundColor Green
 Write-Host "  IDF_PATH       $env:IDF_PATH"
 Write-Host "  IDF_TOOLS_PATH $env:IDF_TOOLS_PATH"
 Write-Host "  target         esp32c6"
+}
+finally {
+    $ErrorActionPreference = $idfEnvCallerPreference
+    Remove-Variable idfEnvCallerPreference -ErrorAction SilentlyContinue
+}

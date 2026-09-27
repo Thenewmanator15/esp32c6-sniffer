@@ -15,6 +15,7 @@ import spectrum  # noqa: E402
 import survey  # noqa: E402
 from esp32c6_sniffer.batch import BatchEntry, encode_packet_batch  # noqa: E402
 from esp32c6_sniffer.boards import BoardLink  # noqa: E402
+from esp32c6_sniffer.control import Command  # noqa: E402
 from esp32c6_sniffer.framing import FrameType, encode_frame  # noqa: E402
 from esp32c6_sniffer.parser import StreamParser  # noqa: E402
 
@@ -206,3 +207,68 @@ def test_recover_stops_at_the_hand_back_when_that_cures_it(monkeypatch):
     monkeypatch.setattr(wifi_survey, "_rescan", lambda port: ["ap"])
     found, how = wifi_survey.recover_and_rescan("COM_UNUSED")
     assert steps == ["hand back"] and how == "handing the radio back"
+
+
+class NrfLeftOnBle:
+    """The nRF54L15 after a BLE capture, measured 2026-09-27: GET_INFO
+    resets its session but not the selected radio, and it refuses channel
+    and energy commands while BLE is selected. survey.py never selected a
+    radio and never looked at the refusals, so it reported channel 15 --
+    13 frames and a -92 dBm floor once 802.15.4 was selected -- as quiet."""
+
+    def __init__(self):
+        from test_open_handshake import BridgedPort
+        self._port = BridgedPort(version=7)
+        self.radio = 2                              # BLE
+        self.commands = self._port.commands
+
+    def __getattr__(self, name):
+        return getattr(self._port, name)
+
+    def write(self, data):
+        import struct
+        from esp32c6_sniffer.framing import FrameType, encode_frame
+        from esp32c6_sniffer.parser import StreamParser
+        for frame in StreamParser().feed(bytes(data)):
+            if frame.ftype is not FrameType.CONTROL_CMD:
+                continue
+            command, value = struct.unpack_from("<BI", frame.payload)
+            refused = (self.radio == 2 and command in
+                       (int(Command.SET_CHANNEL), int(Command.ENERGY_DETECT)))
+            if command == int(Command.SET_RADIO):
+                self.radio = value
+            if refused:
+                self.commands.append(command)
+                self._port.rx += encode_frame(FrameType.CONTROL_REPLY, 1,
+                                              struct.pack("<BBI", command, 2, value))
+                continue
+            self._port.write(encode_frame(FrameType.CONTROL_CMD, 0, frame.payload))
+        return len(data)
+
+
+def run_tool(monkeypatch, tool, argv):
+    from esp32c6_sniffer import boards
+    from test_boards import NRF, Opened
+    port = NrfLeftOnBle()
+    monkeypatch.setattr(tool, "BoardLink",
+                        lambda p: boards.BoardLink(p, comports=[NRF],
+                                                   serial_factory=Opened(port)))
+    monkeypatch.setattr(sys, "argv", [tool.__name__, "--port", "COM4", *argv])
+    tool.main()
+    return port
+
+
+def test_the_survey_selects_802154_before_it_asks_anything(monkeypatch, capsys):
+    port = run_tool(monkeypatch, survey,
+                    ["--channels", "15", "--dwell", "0.01", "--energy-passes", "1"])
+    sent = [Command(c).name for c in port.commands]
+    assert sent[sent.index("GET_INFO") + 1] == "SET_RADIO"
+    assert port.radio == 0
+    assert "SET_CHANNEL" in sent and "ENERGY_DETECT" in sent
+
+
+def test_the_spectrum_selects_802154_too(monkeypatch, capsys):
+    port = run_tool(monkeypatch, spectrum, ["--passes", "1", "--dwell-ms", "1"])
+    sent = [Command(c).name for c in port.commands]
+    assert sent[sent.index("GET_INFO") + 1] == "SET_RADIO"
+    assert port.radio == 0

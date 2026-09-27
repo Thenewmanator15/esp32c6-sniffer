@@ -27,7 +27,7 @@ import argparse
 import statistics
 
 from esp32c6_sniffer.boards import BoardLink
-from esp32c6_sniffer.control import Command, encode_command
+from esp32c6_sniffer.control import Command, Radio, encode_command
 from esp32c6_sniffer.tap import CHANNEL_MAX, CHANNEL_MIN
 
 # Channels Zigbee deployments commonly use, and the Wi-Fi gaps.
@@ -60,6 +60,9 @@ def main() -> None:
 
     symbols = max(1, int(args.dwell_ms * 1000 / 16))  # 16 us per symbol
     link = BoardLink(args.port).open()
+    # See survey.py: after a BLE capture the nRF54L15 refuses energy
+    # measurements until 802.15.4 is selected again.
+    link.command(Command.SET_RADIO, int(Radio.IEEE802154))
 
     readings: dict[int, list[int]] = {
         c: [] for c in range(CHANNEL_MIN, CHANNEL_MAX + 1)
@@ -72,8 +75,6 @@ def main() -> None:
             for channel in range(CHANNEL_MIN, CHANNEL_MAX + 1):
                 reply = link.command(Command.ENERGY_DETECT,
                                      channel | (symbols << 8))
-                if not reply["ok"]:
-                    continue
                 raw = reply["value"] & 0xFF
                 readings[channel].append(raw - 256 if raw > 127 else raw)
             print(f"  pass {pass_no} done")

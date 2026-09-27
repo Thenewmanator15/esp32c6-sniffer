@@ -296,6 +296,15 @@ def hop_sets(name: str) -> dict:
     return HOP_SETS.get(radio_kind(name), {0: None})
 
 
+def listening_on(radio: Radio, channel: int) -> str:
+    """Where a capture listens, for the log. A BLE capture has no channel:
+    it said "capture started on channel 0"."""
+    from esp32c6_sniffer.control import Radio
+    if radio is Radio.BLE:
+        return "the advertising channels"
+    return f"channel {channel}"
+
+
 def hop_start(channel: int, hop_channels) -> tuple[int, int]:
     """The channel a capture opens on, and its place in the hop set.
 
@@ -366,18 +375,21 @@ def parse_channel_token(interface: str, text: str) -> int:
     Raises ValueError with a message worth showing the user.
     """
     text = text.strip()
-    expected = INTERFACES[interface]["prefix"]
+    spec = INTERFACES[interface]
+    if spec["min"] is None:
+        # The toolbar is shared, so a BLE capture has the Channel dropdown too.
+        raise ValueError("BLE has no channel to select: the controller "
+                         "rotates the three advertising channels itself")
+    expected = spec["prefix"]
     if text and text[0].isalpha():
         prefix, number = text[0], text[1:]
         if prefix != expected:
             other = next(
-                name for name, spec in INTERFACES.items()
-                if spec["prefix"] == prefix
-            )
+                (r for r in RADIOS.values() if r["prefix"] == prefix), None)
+            band = other["band"] if other else f"'{prefix}'"
             raise ValueError(
-                f"that channel belongs to {INTERFACES[other]['display']}, "
-                f"not this capture"
-            )
+                f"that is a {band} channel, and this capture is "
+                f"{spec['band']}")
     else:
         number = text
     channel = int(number)
@@ -464,7 +476,7 @@ def board_interfaces() -> list[tuple[str, str]]:
     return out
 
 
-def print_interfaces(selected: str | None = None) -> None:
+def print_interfaces() -> None:
     # The control bitfield must appear BOTH here and on the interface line.
     # Declaring controls only in --extcap-config does not make Wireshark
     # create the pipes, and the failure is silent.
@@ -475,33 +487,38 @@ def print_interfaces(selected: str | None = None) -> None:
     for value, display in board_interfaces():
         print(f"interface {{value={value}}}{{display={display}}}"
               f"{{control={CONTROL_BITS}}}")
-    if selected is not None:
-        selected = split_interface(selected)[0]
-    # When Wireshark names the interface, offer only that radio's channels.
-    # Otherwise offer both, which is why the values are prefixed: 11 to 14
-    # exist in both radios and mean different frequencies.
-    shown = [selected] if selected in INTERFACES else list(INTERFACES)
-    tunable = [name for name in shown if INTERFACES[name]["min"] is not None]
-
-    # Declared only when there is something to put in it. BLE has no channel --
-    # the controller rotates the three advertising channels itself -- and
-    # declaring the control anyway gave a BLE capture an empty Channel dropdown
-    # in the toolbar, contradicting the refusal the config path already makes.
-    if tunable:
-        print(f"control {{number={CTRL_ARG_CHANNEL}}}{{type=selector}}"
-              f"{{display=Channel}}"
-              f"{{tooltip=Retunes the radio without restarting the capture}}")
-        for name in tunable:
-            spec = INTERFACES[name]
-            band = "" if len(tunable) == 1 else f"{spec['band']} "
-            for channel in range(spec["min"], spec["max"] + 1):
-                print(f"value {{control={CTRL_ARG_CHANNEL}}}"
-                      f"{{value={channel_token(name, channel)}}}"
-                      f"{{display={band}{channel_label(name, channel)}}}")
+    # ONE toolbar, for the whole plugin. Wireshark lists interfaces with
+    # --extcap-interfaces and --extcap-version only -- never naming one --
+    # and builds a single toolbar from that, shared by every interface it
+    # lists (extcap.c, process_new_extcap). So the Channel dropdown holds
+    # every radio's channels, once per radio rather than once per board --
+    # two boards listed 802.15.4 twice, 46 entries -- and the values carry
+    # a radio prefix because 11 to 14 exist in both and mean different
+    # frequencies. A channel of the wrong radio, or any channel in a BLE
+    # capture, is refused in the log by parse_channel_token.
+    #
+    # This used to narrow the list when an interface was named. Wireshark
+    # never names one here, so that never ran.
+    tunable = {}
+    for name, spec in INTERFACES.items():
+        if spec["min"] is not None:
+            tunable.setdefault(spec["radio"], name)
+    print(f"control {{number={CTRL_ARG_CHANNEL}}}{{type=selector}}"
+          f"{{display=Channel}}"
+          f"{{tooltip=Retunes the radio without restarting the capture}}")
+    for name in tunable.values():
+        spec = INTERFACES[name]
+        for channel in range(spec["min"], spec["max"] + 1):
+            print(f"value {{control={CTRL_ARG_CHANNEL}}}"
+                  f"{{value={channel_token(name, channel)}}}"
+                  f"{{display={spec['band']} {channel_label(name, channel)}}}")
+    # Worded for any board: the one toolbar serves them all, and a gain
+    # measured on the C6 said "on this board" on the nRF54L15 too.
     print(f"control {{number={CTRL_ARG_ANTENNA}}}{{type=boolean}}"
           f"{{display=External antenna}}{{default=false}}"
-          f"{{tooltip=Switch antenna without restarting. Measured +13 to +14 dB "
-          f"external on this board, so this is a live A/B on the same traffic}}")
+          f"{{tooltip=Switches between the onboard and external antenna "
+          f"without restarting: a live A/B on the same traffic. Which is "
+          f"better depends on the antenna fitted}}")
     print(f"control {{number={CTRL_ARG_LOGGER}}}{{type=button}}{{role=logger}}"
           f"{{display=Log}}{{tooltip=Frame counts and drop counters}}")
     from esp32c6_sniffer.ble_keys import KEY_CHECK_SECONDS
@@ -649,7 +666,9 @@ def print_config(interface: str, reload_option: str | None = None,
               "into Wireshark's own key table, for this profile and the root. "
               "A dataset also carries the channel, and the capture moves to "
               "it, because the wrong channel gives an empty capture that "
-              "looks exactly like a wrong key. For a network you own}")
+              "looks exactly like a wrong key. Wireshark reads its key table "
+              "when it starts, so the first time a key is installed, restart "
+              "Wireshark and reopen the capture. For a network you own}")
         # 802.15.4 needs this more than Wi-Fi does. Wi-Fi has beacons every
         # 100 ms on a handful of channels, so a survey finds the traffic in
         # seconds. Here there are sixteen channels, nothing announces itself,
@@ -1022,6 +1041,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
     hop_channels = hop_sets(interface).get(hop)
     session_bandwidth = Bandwidth(bandwidth) if wifi else None
     session_ctrl = CtrlFilter.NO_ACK if (wifi and drop_acks) else None
+    #: The board by name, for the status bar and warnings: the one toolbar
+    #: serves every board, and it said "ESP32-C6" on the nRF54L15.
+    board_display = board_for_interface(interface)["display"]
 
     # Read any keys BEFORE the fifo is opened: a bad key file must fail
     # while Wireshark can still show the error, not after it has committed to
@@ -1083,7 +1105,13 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
         installed = install_key(creds.key)
         thread_note = f"Thread credentials: {creds.summary()}"
         if installed:
-            thread_note += f"; installed into {len(installed)} key table(s)"
+            # Wireshark reads the table when it starts, so this capture cannot
+            # use a key that was not there already. thread_key.py said so; the
+            # option did not.
+            thread_note += (f"; installed into {len(installed)} key table(s). "
+                            f"Wireshark reads its key table when it starts: "
+                            f"restart Wireshark, then reopen this capture, to "
+                            f"decrypt with the new key")
         else:
             thread_note += "; already installed"
         # A dataset is authoritative about its own network, and the default
@@ -1117,7 +1145,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                 control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
                               text.encode("utf-8"))
 
-    def note(text: str) -> None:
+    def say_when_ready(text: str) -> None:
         """log(), but kept until the toolbar is listening. For what the
         capture says as it starts: written before Wireshark's INITIALIZED,
         log() drops it -- the audit lost "hopping [...]" and the power-cycle
@@ -1177,7 +1205,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     state["initialized"] = True
                     held = list(early_notes)
                     early_notes.clear()
-                log(f"capture started on channel {session._channel}")
+                log(f"capture started on "
+                    f"{listening_on(radio, session._channel)}")
                 if thread_note:
                     # Said here rather than on stderr, because the channel may
                     # have moved and the user should see which network they
@@ -1208,7 +1237,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     with control_lock:
                         control_write(fp_out, CTRL_ARG_NONE,
                                       CTRL_CMD_STATUSBAR,
-                                      f"ESP32-C6: channel {wanted}".encode())
+                                      f"{board_display}: channel {wanted}"
+                                      .encode())
                 except (ValueError, UnicodeDecodeError) as exc:
                     # Selecting the other radio's channel lands here. Say so
                     # rather than silently ignoring it.
@@ -1399,7 +1429,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     "needs extended scanning, and Advertising PHYs is set to "
                     "Legacy only")
             for message in deferred_log:
-                note(message)
+                say_when_ready(message)
 
             if hop_channels:
                 # request_channel() only sets a flag; the capture loop owns the
@@ -1418,7 +1448,8 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             log(f"hop skipped: {exc}")
 
                 threading.Thread(target=hopper, daemon=True).start()
-                note(f"hopping {list(hop_channels)} every {hop_dwell_ms} ms")
+                say_when_ready(f"hopping {list(hop_channels)} every "
+                               f"{hop_dwell_ms} ms")
 
             # A heartbeat, because everything else in this loop is driven by
             # packets arriving. On a quiet channel none do: 802.15.4 channel
@@ -1453,7 +1484,6 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
 
             next_report = time.monotonic() + 1.0
             loss_warning = LossWarning()
-            board_display = board_for_interface(interface)["display"]
             try:
                 for record, timestamp, original_len in session.records():
                     note = None
@@ -1552,7 +1582,9 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             extra += (f", {s.fw_ble_periodic_refused} periodic "
                                       f"syncs refused")
                         extra += command_note(s)
-                        log(f"ch {session._channel}: {s.frames} frames, "
+                        where = ("BLE" if radio is Radio.BLE
+                                 else f"ch {session._channel}")
+                        log(f"{where}: {s.frames} frames, "
                             f"{loss_summary(s)}{extra}")
                         fresh = loss_warning.due(s.packets_dropped, now)
                         if fresh:
@@ -1690,7 +1722,7 @@ def main(argv: list[str] | None = None) -> int:
         args.port = default_port()
 
     if args.extcap_interfaces:
-        print_interfaces(args.extcap_interface)
+        print_interfaces()
         return 0
 
     # An interface may name its board -- "esp32c6-wifi@COM7" -- when more than
