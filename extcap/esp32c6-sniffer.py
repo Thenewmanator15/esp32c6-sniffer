@@ -1096,6 +1096,10 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             channel = creds.channel
 
     state = {"initialized": False, "running": True}
+    #: Start-up notes written before Wireshark's INITIALIZED, which log()
+    #: would drop. The toolbar reader sends them once it arrives.
+    early_notes: list[str] = []
+    early_lock = threading.Lock()
     fp_out = None
 
     # Three threads write the control pipe now -- the toolbar reader, the
@@ -1112,6 +1116,17 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             if popup:
                 control_write(fp_out, CTRL_ARG_NONE, CTRL_CMD_INFORMATION,
                               text.encode("utf-8"))
+
+    def note(text: str) -> None:
+        """log(), but kept until the toolbar is listening. For what the
+        capture says as it starts: written before Wireshark's INITIALIZED,
+        log() drops it -- the audit lost "hopping [...]" and the power-cycle
+        note this way, 2 runs in 2."""
+        with early_lock:
+            if not state["initialized"]:
+                early_notes.append(text)
+                return
+        log(text)
 
     def start_key_check(session) -> None:
         if radio is not Radio.BLE or not device_keys:
@@ -1158,13 +1173,18 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
             if cmd == CTRL_CMD_INITIALIZED:
                 # Arrives after Wireshark replays every user-changed control.
                 # Writing before this is ignored.
-                state["initialized"] = True
+                with early_lock:
+                    state["initialized"] = True
+                    held = list(early_notes)
+                    early_notes.clear()
                 log(f"capture started on channel {session._channel}")
                 if thread_note:
                     # Said here rather than on stderr, because the channel may
                     # have moved and the user should see which network they
                     # are actually pointed at.
                     log(thread_note)
+                for text in held:
+                    log(text)
                 continue
             if cmd == CTRL_CMD_SET and arg == CTRL_ARG_ANTENNA:
                 # Boolean controls carry a raw 0/1 byte, not the ASCII digit.
@@ -1379,7 +1399,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                     "needs extended scanning, and Advertising PHYs is set to "
                     "Legacy only")
             for message in deferred_log:
-                log(message)
+                note(message)
 
             if hop_channels:
                 # request_channel() only sets a flag; the capture loop owns the
@@ -1398,7 +1418,7 @@ def do_capture(fifo: str, port: str, channel: int, antenna: int,
                             log(f"hop skipped: {exc}")
 
                 threading.Thread(target=hopper, daemon=True).start()
-                log(f"hopping {list(hop_channels)} every {hop_dwell_ms} ms")
+                note(f"hopping {list(hop_channels)} every {hop_dwell_ms} ms")
 
             # A heartbeat, because everything else in this loop is driven by
             # packets arriving. On a quiet channel none do: 802.15.4 channel
