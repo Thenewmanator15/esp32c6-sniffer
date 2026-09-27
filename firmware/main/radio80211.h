@@ -250,8 +250,8 @@ esp_err_t sn_radio80211_set_csi(bool enable);
  *
  * THE DEAFNESS. Both radios share one 2.4 GHz front end, and leaving the
  * 802.15.4 radio ENABLED when the host disconnects leaves the Wi-Fi receiver
- * deaf until the RF domain is power-gated. Three arms, each starting from a
- * working Wi-Fi radio and 25 s of activity:
+ * deaf. Three arms, each starting from a working Wi-Fi radio and 25 s of
+ * activity:
  *
  *   802.15.4 left running     389 Wi-Fi frames before, 0 after
  *   802.15.4 stopped properly 564 before, 449 after
@@ -259,10 +259,12 @@ esp_err_t sn_radio80211_set_csi(bool enable);
  *
  * So it is not using the radio, it is walking away with it still on. A capture
  * session sends STOP on close, so ordinary use is fine; a crashed or killed
- * host is what poisons it. Nothing short of power-gating recovers it: not a
- * driver rebuild, not a reflash, not a full erase-flash. The board records the
- * condition in RTC_NOINIT memory and the host power-cycles before a Wi-Fi
- * capture when it sees it, automatically.
+ * host is what poisons it. Not a driver rebuild, a reflash, a full
+ * erase-flash, an hour's wait or the deep-sleep power-gate recovers it (the
+ * last 0 in 16, 2026-09-27). Starting 802.15.4 and stopping it cleanly does,
+ * 8 in 8, with no time spent receiving. The board records the condition in
+ * RTC_NOINIT memory and does exactly that at boot when it sees it; the host
+ * does it too before a Wi-Fi capture, for older firmware.
  *
  * Two defects here WERE ours and are fixed:
  *

@@ -34,8 +34,7 @@ static volatile bool s_running;
 /* True while this radio owns the shared 2.4 GHz front end.
  *
  * Leaving 802.15.4 ENABLED when the host disconnects leaves the Wi-Fi receiver
- * deaf until the RF domain is power-gated. Measured, three arms, each after a
- * power cycle that restored Wi-Fi first:
+ * deaf. Measured, three arms, each after Wi-Fi had been restored first:
  *
  *   802.15.4 left running  389 Wi-Fi frames before, 0 after
  *   802.15.4 stopped first 564 before, 449 after
@@ -60,6 +59,9 @@ static volatile bool s_running;
 static RTC_NOINIT_ATTR uint32_t s_dirty_magic;
 static RTC_NOINIT_ATTR uint32_t s_dirty_flag;
 
+/* Set when the radio starts; cleared only by a clean stop, which is what
+ * hands the front end back (2026-09-27: 8 in 8). The deep-sleep power-gate
+ * does not (0 in 16), so waking from it clears nothing. */
 static bool front_end_dirty(void)
 {
     return s_dirty_magic == SN_DIRTY_MAGIC && s_dirty_flag != 0u;
@@ -246,32 +248,28 @@ void sn_radio154_stop(void)
         sn_trace(SN_TRACE_154_STOP_OUT, 0, 0);
         return;
     }
-    /* Sleep before deinit.
+    /* Sleep before deinit, which is what hands the shared front end back.
      *
-     * Measured: using this radio at all leaves the Wi-Fi receiver deaf until
-     * the RF domain is power-gated -- 633 Wi-Fi frames before an 802.15.4
-     * capture, 0 after, while idling the same 30 seconds cost nothing. Both
-     * share one 2.4 GHz front end, and esp_ieee802154_disable() alone does not
-     * hand it back. Parking the radio first is the only other lever the API
-     * offers; if it does not help, the workaround is a power cycle.
+     * Both radios share one 2.4 GHz front end. Leave this radio running when
+     * the host goes and the Wi-Fi receiver is deaf afterwards -- 8 times in 8,
+     * 2026-09-27 -- and esp_ieee802154_disable() alone does not give it back.
+     * Starting this radio and stopping it here, with the sleep, does, every
+     * time (8 in 8); the deep-sleep power-gate does not (0 in 16).
      *
      * SN_154_LEGACY_STOP builds the version without the sleep, so the claim
-     * above can be A/B tested against this same binary rather than asserted.
-     * It isolates one API call and nothing else, which is the form an upstream
+     * can be A/B tested against this same binary rather than asserted. It
+     * isolates one API call and nothing else, which is the form an upstream
      * report needs. Build with -DSN_154_LEGACY_STOP=1; never ship it. */
 #if !defined(SN_154_LEGACY_STOP) || !SN_154_LEGACY_STOP
     esp_ieee802154_sleep();
-#endif
     esp_ieee802154_disable();
+    /* Handed back, so nothing is outstanding. Only here: the stop without
+     * the sleep is the one that leaves Wi-Fi deaf. */
+    set_front_end_dirty(false);
+#else
+    esp_ieee802154_disable();
+#endif
     s_running = false;
-    /* The flag is left set: only the radio power cycle clears it (main.c).
-     * A clean stop was measured handing the front end back (564 Wi-Fi frames
-     * before, 449 after), and this cleared the flag on the strength of it --
-     * but on 2026-09-25 the Wi-Fi receiver was found deaf after a day of
-     * 802.15.4 use with the flag reading clear, so the host never
-     * power-cycled and the scan came back empty. A needless power cycle
-     * costs a few seconds before the next Wi-Fi capture; a missed one costs
-     * the capture. */
     sn_trace(SN_TRACE_154_STOP_OUT, 1, 0);
     ESP_LOGI(TAG, "capture stopped");
 }
@@ -281,9 +279,17 @@ bool sn_radio154_used_since_boot(void)
     return front_end_dirty();
 }
 
-void sn_radio154_clear_dirty(void)
+void sn_radio154_hand_back(void)
 {
-    set_front_end_dirty(false);
+    if (!front_end_dirty()) {
+        return;
+    }
+    /* Start and stop at once: no time receiving is needed, measured. The
+     * channel is any valid one; nothing is captured. */
+    ESP_LOGW(TAG, "802.15.4 was left running; handing the front end back");
+    if (sn_radio154_start(SN_154_CHANNEL_MIN) == ESP_OK) {
+        sn_radio154_stop();
+    }
 }
 
 uint8_t sn_radio154_channel(void)
@@ -394,7 +400,7 @@ esp_err_t sn_radio154_set_channel(uint8_t channel)
 }
 void sn_radio154_stop(void) {}
 bool sn_radio154_used_since_boot(void) { return false; }
-void sn_radio154_clear_dirty(void) {}
+void sn_radio154_hand_back(void) {}
 uint8_t sn_radio154_channel(void) { return 0; }
 void sn_radio154_get_stats(sn_154_stats_t *out) { memset(out, 0, sizeof(*out)); }
 esp_err_t sn_radio154_energy_detect(uint8_t channel, uint32_t duration_symbols,

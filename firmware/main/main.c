@@ -110,8 +110,8 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
             return SN_STATUS_BAD_VALUE;
         }
         /* Stop every radio before switching. They share one 2.4 GHz front
-         * end, and leaving one enabled is what left the Wi-Fi receiver deaf
-         * until a power cycle. */
+         * end, and leaving one enabled is what left the Wi-Fi receiver deaf.
+         * A clean 802.15.4 stop here is also what cures that. */
         sn_radio154_stop();
         sn_radio80211_stop();
         sn_radio_ble_stop();
@@ -307,6 +307,12 @@ static sn_status_t on_command(sn_command_t cmd, uint32_t value,
          * does not clear it but a physical unplug does, the fault lives outside
          * the gated domains.
          *
+         * Measured 2026-09-27: it does NOT cure the deafness 802.15.4 left
+         * running causes (0 in 16); starting and stopping 802.15.4 cleanly
+         * does, which the board now does itself at boot. It did cure the
+         * 2026-09-25 deafness, with the flag clear and the cause unknown, so
+         * the host keeps it as the fallback after a hand-back.
+         *
          * Deliberately a command rather than part of the automatic stall
          * recovery, because it drops the USB link and would end a running
          * capture without warning. */
@@ -501,24 +507,25 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs_err);
 
-#if SN_MODE == SN_MODE_CAPTURE
-    /* Waking from our own timer is the radio power cycle, and the only thing
-     * that hands the shared front end back. Clear the flag here so the host
-     * stops being told a recovery is outstanding.
-     *
-     * Healing automatically at this point was tried and is worse: the board
-     * boots when the host opens the port, so it would deep-sleep immediately
-     * and leave the caller holding a handle to a device that has gone away.
-     * The host asks instead, over a connection it can reopen -- see
-     * SN_CMD_RADIO_DIRTY and esp32c6_sniffer.recovery. */
-    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER) {
-        sn_radio154_clear_dirty();
-    }
-#endif
-
     ESP_ERROR_CHECK(sn_board_init(s_antenna));
     ESP_ERROR_CHECK(sn_usb_link_init());
     sn_log_sink_install();
+
+#if SN_MODE == SN_MODE_CAPTURE && \
+    (!defined(SN_154_NO_BOOT_HANDBACK) || !SN_154_NO_BOOT_HANDBACK)
+    /* 802.15.4 left running when a host went leaves Wi-Fi deaf until it is
+     * started and stopped cleanly, and this board boots whenever a host
+     * opens the port -- so doing it here cures it for every tool that
+     * connects, before any command arrives. 8 in 8, where the power cycle
+     * this used to leave to the host cured it 0 in 16; so the power cycle's
+     * own timer wake no longer clears the flag either -- that hid a latch
+     * it had not cured.
+     *
+     * SN_154_NO_BOOT_HANDBACK builds without it, for measuring the latch
+     * itself: tools/latch_trial.py's dirty arm is otherwise cured before
+     * it is measured. Never ship it. */
+    sn_radio154_hand_back();
+#endif
 
     sn_control_set_handler(on_command);
 #if SN_MODE == SN_MODE_CAPTURE

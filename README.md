@@ -238,11 +238,12 @@ its own radiotap link type and a 1-14 channel selector. Measured on channel 6:
 731 frames in 15 s, management and data, RSSI -50 to -96 dBm, no drops,
 decoding as radiotap.
 
-**One quirk, mostly handled automatically.** Both radios share a single
+**One quirk, now handled by the board itself.** Both radios share a single
 2.4 GHz front end. The Wi-Fi receiver goes deaf — scans and captures complete
 and hear nothing — for minutes to hours, and neither a driver rebuild, a
-reflash nor a full `erase-flash` brings it back. A power-gate of the RF domain
-often does, but not always.
+reflash nor a full `erase-flash` brings it back. The cause that has been
+measured is 802.15.4 left running when a host goes, and the cure for it is to
+start 802.15.4 and stop it cleanly, which the firmware does at boot.
 
 The cause was first put down to leaving the 802.15.4 radio enabled when the
 host disconnects, on a three-row table with **one trial per arm**. Then
@@ -255,49 +256,66 @@ retracted:
 | access points, n=5 each | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 | 4, 4, 4, 4, 4 |
 | Wi-Fi frames, n=3 each | 596, 645, 587 | 634, 671, 605 | 567, 440, 529 |
 
-**That replication could not have found it, and the retraction is withdrawn.**
-Both of its measures reached the board through the host's recovery, which
-power-cycles the board when the 802.15.4 flag is set — and the dirty arm is the
-arm that sets it. So every dirty trial was cured before it was measured. The
-clean and idle arms were measured as intended. (The access-point counts were
-also capped at four by a scan bug since fixed; a deaf receiver still reads
-zero.)
+**The retraction is withdrawn**, though not for the reason first given. Both
+of the replication's measures reached the board through the host's recovery,
+which power-cycled the board whenever the 802.15.4 flag was set, and the dirty
+arm is the one that sets it. That was taken to mean every dirty trial was cured
+before it was measured. But the power-gate turns out not to cure this at all
+(below), so why those eight dirty trials read healthy is unknown. What
+withdraws the retraction is the trials since, measured with nothing in the
+way. (The access-point counts were also capped at four by a scan bug since
+fixed; a deaf receiver still reads zero.)
 
 Measured with the recovery switched off, on 2026-09-26, the first dirty trial
 went from 7 access points to **0**, and stayed at 0 through fourteen power-gates
-over the next seven minutes. Twenty minutes later it heard 9, without being
-unplugged. One trial is not a rate, but the claim it supports is the original
-one: leaving the 802.15.4 radio running when the host goes can deafen the
-Wi-Fi receiver, in a way a power-gate does not always clear.
+over the next seven minutes.
 
-So the host does what it can — `esp_ieee802154_sleep()` before `disable()`,
-the `RADIO_DIRTY` flag, and an automatic power-cycle when it sees the flag set.
+**2026-09-27, with the recovery off and the cures measured one at a time:**
 
-The flag now stays set until the power cycle; a clean stop used to clear it,
-and on 2026-09-25 the receiver was found deaf with the flag reading clear. And
-because the latch has causes nobody has pinned down, a Wi-Fi capture that
-hears nothing at all in its first three seconds scans the band — passively,
-transmitting nothing — and power-cycles only if that finds nothing either:
+| | result |
+|---|---|
+| 802.15.4 left running when the host goes | Wi-Fi deaf **8 times in 8** |
+| the deep-sleep power-gate the host used as its cure | cured it **0 times in 16** |
+| waiting, scanning once a minute | not cured in an hour |
+| starting 802.15.4 and stopping it cleanly | cured it **8 times in 8**, at once, with no time spent receiving |
+
+It had seemed to clear by itself twenty minutes after that. But 802.15.4
+sanity captures had run in the gap, each ending in a clean stop, and that
+was this cure, unnoticed. The claim is the original one: walking away with
+802.15.4 running deafens Wi-Fi. The power-gate is not its cure.
+
+So the board cures it itself. It records 802.15.4 running in RTC memory, where
+it survives the reset that opening the serial port causes, and clears it on a
+clean stop (`esp_ieee802154_sleep()` then `disable()`). At boot, if it is still
+set, the firmware starts 802.15.4 and stops it cleanly before any command
+arrives — so every tool that connects finds Wi-Fi working. Measured: three
+dirty trials, each 8 access points and 699 to 817 Wi-Fi frames in 8 s at the
+next connection, with no help from the host.
+
+The host still checks the flag before a Wi-Fi capture, for older firmware, and
+hands the radio back the same way — no power cycle:
 
 ```
-Wi-Fi heard nothing on this channel, and a scan found no network anywhere: the receiver latch this board is prone to, or no Wi-Fi within range. Power-cycled the radio and started again
+802.15.4 had been left running, which deafens Wi-Fi; started and stopped it cleanly to hand the radio back
+```
+
+And because the receiver was once found deaf with the flag clear (2026-09-25,
+cause unknown, which the power-gate did cure), a Wi-Fi capture that hears
+nothing at all in its first three seconds scans the band — passively,
+transmitting nothing. If that finds nothing either, it hands the radio back,
+and power-cycles only if that fails too:
+
+```
+Wi-Fi heard nothing on this channel, and a scan found no network anywhere: the receiver latch this board is prone to, or no Wi-Fi within range. Handed the radio back and started again
 ```
 
 A band with no Wi-Fi in it at all — a shielded box, or the external antenna
-selected with none fitted — gets the power cycle anyway, 10 to 15 seconds at
-each start; the message says which two things it could be. A channel that is
-quiet in a band that is not costs about five seconds at the start of the
-capture, and no power cycle: measured on channel 14 here, 8 s to
-open where the check without the scan power-cycled and took 15.
-
-
-The board records the condition in RTC memory, where it survives the reset that
-opening the serial port causes, and the host power-cycles before a Wi-Fi
-capture when it sees the flag. It is automatic:
-
-```
-802.15.4 had been used; power-cycled the radio domain first.
-```
+selected with none fitted — gets both anyway at each start: the power cycle
+alone was measured at 10 to 15 seconds, and the hand-back adds a few more. The
+message says which two things it could be. A channel that is quiet in a
+band that is not costs about five seconds at the start of the capture, and no
+recovery: measured on channel 14 here, 8 s to open where the check without
+the scan power-cycled and took 15.
 
 Getting here took several confident wrong conclusions, including "the radio is
 faulty, claim warranty". Written up in
@@ -1179,7 +1197,7 @@ right to send.
 | The board does not appear as a COM port | A charge-only USB-C cable. It enumerates nothing and looks exactly like a dead board. |
 | `cannot capture on COM3` | The board is on a different port. The message names the one it found; set it in the interface options. The board is the device with USB id `303A:1001`, and a machine can easily have another serial device on COM3. |
 | `could not open port` | Something else holds it: another capture, a serial monitor, or a previous run that has not exited. The three radios cannot capture at once. |
-| Wi-Fi captures nothing, 802.15.4 works | The receiver has gone deaf. 802.15.4 left running when a host went is one cause, measured; it is not the only one (see above). The host power-cycles the radio automatically when it sees the flag, or when a capture hears nothing and a scan of the band finds nothing either; if it persists, run `tools\wifi_survey.py --recover`. That is the same power-gate, and it does not always clear it: after 802.15.4 was left running it failed fourteen times in a row, and the receiver came back on its own within twenty minutes. |
+| Wi-Fi captures nothing, 802.15.4 works | The receiver has gone deaf. 802.15.4 left running when a host went is the cause that has been measured, and starting and stopping 802.15.4 cleanly cures it; the firmware does that at boot, and the host does it too when it sees the flag, or when a capture hears nothing and a scan of the band finds nothing either, power-cycling only if that fails. If it persists, run `tools\wifi_survey.py --recover`, which does the same. Firmware older than this has no boot hand-back: update it. |
 | Flashing fails | Hold **BOOT**, tap **RESET**, release **BOOT**, retry. `flash.ps1` already retries three times. |
 | A channel looks empty | It probably is. The sniffer is passive and shows only traffic that already exists. On Wi-Fi, check the toolbar log first. |
 

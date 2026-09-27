@@ -150,11 +150,11 @@ def main() -> int:
               f"this survey needs the ESP32-C6.", file=sys.stderr)
         return 2
 
-    # Automatic rather than optional: if 802.15.4 has run since boot the
-    # Wi-Fi receiver is deaf, and every scan would come back empty for a reason
+    # Automatic rather than optional: if 802.15.4 was left running the Wi-Fi
+    # receiver is deaf, and every scan would come back empty for a reason
     # that has nothing to do with the air.
     if ensure_wifi_ready(args.port):
-        print("802.15.4 had been used; power-cycled the radio domain first.")
+        print("802.15.4 had been left running; handed the radio back first.")
 
     ser = serial.Serial(args.port, 115200, timeout=0.05)
     try:

@@ -4,9 +4,12 @@
 fix.** Promiscuous capture on channel 6 yields ~55 frames/s, management and
 data, RSSI −50 to −96 dBm, correct rates and modulation, 6 malformed frames in
 1100. Two real defects were ours and are fixed. The third problem was not ours:
-the receiver latches deaf, and **only power-gating the RF domain clears it** —
-0 access points before a deep-sleep reset, 12 after. See "Root cause" below.
+the receiver latches deaf. That day a power-gate of the RF domain cleared it —
+0 access points before a deep-sleep reset, 12 after; see "Root cause" below.
 That latch is why single readings kept contradicting each other all day.
+(Corrected 2026-09-27: the deafness that leaving 802.15.4 running causes is
+*not* cleared by a power-gate, 0 times in 16, and a clean 802.15.4 start and
+stop clears it every time. See the correction of that date.)
 
 This is kept because the investigation produced several confident wrong
 conclusions in a row, and the pattern that produced them is worth not
@@ -100,6 +103,11 @@ investigation was a **soft** one -- esptool's reset line, a reflash, a full
 from the RF domain. The fault was never in flash, never in NVS calibration,
 never in the driver, and never in our code. It sat in analog state that only a
 power-gate clears.
+
+(2026-09-27: true of that day's deafness, whose cause was never pinned down.
+The deafness 802.15.4 left running causes is different: a power-gate does not
+clear it, and a clean 802.15.4 start and stop does. See the correction of that
+date below.)
 
 It also explains why the "recoveries" counter climbed while frames stayed at
 zero: rebuilding the driver cannot clear a latch below it.
@@ -211,6 +219,51 @@ deafen the Wi-Fi receiver -- and that deafness, unlike the one this document
 opens with, did not clear with a power-gate. More trials need `--stop-on-deaf`
 and patience, since a deaf trial costs the board until it clears.
 
+**Corrected again — 2026-09-27: the power-gate is not the cure, and a clean
+stop is.** More trials, with the trial's own recovery off and each cure
+measured separately:
+
+| | result |
+|---|---|
+| 802.15.4 left running when the host goes | Wi-Fi deaf **8 times in 8** |
+| the deep-sleep power-gate | cured it **0 times in 16** |
+| waiting, one scan a minute | still deaf after an hour |
+| starting 802.15.4 and stopping it cleanly | cured it **8 times in 8**, at once |
+
+The last row held at every dwell tried, 0, 1 and 5 seconds, so receiving is
+not what cures it. The 802.15.4 stop path does, which puts the radio to sleep
+and then disables it. Three things written above need correcting in its light:
+
+- **"Twenty minutes later it heard 9"** was not the receiver recovering on its
+  own. 802.15.4 sanity captures ran in that gap, and each one ended with a
+  clean stop. The hour's wait, with nothing else run, did not cure it.
+- **"The retraction was confounded"** blamed the replication's null result on
+  the recovery power-gating each dirty trial before it was measured. The
+  power-gate cures this 0 times in 16, and the recovery at the time was that
+  power-gate and nothing more. So that explanation fails too, and why those
+  eight dirty trials read healthy is unknown. Only the result above survives:
+  the dirty arm, measured with nothing in the way, went deaf 9 times in 9 over
+  two days.
+- **"Only a power-gate clears"** it, and the automatic power cycle, were right
+  for the deafness this document opens with. That one had an unknown cause,
+  and on 2026-09-25 it reappeared with the flag reading clear; the power-gate
+  cured it again. They were wrong for 802.15.4 left running.
+
+So the recovery changed:
+
+- **The firmware** clears its flag on a clean stop, since that is the cure.
+  At boot, if the flag is still set, it starts 802.15.4 and stops it cleanly
+  before any command arrives. The board boots whenever a host opens the port,
+  so every tool that connects finds Wi-Fi working. Measured: three dirty
+  trials, each back to 8 access points and 699 to 817 Wi-Fi frames in 8 s at
+  the next connection, with nothing from the host.
+- **The host** does the same hand-back when it sees the flag, for older
+  firmware. When a capture hears nothing and a scan of the band finds nothing,
+  it hands back first and power-cycles only if that fails.
+- **`latch_trial.py`** now scores a dirty trial as INVALID when its flag reads
+  clear. On a standard build the boot cure runs before the trial can measure
+  anything. Measuring the latch needs `-DSN_154_NO_BOOT_HANDBACK=1`.
+
 Two things had to be right for the fix to work, and each was wrong first:
 
 - The flag has to survive a reset, because **opening the serial port resets the
@@ -225,7 +278,9 @@ Two things had to be right for the fix to work, and each was wrong first:
 Healing automatically at boot was tried and is worse: the board boots when the
 host opens the port, so it would deep-sleep immediately and leave the caller
 holding a handle to a device that had gone away. The host asks instead, over a
-connection it can reopen.
+connection it can reopen. (The boot cure the firmware has now, from 2026-09-27,
+is a different one: a clean 802.15.4 start and stop, which takes milliseconds
+and leaves the link alone.)
 
 **The stretches got longer.** Early on it alternated within minutes, which is
 where the "minutes at a time" description came from. Later the same day it went

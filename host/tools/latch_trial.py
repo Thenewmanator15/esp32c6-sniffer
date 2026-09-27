@@ -21,16 +21,27 @@ hours, so running five of one arm and then five of another would confound the
 treatment with whatever the receiver happened to be doing that quarter-hour.
 
 *Every trial starts from a proven-working receiver.* Before each treatment the
-radio domain is power-gated and a scan must return at least one access point.
+front end is handed back -- 802.15.4 started and stopped cleanly -- the radio
+domain is power-gated, and a scan must return at least one access point.
 A zero from an instrument nobody has proved is switched on measures the
 instrument, not the world -- which is the mistake that produced three wrong
 conclusions in the original investigation. A trial that cannot get a working
 baseline is recorded as INVALID and excluded, rather than counted as a pass.
 
 *Recovery is measured on the same trial.* When a treatment yields zero, the
-domain is power-gated and scanned again. That turns each deaf reading into a
-matched pair, so "the power-gate clears it" rests on the same events as "the
-treatment caused it" rather than on two separate samples.
+domain is power-gated and scanned again, then, if still deaf, the front end is
+handed back and scanned again. That turns each deaf reading into a matched
+set, so "this clears it" rests on the same events as "the treatment caused it"
+rather than on separate samples.
+
+WHAT IT FOUND, 2026-09-27
+-------------------------
+Dirty: deaf 8 times in 8. The power-gate cured it 0 times in 16, and an hour's
+wait did not either; the hand-back cured it every time, with no time spent
+receiving. So the firmware now hands back at boot when the flag is set, and
+opening the port boots it -- which cures a dirty trial before it is measured.
+Standard firmware therefore scores every dirty trial INVALID; measuring the
+latch itself needs a build with -DSN_154_NO_BOOT_HANDBACK=1.
 
 *The outcome is a count, scored as a proportion.* Access points found, not
 frames. It is bounded, it does not depend on traffic happening to be sent, and
@@ -293,6 +304,15 @@ def trial(port: str, arm: str, cycle: int, verbose: bool, measure) -> dict:
     if not row["applied"]:
         if verbose:
             print(f"  cycle {cycle} {arm:<5}  INVALID: treatment not acked")
+        return row
+    # Reading the flag opened the port, which boots the board, and standard
+    # firmware hands the front end back at boot when the flag is set: a
+    # dirty arm reading clean was cured before it could be measured.
+    if arm == "dirty" and row["dirty_flag"] is False:
+        if verbose:
+            print(f"  cycle {cycle} {arm:<5}  INVALID: the board handed the "
+                  "front end back at boot; measuring the latch needs a "
+                  "-DSN_154_NO_BOOT_HANDBACK=1 build")
         return row
 
     # 3. Outcome.
