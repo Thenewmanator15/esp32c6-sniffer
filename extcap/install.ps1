@@ -99,7 +99,14 @@ if (Test-Path $venvPython) {
     if ($LASTEXITCODE -ne 0) { throw "could not create a virtual environment at $targetVenv" }
     $interpreter = Join-Path $targetVenv 'Scripts\python.exe'
     & $interpreter -m pip install --quiet --upgrade pip
-    & $interpreter -m pip install --quiet $wheel.FullName
+    # With the fast extra -- cryptography, about fifty times the speed for
+    # device-key checks -- and without it if that will not install: the
+    # plugin falls back to its own AES.
+    & $interpreter -m pip install --quiet "$($wheel.FullName)[fast]"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "the fast extra would not install; carrying on without it"
+        & $interpreter -m pip install --quiet $wheel.FullName
+    }
     if ($LASTEXITCODE -ne 0) { throw "could not install $($wheel.Name) into $targetVenv" }
     Write-Host "installed $($wheel.Name)"
     $fromWheel = $true
