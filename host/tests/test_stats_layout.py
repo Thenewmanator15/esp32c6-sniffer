@@ -14,6 +14,7 @@ that had captured nothing.
 Which is why the widths below are read out of the headers rather than written
 down here. A number written down is the thing that was wrong.
 """
+import os
 import pathlib
 import re
 
@@ -27,8 +28,11 @@ from esp32c6_sniffer.capture import (
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAIN = ROOT / "firmware" / "main"
-#: A separate repository, and a sibling of this one by convention only.
-NRF_HEADER = ROOT.parent / "nrf54l15-sniffer" / "src" / "radio_ble.h"
+#: A separate repository, and a sibling of this one by convention only;
+#: NRF54L15_SNIFFER names another checkout, as test_link_buffers.py allows.
+NRF = pathlib.Path(os.environ.get("NRF54L15_SNIFFER",
+                                  ROOT.parent / "nrf54l15-sniffer"))
+NRF_HEADER = NRF / "src" / "radio_ble.h"
 
 #: What capture.py's BLE branch assigns, in the order it assigns it.
 BLE_FIELDS = [
@@ -113,7 +117,7 @@ def test_the_nrf_declares_the_same_ble_block():
 
 #: The nRF builds its frame in main.c, not in the headers the C6 blocks come
 #: from, so its placement of each block has to be checked separately.
-NRF_MAIN = ROOT.parent / "nrf54l15-sniffer" / "src" / "main.c"
+NRF_MAIN = NRF / "src" / "main.c"
 
 
 def nrf_stats_frame() -> str:

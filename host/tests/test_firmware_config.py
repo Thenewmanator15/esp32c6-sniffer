@@ -21,6 +21,11 @@ needs_nrf = pytest.mark.skipif(not (NRF / "prj.conf").exists(),
                                reason="nrf54l15-sniffer not beside this repository")
 
 
+def fragments() -> list[pathlib.Path]:
+    """Every Kconfig fragment a build of the nRF firmware can merge."""
+    return sorted(NRF.glob("*.conf")) + sorted((NRF / "boards").glob("*.conf"))
+
+
 def setting(conf: str, name: str) -> str | None:
     match = re.search(rf"^{name}=(\S+)\s*$", conf, flags=re.MULTILINE)
     return match.group(1) if match else None
@@ -36,6 +41,10 @@ def test_nrf_802154_frames_arrive_without_their_fcs():
     conf = (NRF / "prj.conf").read_text(encoding="utf-8")
     assert setting(conf, "CONFIG_IEEE802154_RAW_MODE") == "y"
     assert setting(conf, "CONFIG_IEEE802154_L2_PKT_INCL_FCS") == "n"
+    # Nor turned back on by any other fragment the build can merge.
+    for fragment in fragments():
+        text = fragment.read_text(encoding="utf-8")
+        assert setting(text, "CONFIG_IEEE802154_L2_PKT_INCL_FCS") in (None, "n"), fragment
 
 
 @needs_nrf
@@ -44,6 +53,12 @@ def test_nrf_controller_can_receive_a_stereo_broadcast():
     a join asking for more streams than that is refused outright."""
     conf = (NRF / "prj.conf").read_text(encoding="utf-8")
     assert int(setting(conf, "CONFIG_BT_ISO_MAX_CHAN") or "1") >= 2
+    # The controller reads STREAM_COUNT, which only defaults to MAX_CHAN:
+    # a fragment setting it lower would undo the above.
+    for fragment in fragments():
+        count = setting(fragment.read_text(encoding="utf-8"),
+                        "CONFIG_BT_CTLR_SYNC_ISO_STREAM_COUNT")
+        assert count is None or int(count) >= 2, fragment
 
 
 @pytest.mark.parametrize("board, source", [
