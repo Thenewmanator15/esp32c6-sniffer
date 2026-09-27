@@ -115,3 +115,31 @@ def test_idf_env_leaves_the_callers_error_preference_alone(tmp_path):
     assert any(l.startswith("caught: ESP-IDF") and "not found" in l
                for l in lines), out.stdout + out.stderr
     assert lines[-1] == "Continue", out.stdout + out.stderr
+
+
+def test_idf_env_passes_over_a_place_on_a_drive_that_is_gone(tmp_path):
+    """Join-Path throws for a drive that does not exist, so one candidate on
+    a missing drive ended the search: an IDF_PATH left pointing at a removed
+    drive, or on Linux the script's own C: default, before $HOME/esp was ever
+    looked at. CI's Linux runners failed on exactly that."""
+    import os
+    import shutil
+    import string
+    import subprocess
+    import pytest
+    pwsh = shutil.which("pwsh")
+    if pwsh is None:
+        pytest.skip("PowerShell 7 is not installed")
+    missing = next(letter for letter in reversed(string.ascii_uppercase)
+                   if not os.path.exists(f"{letter}:" + os.sep))
+    gone = f"{missing}:" + "\gone\esp-idf"
+    script = pathlib.Path(__file__).resolve().parents[2] / "firmware" / "idf-env.ps1"
+    command = (f"try {{ . '{script}' -IdfPath '{gone}' "
+               f"-IdfToolsPath '{tmp_path / 'no-tools'}' }} "
+               f"catch {{ 'caught: ' + $_.Exception.Message.Split([char]10)[0] }}")
+    out = subprocess.run([pwsh, "-NoProfile", "-Command", command],
+                         capture_output=True, text=True, timeout=60)
+    caught = [l for l in out.stdout.splitlines() if l.startswith("caught: ")]
+    assert caught, out.stdout + out.stderr
+    assert "Cannot find drive" not in caught[0]
+    assert caught[0].startswith("caught: ESP-IDF") and "not found" in caught[0]
