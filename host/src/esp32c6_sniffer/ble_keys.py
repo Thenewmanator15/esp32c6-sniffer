@@ -19,6 +19,7 @@ BlueZ write them. HCI wants the reverse, and encode_ble_keys() does that.
 from __future__ import annotations
 
 import base64
+import functools
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -76,15 +77,35 @@ _SBOX = _make_sbox()
 _RCON = (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36)
 
 
-def _round_keys(key: bytes) -> list[bytes]:
-    words = [key[i:i + 4] for i in range(0, 16, 4)]
+def _tables() -> tuple[tuple[int, ...], ...]:
+    """The four round tables: SubBytes and MixColumns for one byte, as a
+    32-bit column, in each of the column's four rotations."""
+    t0 = []
+    for x in range(256):
+        s = _SBOX[x]
+        s2 = _xtime(s)
+        t0.append((s2 << 24) | (s << 16) | (s << 8) | (s2 ^ s))
+    ror = lambda w, n: ((w >> n) | (w << (32 - n))) & 0xFFFFFFFF  # noqa: E731
+    return (tuple(t0), tuple(ror(w, 8) for w in t0),
+            tuple(ror(w, 16) for w in t0), tuple(ror(w, 24) for w in t0))
+
+
+_T0, _T1, _T2, _T3 = _tables()
+
+
+@functools.lru_cache(maxsize=64)
+def _round_keys(key: bytes) -> tuple[int, ...]:
+    """The 44 words of the key schedule. Cached: a capture holds at most a
+    few keys, and expanding one cost a fifth of every block."""
+    w = [int.from_bytes(key[i:i + 4], "big") for i in range(0, 16, 4)]
     for i in range(4, 44):
-        t = words[i - 1]
+        t = w[i - 1]
         if i % 4 == 0:
-            t = bytes([_SBOX[t[1]] ^ _RCON[i // 4 - 1], _SBOX[t[2]],
-                       _SBOX[t[3]], _SBOX[t[0]]])
-        words.append(bytes(a ^ b for a, b in zip(words[i - 4], t)))
-    return [b"".join(words[r * 4:r * 4 + 4]) for r in range(11)]
+            t = ((_SBOX[(t >> 16) & 0xFF] << 24) | (_SBOX[(t >> 8) & 0xFF] << 16)
+                 | (_SBOX[t & 0xFF] << 8) | _SBOX[t >> 24])
+            t ^= _RCON[i // 4 - 1] << 24
+        w.append(w[i - 4] ^ t)
+    return tuple(w)
 
 
 def aes128_encrypt(key: bytes, block: bytes) -> bytes:
@@ -92,31 +113,46 @@ def aes128_encrypt(key: bytes, block: bytes) -> bytes:
 
     Pure Python because the standard library has no AES, and a compiled
     dependency for one function would be an install step on every platform,
-    the free-threaded 3.14t build included. It runs a few hundred times per
-    capture at most.
+    the free-threaded 3.14t build included.
+
+    Table-driven: each round is sixteen lookups on 32-bit columns, and the
+    key schedule is cached. Byte at a time it took 91 us a block, so with
+    eight keys every new private address cost 1.5 ms and about 670 a second
+    filled a core. FIPS-197 and the Core specification's ah() sample hold it
+    to the standard; tests hold it to the byte-wise version it replaced.
     """
     if len(key) != 16 or len(block) != 16:
         raise ValueError("AES-128 takes a 16-byte key and a 16-byte block")
-    rounds = _round_keys(key)
-    s = bytearray(a ^ b for a, b in zip(block, rounds[0]))
-    for r in range(1, 11):
-        s = bytearray(_SBOX[b] for b in s)
-        # ShiftRows. The state is column-major: row `row`, column `c` is
-        # byte c*4 + row.
-        s = bytearray(s[((c + row) % 4) * 4 + row]
-                      for c in range(4) for row in range(4))
-        if r != 10:
-            mixed = bytearray(16)
-            for c in range(4):
-                a = s[c * 4:c * 4 + 4]
-                x = [_xtime(v) for v in a]
-                mixed[c * 4 + 0] = x[0] ^ x[1] ^ a[1] ^ a[2] ^ a[3]
-                mixed[c * 4 + 1] = a[0] ^ x[1] ^ x[2] ^ a[2] ^ a[3]
-                mixed[c * 4 + 2] = a[0] ^ a[1] ^ x[2] ^ x[3] ^ a[3]
-                mixed[c * 4 + 3] = x[0] ^ a[0] ^ a[1] ^ a[2] ^ x[3]
-            s = mixed
-        s = bytearray(a ^ b for a, b in zip(s, rounds[r]))
-    return bytes(s)
+    rk = _round_keys(bytes(key))
+    t0, t1, t2, t3 = _T0, _T1, _T2, _T3
+    s0 = int.from_bytes(block[0:4], "big") ^ rk[0]
+    s1 = int.from_bytes(block[4:8], "big") ^ rk[1]
+    s2 = int.from_bytes(block[8:12], "big") ^ rk[2]
+    s3 = int.from_bytes(block[12:16], "big") ^ rk[3]
+    for r in range(4, 40, 4):
+        s0, s1, s2, s3 = (
+            t0[s0 >> 24] ^ t1[(s1 >> 16) & 0xFF] ^ t2[(s2 >> 8) & 0xFF]
+            ^ t3[s3 & 0xFF] ^ rk[r],
+            t0[s1 >> 24] ^ t1[(s2 >> 16) & 0xFF] ^ t2[(s3 >> 8) & 0xFF]
+            ^ t3[s0 & 0xFF] ^ rk[r + 1],
+            t0[s2 >> 24] ^ t1[(s3 >> 16) & 0xFF] ^ t2[(s0 >> 8) & 0xFF]
+            ^ t3[s1 & 0xFF] ^ rk[r + 2],
+            t0[s3 >> 24] ^ t1[(s0 >> 16) & 0xFF] ^ t2[(s1 >> 8) & 0xFF]
+            ^ t3[s2 & 0xFF] ^ rk[r + 3],
+        )
+    # The last round has no MixColumns: SubBytes and ShiftRows only.
+    sb = _SBOX
+    out = (
+        ((sb[s0 >> 24] << 24) | (sb[(s1 >> 16) & 0xFF] << 16)
+         | (sb[(s2 >> 8) & 0xFF] << 8) | sb[s3 & 0xFF]) ^ rk[40],
+        ((sb[s1 >> 24] << 24) | (sb[(s2 >> 16) & 0xFF] << 16)
+         | (sb[(s3 >> 8) & 0xFF] << 8) | sb[s0 & 0xFF]) ^ rk[41],
+        ((sb[s2 >> 24] << 24) | (sb[(s3 >> 16) & 0xFF] << 16)
+         | (sb[(s0 >> 8) & 0xFF] << 8) | sb[s1 & 0xFF]) ^ rk[42],
+        ((sb[s3 >> 24] << 24) | (sb[(s0 >> 16) & 0xFF] << 16)
+         | (sb[(s1 >> 8) & 0xFF] << 8) | sb[s2 & 0xFF]) ^ rk[43],
+    )
+    return b"".join(w.to_bytes(4, "big") for w in out)
 
 
 def ah(irk: bytes, prand: int) -> int:

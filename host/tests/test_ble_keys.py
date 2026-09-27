@@ -350,3 +350,84 @@ def test_silence_is_reported_once_after_thirty_seconds():
 def test_the_silence_message_suggests_check_keys():
     text = silence_message(IDENTITY, 30.0)
     assert IDENTITY in text and "Check keys" in text
+
+
+def _reference_aes(key: bytes, block: bytes) -> bytes:
+    """The byte-at-a-time AES this module used to run: slow, and easy to
+    check against FIPS-197 by eye. The table version must agree with it."""
+    from esp32c6_sniffer.ble_keys import _SBOX
+
+    def xtime(b):
+        b <<= 1
+        return (b ^ 0x11B) if b & 0x100 else b
+
+    rcon = (0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36)
+    words = [key[i:i + 4] for i in range(0, 16, 4)]
+    for i in range(4, 44):
+        t = words[i - 1]
+        if i % 4 == 0:
+            t = bytes([_SBOX[t[1]] ^ rcon[i // 4 - 1], _SBOX[t[2]],
+                       _SBOX[t[3]], _SBOX[t[0]]])
+        words.append(bytes(a ^ b for a, b in zip(words[i - 4], t)))
+    rounds = [b"".join(words[r * 4:r * 4 + 4]) for r in range(11)]
+    s = bytearray(a ^ b for a, b in zip(block, rounds[0]))
+    for r in range(1, 11):
+        s = bytearray(_SBOX[b] for b in s)
+        s = bytearray(s[((c + row) % 4) * 4 + row]
+                      for c in range(4) for row in range(4))
+        if r != 10:
+            mixed = bytearray(16)
+            for c in range(4):
+                a = s[c * 4:c * 4 + 4]
+                x = [xtime(v) for v in a]
+                mixed[c * 4 + 0] = x[0] ^ x[1] ^ a[1] ^ a[2] ^ a[3]
+                mixed[c * 4 + 1] = a[0] ^ x[1] ^ x[2] ^ a[2] ^ a[3]
+                mixed[c * 4 + 2] = a[0] ^ a[1] ^ x[2] ^ x[3] ^ a[3]
+                mixed[c * 4 + 3] = x[0] ^ a[0] ^ a[1] ^ a[2] ^ x[3]
+            s = mixed
+        s = bytearray(a ^ b for a, b in zip(s, rounds[r]))
+    return bytes(s)
+
+
+def test_aes_agrees_with_the_byte_wise_reference():
+    import random
+    rng = random.Random(7)
+    for _ in range(300):
+        key = rng.randbytes(16)
+        block = rng.randbytes(16)
+        assert aes128_encrypt(key, block) == _reference_aes(key, block)
+
+
+def test_one_aes_block_is_quick():
+    """91 us a block, byte at a time: with eight keys every new private
+    address cost 1.5 ms, so about 670 new addresses a second filled a core,
+    and Check keys ran for about a second on the capture thread."""
+    import timeit
+    key, block = IRK, bytes(16)
+    per_block = min(timeit.repeat(lambda: aes128_encrypt(key, block),
+                                  number=200, repeat=5)) / 200
+    assert per_block < 25e-6, f"{per_block * 1e6:.1f} us per block"
+
+
+def test_eight_keys_check_a_new_address_quickly():
+    import os
+    import timeit
+    from esp32c6_sniffer.ble_keys import BackwardsKeyWatch
+
+    keys = [DeviceKey(i + 1, 1, f"de:ad:be:ef:00:{i:02x}", os.urandom(16))
+            for i in range(8)]
+
+    def report(n):
+        raw = bytes.fromhex(make_rpa(IRK, 0x400000 + n).replace(":", ""))[::-1]
+        return (bytes([0x04, 0x3E, 0x0F, 0x02, 0x01, 0x00, 0x01]) + raw
+                + bytes([3, 2, 0x01, 0x06]) + bytes([0xC0]))
+
+    packets = [report(n) for n in range(200)]
+
+    def run():
+        watch = BackwardsKeyWatch(keys)
+        for packet in packets:
+            watch.observe(packet)
+
+    per_address = min(timeit.repeat(run, number=1, repeat=3)) / len(packets)
+    assert per_address < 0.4e-3, f"{per_address * 1e3:.2f} ms per new address"
