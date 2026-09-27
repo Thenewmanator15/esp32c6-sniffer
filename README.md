@@ -160,8 +160,9 @@ checks and tells you the command to fix it.
 
 ## Using it in Wireshark
 
-Restart Wireshark. **Three interfaces** appear on the welcome screen, one per
-radio:
+Restart Wireshark. **Three interfaces** appear on the welcome screen for the
+ESP32-C6, one per radio (an nRF54L15 attached too adds its own two, 802.15.4
+and BLE):
 
 | Interface | Captures | Link type |
 |---|---|---|

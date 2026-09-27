@@ -10,11 +10,17 @@ Everything here is passive. The sniffer transmits nothing.
 
 ## Your first capture
 
-1. Open Wireshark. Three interfaces appear on the welcome screen:
+1. Open Wireshark. The ESP32-C6's three interfaces appear on the welcome
+   screen:
 
    - **ESP32-C6 IEEE 802.15.4 (Zigbee/Thread)**
    - **ESP32-C6 Wi-Fi 2.4 GHz (802.11)**
    - **ESP32-C6 Bluetooth LE (advertisements)**
+
+   An nRF54L15 plugged in as well adds two more, **nRF54L15 IEEE 802.15.4
+   (Zigbee/Thread)** and **nRF54L15 Bluetooth LE (advertisements)**: five in
+   all. With more than one board attached, each name ends in its port, such as
+   "on COM3".
 
 2. The right profile should select itself. There is one per radio —
    **ESP32-C6 802.15.4**, **ESP32-C6 Wi-Fi**, **ESP32-C6 BLE** — and each
@@ -45,9 +51,11 @@ cd host
 .\.venv\Scripts\python.exe tools\spectrum.py --port COM3   # where the energy is
 ```
 
-`survey.py` lists the Wi-Fi networks with their channels and signal strengths.
-`spectrum.py` uses the radio's energy detector, which sees the Wi-Fi that
-overlaps most 802.15.4 channels and is invisible to a packet capture.
+`survey.py` goes through the 802.15.4 channels and gives, for each, the energy
+floor beside the traffic actually heard. `spectrum.py` uses the radio's energy
+detector alone, which sees the Wi-Fi that overlaps most 802.15.4 channels and is
+invisible to a packet capture. The Wi-Fi networks themselves, with their
+channels and signal strengths, are `wifi_survey.py`'s job.
 
 Zigbee commonly sits on channels 11, 15, 20 and 25; Thread uses anything from
 11 to 26. The difference is real: on this bench channel 11 yielded 2 frames in
@@ -71,7 +79,7 @@ Click the **gear icon** beside an interface before starting, or use
 | Option | Notes |
 |---|---|
 | **Channel** | 11–26, each shown with its frequency. Also changeable mid-capture from the toolbar. |
-| **Zigbee key file** | Embeds your network keys *in the capture*, so it decrypts on any machine. See [Decrypting your own traffic](#decrypting-your-own-traffic). |
+| **Zigbee key file** | Records your network keys *in the capture*, in a Decryption Secrets Block. Wireshark shows the block but does **not** decrypt from it, so the keys still have to go in Wireshark's own ZigBee key table. See [Decrypting your own traffic](#decrypting-your-own-traffic). |
 | **Channel hop** | Off, the four Zigbee preferred channels (11, 15, 20, 25), all of 11–26, or one half — 11–18 or 19–26 — for sweeping with two boards (below). Each frame carries its own channel, so a hopped capture stays self-describing. |
 | **Hop dwell** | 2000 ms. Longer than Wi-Fi's, because 802.15.4 has no beacons to catch: the dwell has to be long enough for ordinary traffic to happen. |
 
@@ -107,7 +115,7 @@ roughly twenty-five times what the USB link carries.
 |---|---|---|
 | **Scan interval** / **window** | 60 / 60 ms | Equal values mean continuous listening, which is what a sniffer wants. Measured: 670 reports at 60/60 against 59 at 50/500, so a low duty cycle costs you most of the traffic. |
 | **Advertising PHYs** | Extended, 1M | Extended scanning reports legacy advertisements too. Legacy-only cannot see BLE 5 extended advertisements at all, and exists so the difference can be measured. Adding **Coded** buys long range and costs 1M coverage: the controller time-shares between the two rather than hearing both. |
-| **Only these devices** | empty | Up to eight addresses, comma- or space-separated — a ninth is refused with a message saying how many the controller's accept list holds, rather than quietly dropped. The **controller** does the filtering, so everything else never crosses the USB link at all — and the address is checked in the dialog, before Wireshark commits to a capture rather than after. One advertiser here was half of everything a survey heard, which is the difference between watching a device and watching a room. |
+| **Only these devices** | empty | Addresses, comma- or space-separated, into the controller's eight places. An address in the **Device keys** file takes one, since the file says whether it is public or random; any other takes two, one for each, because that cannot be told from the address — so four plain addresses fit. One too many is refused with a message saying how many the list holds, rather than quietly dropped. The **controller** does the filtering, so everything else never crosses the USB link at all — and the address is checked in the dialog, before Wireshark commits to a capture rather than after. One advertiser here was half of everything a survey heard, which is the difference between watching a device and watching a room. |
 | **Follow periodic advertising** | Off | Described below; it is the only BLE option that changes what the radio does rather than what it keeps. |
 
 There is **no channel option** for BLE: the controller rotates the three
@@ -160,7 +168,7 @@ reassemble both kinds of chain are being prepared for upstream Wireshark.
 
 ## The toolbar: retuning without restarting
 
-Turn it on with **View → Interface Toolbars → ESP32-C6**. It gives you:
+Turn it on with **View → Interface Toolbars → ESP32-C6 Sniffer**. It gives you:
 
 - a **channel selector that retunes the radio mid-capture**, with no restart
   and no new file;
@@ -294,10 +302,13 @@ nwk 000102030405060708090a0b0c0d0e0f
 aps 0f0e0d0c0b0a09080706050403020100
 ```
 
-Select it as the **Zigbee key file** option. The keys are embedded in the
-capture itself, so it decrypts on any machine without the recipient pasting
-anything into their own Wireshark. A path is taken rather than the key, because
-an option value would reach the process list and Wireshark's saved
+Select it as the **Zigbee key file** option. The keys are recorded in the
+capture itself, in a Decryption Secrets Block, but that does **not** make it
+decrypt: no Wireshark dissector reads Zigbee keys from that block (checked
+against Wireshark's source; see the README). For decryption, the keys also go
+in Wireshark's own table, under Preferences → Protocols → ZigBee, Pre-configured
+Keys, on each machine that opens the capture. A path is taken rather than the
+key, because an option value would reach the process list and Wireshark's saved
 configuration. A malformed key is refused before the capture starts, naming the
 line.
 
@@ -305,8 +316,12 @@ line.
 than a key inside the file:
 
 ```powershell
-.\.venv\Scripts\python.exe tools\thread_key.py --key <32 hex digits>
+.\.venv\Scripts\python.exe tools\thread_key.py --key-file dataset.txt
 ```
+
+The file holds your border router's operational dataset, or a bare 32-hex key.
+The dataset is better: it carries the channel and PAN ID too. `--key` also
+exists, but puts the key in the process list and your shell history.
 
 **Bluetooth Mesh**, for a network you own, is decrypted by Wireshark's own Mesh
 dissector on the BLE interface. The keys cannot travel inside the capture:

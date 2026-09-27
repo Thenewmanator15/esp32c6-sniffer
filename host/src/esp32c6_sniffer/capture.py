@@ -457,11 +457,18 @@ class CaptureSession:
         # None leaves the board's default (extended, 1M). 0 forces legacy
         # scanning, which is how the two are compared.
         self._ble_phys = ble_phys
+        #: Set when periodic following was asked for with legacy scanning,
+        #: which cannot do it: legacy reports carry no periodic trains, and
+        #: the controller refuses Create Sync after legacy commands anyway.
+        #: It is sent as off rather than on-and-ignored, and this says why
+        #: for the caller to pass on -- the combination used to do nothing,
+        #: silently.
+        self.periodic_needs_extended = bool(ble_periodic) and ble_phys == 0
         #: Follow periodic advertising trains as they are noticed. Off by
         #: default: syncing spends receive windows the scanner would
         #: otherwise give to advertisements, so a capture that does not want
         #: periodic traffic should not pay for it.
-        self._ble_periodic = ble_periodic
+        self._ble_periodic = ble_periodic and not self.periodic_needs_extended
         #: BLE addresses to restrict scanning to, filtered by the
         #: controller so the rest never cross the link.
         self._ble_filter = list(ble_filter or [])

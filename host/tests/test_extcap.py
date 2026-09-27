@@ -66,6 +66,14 @@ def test_declares_the_extcap_version_line():
     assert out.startswith("extcap {version=")
 
 
+def test_the_extcap_reports_the_package_version():
+    """It said 0.3.0 while the package and the release tag said 0.1.0, so
+    Wireshark's About box named a version that was never released."""
+    from esp32c6_sniffer import __version__
+    out = _run("--extcap-interfaces")
+    assert out.startswith("extcap {version=" + __version__ + "}")
+
+
 def test_does_not_advertise_unimplemented_radios():
     """BLE must not appear until its milestone lands.
 
@@ -412,6 +420,30 @@ def test_a_capture_filter_is_refused_rather_than_ignored():
     assert "capture filter cannot be applied" in result.stderr
     # It must say what to use instead, not merely refuse.
     assert "Frame types" in result.stderr or "display filter" in result.stderr
+
+
+def test_the_dialog_marks_a_capture_filter_invalid_as_it_is_typed():
+    """Wireshark validates a typed filter by running the plugin WITHOUT
+    --capture, and reads the answer from stdout: empty is valid, one line
+    is invalid and shown. The plugin wrote to stderr and exited 1, which
+    Wireshark takes as "unknown", so the box stayed neutral and the reason
+    appeared only after Start."""
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--extcap-interface", BLE_INTERFACE,
+         "--extcap-capture-filter", "type mgt"],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0
+    assert "capture filter cannot be applied" in result.stdout
+    assert len(result.stdout.strip().splitlines()) == 1
+    assert result.stderr == ""
+
+
+def test_an_empty_capture_filter_is_valid():
+    result = subprocess.run(
+        [sys.executable, str(PLUGIN), "--extcap-interface", BLE_INTERFACE,
+         "--extcap-capture-filter", ""],
+        capture_output=True, text=True, timeout=30)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
 # --- Thread credentials option -------------------------------------------

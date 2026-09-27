@@ -38,3 +38,39 @@ def test_both_go_before_start(monkeypatch):
     names = board.sequence()
     assert names.index("SET_BLE_PERIODIC") < names.index("START")
     assert names.index("SET_BLE_SCAN") < names.index("START")
+
+
+def open_with(monkeypatch, board, **kw):
+    from esp32c6_sniffer import capture
+    from esp32c6_sniffer.capture import CaptureSession
+    from esp32c6_sniffer.control import Radio
+    monkeypatch.setattr(capture.serial, "Serial", lambda *a, **k: board)
+    session = CaptureSession("COM_UNUSED", channel=0, radio=Radio.BLE,
+                             board="nrf54l15", baud=1_000_000, **kw)
+    session.open()
+    return session
+
+
+def test_periodic_following_is_off_under_legacy_scanning_and_says_so(monkeypatch):
+    """Legacy scanning reports no periodic trains to follow, and the
+    controller refuses Create Sync after legacy commands anyway: asking for
+    both did nothing, silently. Now it is sent as off, and the session says
+    why, for the caller to pass on."""
+    board = KeyedBoard("nrf54l15")
+    session = open_with(monkeypatch, board, ble_phys=0, ble_periodic=True)
+    assert values(board, Command.SET_BLE_PERIODIC) == [0]
+    assert session.periodic_needs_extended
+
+
+def test_periodic_following_under_extended_scanning_is_untouched(monkeypatch):
+    board = KeyedBoard("nrf54l15")
+    session = open_with(monkeypatch, board, ble_phys=1, ble_periodic=True)
+    assert values(board, Command.SET_BLE_PERIODIC) == [1]
+    assert not session.periodic_needs_extended
+
+
+def test_legacy_scanning_alone_raises_nothing(monkeypatch):
+    board = KeyedBoard("nrf54l15")
+    session = open_with(monkeypatch, board, ble_phys=0)
+    assert values(board, Command.SET_BLE_PERIODIC) == [0]
+    assert not session.periodic_needs_extended

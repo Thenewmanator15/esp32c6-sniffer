@@ -78,6 +78,7 @@ def fake_session(packets_per_second: float | None):
             self.recovered_from_802154 = False
             self.power_cycled_for_deafness = False
             self.handed_back_for_deafness = False
+            self.periodic_needs_extended = False
 
         def __enter__(self):
             return self

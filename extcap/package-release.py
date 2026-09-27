@@ -61,12 +61,13 @@ Flash a board first
 -------------------
 
 The plugin talks to firmware; a board without it enumerates as a serial port
-that never answers. Both firmwares are in the same release:
+that never answers. The ESP32-C6 firmware is in this release:
 
     esp32c6-<ver>.bin        ESP32-C6, flash at 0x0 with esptool
-    nrf54l15-<ver>.hex       nRF54L15, flash with openocd
 
-The exact commands are in the release notes.
+The nRF54L15 firmware has its own repository, nrf54l15-sniffer, and its own
+release there: nrf54l15.hex, flashed with openocd. The exact commands are in
+each release's notes.
 
 Sniffing is passive. Neither board transmits.
 """

@@ -137,3 +137,23 @@ def test_the_dwell_default_differs_by_radio(capsys):
         return int(line.split("{default=")[1].split("}")[0])
 
     assert dwell(zigbee) > dwell(wifi)
+
+
+def test_a_hop_starts_inside_its_own_set():
+    """The board on 19-26 used to open on the dialog's Channel -- 11 by
+    default -- and spend its first dwell there, on the other board's half.
+    The guide's "neither board spends a dwell on a channel the other covers"
+    was true only from the first hop on."""
+    upper = plugin.hop_sets("nrf54l15-802154")[4]
+    assert plugin.hop_start(11, upper) == (19, 0)
+
+
+def test_a_dialog_channel_inside_the_set_is_where_the_hop_starts():
+    """Continuing from it, so a sweep still visits every channel once per
+    lap rather than revisiting the first."""
+    lower = plugin.hop_sets("esp32c6-802154")[3]
+    assert plugin.hop_start(15, lower) == (15, lower.index(15))
+
+
+def test_no_hop_leaves_the_channel_alone():
+    assert plugin.hop_start(25, None) == (25, 0)
