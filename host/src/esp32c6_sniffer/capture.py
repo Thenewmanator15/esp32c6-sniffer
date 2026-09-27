@@ -120,7 +120,9 @@ MAX_CLOCK_SKEW_S = 60.0
 #: wrong number rather than an error.
 EXPECTED_FIRMWARE_VERSIONS = {
     "esp32c6": 7,
-    "nrf54l15": 6,
+    # 7: frames without the two FCS bytes 6 left on each, which kept every
+    # secured frame from decrypting; and Legacy PHY and the antenna work.
+    "nrf54l15": 7,
 }
 
 #: How to reflash each board, quoted back to the operator on a mismatch.
@@ -720,14 +722,18 @@ class CaptureSession:
             # Before START, because the firmware reads it on the path that
             # sees each advertisement and a train missed is a train not
             # followed.
-            if self._ble_periodic:
-                self._command(Command.SET_BLE_PERIODIC, 1)
-            if self._ble_interval_ms or self._ble_window_ms:
-                self._command(
-                    Command.SET_BLE_SCAN,
-                    (self._ble_interval_ms & 0xFFFF)
-                    | ((self._ble_window_ms & 0xFFFF) << 16),
-                )
+            #
+            # Both sent every time, off and zero included. The nRF54L15 does
+            # not reset when its port opens, and these were sent only when
+            # set, so one capture that followed periodic trains made every
+            # later capture follow them too. Zero is the firmware's default.
+            self._command(Command.SET_BLE_PERIODIC,
+                          1 if self._ble_periodic else 0)
+            self._command(
+                Command.SET_BLE_SCAN,
+                (self._ble_interval_ms & 0xFFFF)
+                | ((self._ble_window_ms & 0xFFFF) << 16),
+            )
             # Before START, always. The accept list is loaded when the scan is
             # configured, and the controller forgets it when a capture stops,
             # so sending it afterwards filters nothing.

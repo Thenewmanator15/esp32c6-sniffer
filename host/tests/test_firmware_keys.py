@@ -53,4 +53,6 @@ def test_the_c6_forgets_its_keys_before_any_return_from_stop():
 def test_the_nrf_clears_its_controllers_resolving_list_on_stop():
     body = body_of(NRF_BLE, "int sn_radio_ble_stop(void)\n{")
     assert "memset(keys" in body
-    assert "BT_HCI_OP_LE_CLEAR_RL" in body
+    # Either clears the controller's list; stop now resets the controller,
+    # which also ends the syncs a capture started.
+    assert "BT_HCI_OP_LE_CLEAR_RL" in body or "BT_HCI_OP_RESET" in body

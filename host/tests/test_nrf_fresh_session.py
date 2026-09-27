@@ -14,12 +14,17 @@ functions that report them, not written down here, so a counter added later
 cannot be left counting from boot.
 """
 
+import os
 import pathlib
 import re
 
 import pytest
 
-NRF_SRC = pathlib.Path(__file__).resolve().parents[2].parent / "nrf54l15-sniffer" / "src"
+# NRF54L15_SNIFFER names another checkout, as test_link_buffers.py allows;
+# without it this read the sibling whatever checkout the suite was run for.
+NRF_SRC = pathlib.Path(os.environ.get(
+    "NRF54L15_SNIFFER",
+    pathlib.Path(__file__).resolve().parents[2].parent / "nrf54l15-sniffer")) / "src"
 
 pytestmark = pytest.mark.skipif(not NRF_SRC.exists(),
                                 reason="the nRF54L15 firmware is a separate repository")
@@ -111,3 +116,29 @@ def test_a_receive_error_does_not_end_receiving():
                       text, flags=re.DOTALL)
     assert match, "link.c does not handle UART_RX_DISABLED"
     assert "uart_rx_enable(" in match.group(1)
+
+
+def test_a_new_session_stops_both_radios():
+    """A capture that ended without a STOP -- a killed extcap -- left its
+    radio running into the next session, whose host decoded the old radio's
+    frames as the new one's, and left periodic and BIG syncs taking radio
+    time."""
+    case = get_info_case()
+    assert re.search(r"stop_radio\(\s*RADIO_154\s*\)", case)
+    assert re.search(r"stop_radio\(\s*RADIO_BLE\s*\)", case)
+
+
+def test_a_new_session_puts_every_ble_setting_back():
+    """Periodic following and the scan timing carried over, not only the
+    PHY: one capture that followed trains made every later one follow them."""
+    case = get_info_case()
+    assert re.search(r"ble_interval_ms\s*=\s*0u?\s*;", case)
+    assert re.search(r"ble_window_ms\s*=\s*0u?\s*;", case)
+    assert re.search(r"sn_radio_ble_set_periodic\(\s*false\s*\)", case)
+
+
+def test_stopping_ble_resets_the_controller():
+    """Periodic and BIG syncs do not depend on scanning, so switching the
+    scan off left them running past the capture."""
+    text = source("radio_ble.c")
+    assert "BT_HCI_OP_RESET" in body(text, "int sn_radio_ble_stop(void)")

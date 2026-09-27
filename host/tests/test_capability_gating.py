@@ -103,14 +103,14 @@ def test_the_detected_note_lists_only_this_boards_ports(monkeypatch, capsys):
 def test_the_antenna_tooltip_does_not_borrow_another_boards_measurement(
         no_boards, capsys):
     """+13 to +14 dB was measured on the C6, against its switch and its two
-    antennas. Repeating it on a board where nobody has measured anything would
-    be presenting a guess as a measurement, which is the one thing this
-    project's documentation is careful never to do."""
+    antennas. Repeating it on another board would be presenting a guess as a
+    measurement, which is the one thing this project's documentation is
+    careful never to do. The nRF54L15's note gives its own figure."""
     c6 = config_for("esp32c6-802154", capsys)
     nrf = config_for("nrf54l15-802154", capsys)
     assert "+13 to +14 dB" in c6
     assert "+13 to +14 dB" not in nrf
-    assert "not been measured" in nrf
+    assert "14.5 dB" in nrf
 
 
 def test_each_board_names_its_own_hardware_for_the_capture_file():

@@ -558,8 +558,10 @@ def test_each_board_has_its_own_expected_firmware_version():
     # as a capture that runs happily and shows nothing at all. 4 when its
     # STATS frame gained the FCS-failure count after the BLE block. 5 with
     # device keys, and with HCI commands that report a refusal. 6 when
-    # GET_INFO began a fresh session: counters and BLE PHYs reset.
-    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 6
+    # GET_INFO began a fresh session: counters and BLE PHYs reset. 7 when
+    # 802.15.4 frames lost the two FCS bytes that kept any secured frame from
+    # decrypting, and Legacy PHY and the antenna began to work.
+    assert EXPECTED_FIRMWARE_VERSIONS["nrf54l15"] == 7
 
 
 def test_the_old_constant_still_names_the_c6():
