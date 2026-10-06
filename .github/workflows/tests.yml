@@ -23,6 +23,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only: the suite checks out two public repositories and runs pytest,
+# and writes nothing back.
+permissions:
+  contents: read
+
 jobs:
   host:
     name: host ${{ matrix.python }} on ${{ matrix.os }}
