@@ -28,6 +28,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch or pull request cancels the older run.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   host:
     name: host ${{ matrix.python }} on ${{ matrix.os }}
@@ -57,16 +62,18 @@ jobs:
       # are what caught the nRF padding its Wi-Fi block to the wrong width.
       # The sibling is the nRF repository's main, so a change there that
       # breaks the shared layout turns this red on the next run.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           path: esp32c6-sniffer
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          persist-credentials: false
           repository: Thenewmanator15/nrf54l15-sniffer
           path: nrf54l15-sniffer
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ matrix.python }}
 
