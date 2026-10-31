@@ -1,0 +1,18 @@
+# Settings for the gitleaks pre-commit check (dev-ops SECURITY-BASELINE.md, section 5).
+# All of gitleaks' default rules apply. The allowlist lets through one false positive
+# from the history scan of 31 October 2026, and only when the rule, the file and the
+# value all match. Anything else in the file is still checked.
+
+# [[allowlists]] with targetRules needs gitleaks 8.25.0 or later.
+minVersion = "v8.25.0"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "The Bluetooth Core specification's published sample IRK, quoted in the device-keys design note"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^docs/superpowers/specs/2026-09-24-ble-device-keys-design\.md$''']
+regexTarget = "secret"
+regexes = ['''^ec0234a357c8ad05341010a60a397d9b$''']
