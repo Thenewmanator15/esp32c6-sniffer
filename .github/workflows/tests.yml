@@ -62,12 +62,12 @@ jobs:
       # are what caught the nRF padding its Wi-Fi block to the wrong width.
       # The sibling is the nRF repository's main, so a change there that
       # breaks the shared layout turns this red on the next run.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           path: esp32c6-sniffer
 
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           repository: Thenewmanator15/nrf54l15-sniffer
