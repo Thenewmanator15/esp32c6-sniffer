@@ -1,0 +1,11 @@
+# Keeps the pinned Actions and the host package's Python dependencies up to date.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "pip"
+    directory: "/host"
+    schedule:
+      interval: "weekly"
